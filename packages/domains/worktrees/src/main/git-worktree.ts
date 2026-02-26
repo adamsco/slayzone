@@ -204,16 +204,48 @@ function applyWorktreeCopyEntries(
     message: `Applying ${entries.length} copy entries`,
     payload: { sourceRepoPath, targetWorktreePath, entries }
   })
+
+  const resolveInside = (rootPath: string, rawPath: string): string | null => {
+    if (!rawPath.trim() || path.isAbsolute(rawPath)) return null
+    const resolved = path.resolve(rootPath, rawPath)
+    const rel = path.relative(rootPath, resolved)
+    if (!rel || rel === '.' || rel.startsWith('..') || path.isAbsolute(rel)) return null
+    return resolved
+  }
+
   for (const entry of entries) {
-    const sourcePath = path.join(sourceRepoPath, entry.path)
-    const destPath = path.join(targetWorktreePath, entry.path)
+    const entryPath = typeof entry.path === 'string' ? entry.path.trim() : ''
+    if (!entryPath || (entry.mode !== 'copy' && entry.mode !== 'symlink')) {
+      recordDiagnosticEvent({
+        level: 'warn',
+        source: 'git',
+        event: 'worktree.copy_entry_invalid',
+        message: 'Invalid copy entry',
+        payload: { entry }
+      })
+      continue
+    }
+
+    const sourcePath = resolveInside(sourceRepoPath, entryPath)
+    const destPath = resolveInside(targetWorktreePath, entryPath)
+    if (!sourcePath || !destPath) {
+      recordDiagnosticEvent({
+        level: 'warn',
+        source: 'git',
+        event: 'worktree.copy_entry_invalid_path',
+        message: `Path must stay within repository/worktree: ${entryPath}`,
+        payload: { entryPath, sourceRepoPath, targetWorktreePath, mode: entry.mode }
+      })
+      continue
+    }
+
     if (!existsSync(sourcePath)) {
       recordDiagnosticEvent({
         level: 'warn',
         source: 'git',
         event: 'worktree.copy_entry_source_missing',
         message: `Source does not exist: ${sourcePath}`,
-        payload: { sourcePath, destPath, mode: entry.mode, entryPath: entry.path }
+        payload: { sourcePath, destPath, mode: entry.mode, entryPath }
       })
       continue
     }
@@ -231,7 +263,7 @@ function applyWorktreeCopyEntries(
         level: 'info',
         source: 'git',
         event: 'worktree.copy_entry_ok',
-        message: `${entry.mode}: ${entry.path}`,
+        message: `${entry.mode}: ${entryPath}`,
         payload: { sourcePath, destPath, mode: entry.mode }
       })
     } catch (err) {
@@ -253,14 +285,24 @@ export function createWorktree(
   copyEntries?: WorktreeCopyEntry[],
   sourceBranch?: string
 ): void {
-  const args: string[] = ['worktree', 'add', targetPath]
+  const args: string[] = ['worktree', 'add']
+  const trimmedSourceBranch = sourceBranch?.trim()
+
   if (branch) {
-    args.push('-b', branch)
+    args.push(targetPath, '-b', branch)
+    // When creating a new branch, optional start point (branch/commit). If omitted, git uses HEAD.
+    if (trimmedSourceBranch) {
+      args.push(trimmedSourceBranch)
+    }
+  } else {
+    // Branchless worktrees should remain detached to avoid branch-already-checked-out errors.
+    if (trimmedSourceBranch) {
+      args.push('--detach', targetPath, trimmedSourceBranch)
+    } else {
+      args.push(targetPath)
+    }
   }
-  // When creating a new branch, optional start point (branch/commit). If omitted, git uses HEAD.
-  if (sourceBranch?.trim()) {
-    args.push(sourceBranch.trim())
-  }
+
   spawnGit(args, { cwd: repoPath })
   if (copyEntries?.length) {
     applyWorktreeCopyEntries(repoPath, targetPath, copyEntries)

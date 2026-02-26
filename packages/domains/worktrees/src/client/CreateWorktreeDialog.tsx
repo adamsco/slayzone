@@ -57,7 +57,7 @@ export function CreateWorktreeDialog({
       } catch { /* ignore */ }
 
       // Create git worktree
-      await window.api.git.createWorktree(projectPath, path, branch || undefined, copyEntries, sourceBranch)
+      await window.api.git.createWorktree(projectPath, path, branch || undefined, copyEntries, sourceBranch || undefined)
       onCreated(path.trim(), sourceBranch)
       resetForm()
     } catch (err) {

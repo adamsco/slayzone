@@ -138,10 +138,13 @@ export function ProjectSettingsDialog({
     void loadLinearProjects()
   }, [connectionId, teamId])
 
+  const getCopyFilesKey = (repoPath: string) => `worktree_copy_files:${repoPath}`
+
   const saveCopyFiles = (entries: WorktreeCopyEntry[]) => {
-    if (!project?.path) return
+    const repoPath = path || project?.path
+    if (!repoPath) return
     setWorktreeCopyFiles(entries)
-    window.api.settings.set(`worktree_copy_files:${project.path}`, JSON.stringify(entries))
+    window.api.settings.set(getCopyFilesKey(repoPath), JSON.stringify(entries))
   }
 
   const handleBrowse = async () => {
@@ -161,11 +164,27 @@ export function ProjectSettingsDialog({
 
     setLoading(true)
     try {
+      const nextPath = path || null
+      const previousPath = project.path
+      if (previousPath && nextPath && previousPath !== nextPath) {
+        try {
+          const nextKey = getCopyFilesKey(nextPath)
+          const previousKey = getCopyFilesKey(previousPath)
+          const existingNext = await window.api.settings.get(nextKey)
+          if (!existingNext) {
+            const previousValue = await window.api.settings.get(previousKey)
+            if (previousValue) {
+              await window.api.settings.set(nextKey, previousValue)
+            }
+          }
+        } catch { /* best effort migration */ }
+      }
+
       const updated = await window.api.db.updateProject({
         id: project.id,
         name: name.trim(),
         color,
-        path: path || null,
+        path: nextPath,
         autoCreateWorktreeOnTaskCreate:
           autoCreateWorktreeOverride === 'inherit'
             ? null
