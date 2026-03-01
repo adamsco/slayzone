@@ -138,9 +138,13 @@ export class CodexAdapter implements TerminalAdapter {
         if (!match) continue
         // Verify cwd matches to disambiguate concurrent sessions.
         // Read only the first line (session_meta) — files can be multi-MB.
+        let firstLine: string
         const fh = await open(join(dir, file), 'r')
-        const firstLine = (await fh.read({ buffer: Buffer.alloc(4096), length: 4096 })).buffer.toString('utf-8').split('\n', 1)[0]
-        await fh.close()
+        try {
+          firstLine = (await fh.read({ buffer: Buffer.alloc(4096), length: 4096 })).buffer.toString('utf-8').split('\n', 1)[0]
+        } finally {
+          await fh.close()
+        }
         try {
           const meta = JSON.parse(firstLine)
           if (meta?.payload?.cwd && meta.payload.cwd !== cwd) continue
