@@ -94,6 +94,7 @@ export function ProjectSettingsDialog({
   const [color, setColor] = useState('')
   const [path, setPath] = useState('')
   const [autoCreateWorktreeOverride, setAutoCreateWorktreeOverride] = useState<'inherit' | 'on' | 'off'>('inherit')
+  const [worktreeSourceBranch, setWorktreeSourceBranch] = useState('')
   const [columnsDraft, setColumnsDraft] = useState<ColumnConfig[]>(() => DEFAULT_COLUMNS.map((column) => ({ ...column })))
   const [loading, setLoading] = useState(false)
   const [connections, setConnections] = useState<IntegrationConnectionPublic[]>([])
@@ -125,6 +126,7 @@ export function ProjectSettingsDialog({
             ? 'off'
             : 'inherit'
       )
+      setWorktreeSourceBranch(project.worktree_source_branch || '')
       setColumnsDraft(resolveColumns(project.columns_config))
     }
   }, [project])
@@ -224,7 +226,8 @@ export function ProjectSettingsDialog({
         autoCreateWorktreeOnTaskCreate:
           autoCreateWorktreeOverride === 'inherit'
             ? null
-            : autoCreateWorktreeOverride === 'on'
+            : autoCreateWorktreeOverride === 'on',
+        worktreeSourceBranch: worktreeSourceBranch.trim() || null
       })
 
       onUpdated(updated)
@@ -473,6 +476,19 @@ export function ProjectSettingsDialog({
                   </Select>
                   <p className="text-xs text-muted-foreground">
                     Overrides the global Git setting for this project only.
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="worktree-source-branch">Worktree source branch</Label>
+                  <Input
+                    id="worktree-source-branch"
+                    value={worktreeSourceBranch}
+                    onChange={(e) => setWorktreeSourceBranch(e.target.value)}
+                    placeholder="main"
+                    className="max-w-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Branch to create worktrees from. Defaults to the current branch if empty.
                   </p>
                 </div>
                 <div className="space-y-1">

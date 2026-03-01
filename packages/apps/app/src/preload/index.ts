@@ -33,6 +33,7 @@ const api: ElectronAPI = {
     createTask: (data) => ipcRenderer.invoke('db:tasks:create', data),
     updateTask: (data) => ipcRenderer.invoke('db:tasks:update', data),
     deleteTask: (id) => ipcRenderer.invoke('db:tasks:delete', id),
+    restoreTask: (id) => ipcRenderer.invoke('db:tasks:restore', id),
     archiveTask: (id) => ipcRenderer.invoke('db:tasks:archive', id),
     archiveTasks: (ids) => ipcRenderer.invoke('db:tasks:archiveMany', ids),
     unarchiveTask: (id) => ipcRenderer.invoke('db:tasks:unarchive', id),
@@ -251,8 +252,8 @@ const api: ElectronAPI = {
   git: {
     isGitRepo: (path) => ipcRenderer.invoke('git:isGitRepo', path),
     detectWorktrees: (repoPath) => ipcRenderer.invoke('git:detectWorktrees', repoPath),
-    createWorktree: (repoPath, targetPath, branch) =>
-      ipcRenderer.invoke('git:createWorktree', repoPath, targetPath, branch),
+    createWorktree: (repoPath, targetPath, branch, sourceBranch) =>
+      ipcRenderer.invoke('git:createWorktree', repoPath, targetPath, branch, sourceBranch),
     removeWorktree: (repoPath, worktreePath) =>
       ipcRenderer.invoke('git:removeWorktree', repoPath, worktreePath),
     init: (path) => ipcRenderer.invoke('git:init', path),

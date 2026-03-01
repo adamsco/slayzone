@@ -5,6 +5,7 @@ import {
   detectWorktrees,
   createWorktree,
   removeWorktree,
+  runWorktreeSetupScript,
   initRepo,
   getCurrentBranch,
   listBranches,
@@ -49,8 +50,10 @@ export function registerWorktreeHandlers(ipcMain: IpcMain): void {
     return detectWorktrees(repoPath)
   })
 
-  ipcMain.handle('git:createWorktree', (_, repoPath: string, targetPath: string, branch?: string) => {
-    createWorktree(repoPath, targetPath, branch)
+  ipcMain.handle('git:createWorktree', async (_, repoPath: string, targetPath: string, branch?: string, sourceBranch?: string) => {
+    createWorktree(repoPath, targetPath, branch, sourceBranch)
+    const setupResult = await runWorktreeSetupScript(targetPath, repoPath, sourceBranch)
+    return { setupResult }
   })
 
   ipcMain.handle('git:removeWorktree', (_, repoPath: string, worktreePath: string) => {

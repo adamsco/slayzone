@@ -144,6 +144,7 @@ export interface ElectronAPI {
     createTask: (data: CreateTaskInput) => Promise<Task>
     updateTask: (data: UpdateTaskInput) => Promise<Task>
     deleteTask: (id: string) => Promise<boolean>
+    restoreTask: (id: string) => Promise<Task>
     archiveTask: (id: string) => Promise<Task>
     archiveTasks: (ids: string[]) => Promise<void>
     unarchiveTask: (id: string) => Promise<Task>
@@ -279,7 +280,7 @@ export interface ElectronAPI {
   git: {
     isGitRepo: (path: string) => Promise<boolean>
     detectWorktrees: (repoPath: string) => Promise<DetectedWorktree[]>
-    createWorktree: (repoPath: string, targetPath: string, branch?: string) => Promise<void>
+    createWorktree: (repoPath: string, targetPath: string, branch?: string, sourceBranch?: string) => Promise<{ setupResult: { ran: boolean; success?: boolean; output?: string } }>
     removeWorktree: (repoPath: string, worktreePath: string) => Promise<void>
     init: (path: string) => Promise<void>
     getCurrentBranch: (path: string) => Promise<string | null>

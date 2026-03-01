@@ -184,6 +184,10 @@ export function registerProjectHandlers(ipcMain: IpcMain, db: Database): void {
         values.push(data.autoCreateWorktreeOnTaskCreate ? 1 : 0)
       }
     }
+    if (data.worktreeSourceBranch !== undefined) {
+      fields.push('worktree_source_branch = ?')
+      values.push(data.worktreeSourceBranch)
+    }
     if (data.columnsConfig !== undefined) {
       fields.push('columns_config = ?')
       if (data.columnsConfig === null) {

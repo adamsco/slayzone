@@ -1,2 +1,2 @@
 export { registerWorktreeHandlers } from './handlers'
-export { removeWorktree, createWorktree, getCurrentBranch, isGitRepo } from './git-worktree'
+export { removeWorktree, createWorktree, runWorktreeSetupScript, runWorktreeSetupScriptSync, getCurrentBranch, isGitRepo } from './git-worktree'

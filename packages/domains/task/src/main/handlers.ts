@@ -5,7 +5,7 @@ import { PROVIDER_DEFAULTS } from '@slayzone/task/shared'
 import type { ColumnConfig } from '@slayzone/projects/shared'
 import { getDefaultStatus, isKnownStatus, isTerminalStatus, parseColumnsConfig } from '@slayzone/projects/shared'
 import path from 'path'
-import { removeWorktree, createWorktree, getCurrentBranch, isGitRepo } from '@slayzone/worktrees/main'
+import { removeWorktree, createWorktree, runWorktreeSetupScript, getCurrentBranch, isGitRepo } from '@slayzone/worktrees/main'
 
 type DiagnosticLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -159,8 +159,8 @@ function maybeAutoCreateWorktree(
 ): void {
   if (!isAutoCreateWorktreeEnabled(db, projectId)) return
 
-  const projectRow = db.prepare('SELECT path FROM projects WHERE id = ?').get(projectId) as
-    | { path: string | null }
+  const projectRow = db.prepare('SELECT path, worktree_source_branch FROM projects WHERE id = ?').get(projectId) as
+    | { path: string | null; worktree_source_branch: string | null }
     | undefined
   if (!projectRow?.path) {
     runtimeAdapters.recordDiagnosticEvent({
@@ -195,8 +195,12 @@ function maybeAutoCreateWorktree(
   const worktreePath = path.join(basePath, branch)
   const parentBranch = getCurrentBranch(projectRow.path)
 
+  const sourceBranch = projectRow.worktree_source_branch ?? undefined
+
   try {
-    createWorktree(projectRow.path, worktreePath, branch)
+    createWorktree(projectRow.path, worktreePath, branch, sourceBranch)
+    // Fire-and-forget: don't block task creation on setup script
+    void runWorktreeSetupScript(worktreePath, projectRow.path, sourceBranch)
     db.prepare(`
       UPDATE tasks
       SET worktree_path = ?, worktree_parent_branch = ?, updated_at = datetime('now')
@@ -212,7 +216,8 @@ function maybeAutoCreateWorktree(
         projectPath: projectRow.path,
         worktreePath,
         branch,
-        parentBranch
+        parentBranch,
+        sourceBranch
       }
     })
   } catch (err) {

@@ -1,6 +1,6 @@
-import { execSync, spawnSync } from 'child_process'
+import { execSync, spawnSync, spawn } from 'child_process'
 import { platform } from 'os'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, chmodSync, constants as fsConstants, accessSync } from 'fs'
 import path from 'path'
 import { recordDiagnosticEvent } from '@slayzone/diagnostics/main'
 import type { ConflictFileContent, DetectedWorktree, GitDiffSnapshot, MergeResult, RebaseProgress, RebaseCommitInfo, CommitInfo, AheadBehind, StatusSummary } from '../shared/types'
@@ -197,9 +197,159 @@ export function detectWorktrees(repoPath: string): DetectedWorktree[] {
   }
 }
 
-export function createWorktree(repoPath: string, targetPath: string, branch?: string): void {
-  const args = branch ? ['worktree', 'add', targetPath, '-b', branch] : ['worktree', 'add', targetPath]
+export interface WorktreeSetupResult {
+  ran: boolean
+  success?: boolean
+  output?: string
+}
+
+export function createWorktree(repoPath: string, targetPath: string, branch?: string, sourceBranch?: string): void {
+  const args = ['worktree', 'add', targetPath]
+  if (branch) args.push('-b', branch)
+  if (sourceBranch) args.push(sourceBranch)
   spawnGit(args, { cwd: repoPath })
+}
+
+const SETUP_SCRIPT = '.slay/worktree-setup.sh'
+
+/** Check if setup script exists and ensure it's executable. Returns script path or null. */
+function prepareSetupScript(worktreePath: string): string | null {
+  const scriptPath = path.join(worktreePath, SETUP_SCRIPT)
+  if (!existsSync(scriptPath)) return null
+  try {
+    accessSync(scriptPath, fsConstants.X_OK)
+  } catch {
+    chmodSync(scriptPath, 0o755)
+  }
+  return scriptPath
+}
+
+function setupScriptEnv(worktreePath: string, repoPath: string, sourceBranch?: string | null): Record<string, string> {
+  return {
+    ...process.env as Record<string, string>,
+    WORKTREE_PATH: worktreePath,
+    REPO_PATH: repoPath,
+    SOURCE_BRANCH: sourceBranch ?? ''
+  }
+}
+
+/**
+ * Run .slay/worktree-setup.sh asynchronously.
+ * Calls onData with stdout/stderr chunks for streaming to a terminal.
+ * Returns a promise that resolves when the script completes.
+ */
+export function runWorktreeSetupScript(
+  worktreePath: string,
+  repoPath: string,
+  sourceBranch?: string | null,
+  onData?: (chunk: string) => void
+): Promise<WorktreeSetupResult> {
+  const scriptPath = prepareSetupScript(worktreePath)
+  if (!scriptPath) return Promise.resolve({ ran: false })
+
+  const startedAt = Date.now()
+  const env = setupScriptEnv(worktreePath, repoPath, sourceBranch)
+
+  return new Promise((resolve) => {
+    const child = spawn(scriptPath, [], {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env
+    })
+
+    const chunks: string[] = []
+
+    const handleData = (data: Buffer) => {
+      const text = data.toString()
+      chunks.push(text)
+      onData?.(text)
+    }
+
+    child.stdout?.on('data', handleData)
+    child.stderr?.on('data', handleData)
+
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM')
+    }, 5 * 60_000) // 5 min timeout
+
+    child.on('close', (code) => {
+      clearTimeout(timeout)
+      const output = chunks.join('').trim()
+      const success = code === 0
+
+      recordDiagnosticEvent({
+        level: success ? 'info' : 'error',
+        source: 'git',
+        event: success ? 'git.worktree_setup_ok' : 'git.worktree_setup_failed',
+        message: success ? `Setup script completed in ${Date.now() - startedAt}ms` : `Setup script failed (exit ${code})`,
+        payload: {
+          worktreePath,
+          repoPath,
+          scriptPath,
+          durationMs: Date.now() - startedAt,
+          exitCode: code,
+          output: trimOutput(output)
+        }
+      })
+
+      resolve({ ran: true, success, output })
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(timeout)
+      recordDiagnosticEvent({
+        level: 'error',
+        source: 'git',
+        event: 'git.worktree_setup_failed',
+        message: err.message,
+        payload: { worktreePath, repoPath, scriptPath }
+      })
+      resolve({ ran: true, success: false, output: err.message })
+    })
+  })
+}
+
+/**
+ * Synchronous version for tests. Same behavior, blocks the process.
+ */
+export function runWorktreeSetupScriptSync(
+  worktreePath: string,
+  repoPath: string,
+  sourceBranch?: string | null
+): WorktreeSetupResult {
+  const scriptPath = prepareSetupScript(worktreePath)
+  if (!scriptPath) return { ran: false }
+
+  const startedAt = Date.now()
+  const env = setupScriptEnv(worktreePath, repoPath, sourceBranch)
+
+  const result = spawnSync(scriptPath, [], {
+    cwd: worktreePath,
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: 60_000,
+    env
+  })
+
+  const output = [result.stdout, result.stderr].filter(Boolean).join('\n').trim()
+  const success = result.status === 0
+
+  recordDiagnosticEvent({
+    level: success ? 'info' : 'error',
+    source: 'git',
+    event: success ? 'git.worktree_setup_ok' : 'git.worktree_setup_failed',
+    message: success ? `Setup script completed in ${Date.now() - startedAt}ms` : `Setup script failed (exit ${result.status})`,
+    payload: {
+      worktreePath,
+      repoPath,
+      scriptPath,
+      durationMs: Date.now() - startedAt,
+      exitCode: result.status,
+      output: trimOutput(output)
+    }
+  })
+
+  return { ran: true, success, output }
 }
 
 export function removeWorktree(repoPath: string, worktreePath: string): void {

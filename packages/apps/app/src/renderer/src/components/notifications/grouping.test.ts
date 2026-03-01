@@ -36,6 +36,7 @@ const projectA: Project = {
   color: '#111111',
   path: null,
   auto_create_worktree_on_task_create: null,
+  worktree_source_branch: null,
   columns_config: [
     { id: 'queued', label: 'Queue', color: 'gray', position: 0, category: 'unstarted' },
     { id: 'finished', label: 'Finished', color: 'green', position: 1, category: 'completed' }
@@ -50,6 +51,7 @@ const projectB: Project = {
   color: '#222222',
   path: null,
   auto_create_worktree_on_task_create: null,
+  worktree_source_branch: null,
   columns_config: [
     { id: 'queued', label: 'Inbox', color: 'gray', position: 0, category: 'triage' },
     { id: 'finished', label: 'Done', color: 'green', position: 1, category: 'completed' }

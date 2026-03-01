@@ -955,6 +955,18 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_processes_project ON processes(project_id);
       `)
     }
+  },
+  {
+    version: 50,
+    up: (db) => {
+      db.exec(`ALTER TABLE tasks ADD COLUMN deleted_at TEXT DEFAULT NULL`)
+    }
+  },
+  {
+    version: 51,
+    up: (db) => {
+      db.exec(`ALTER TABLE projects ADD COLUMN worktree_source_branch TEXT DEFAULT NULL`)
+    }
   }
 ]
 
