@@ -79,6 +79,11 @@ function execGit(command: string, options: Parameters<typeof execSync>[1] & { cw
         stdout: details.stdout
       }
     })
+    // Strip "Command failed: git ..." prefix, keep only stderr
+    if (error instanceof Error) {
+      const stderr = (error as { stderr?: Buffer | string }).stderr?.toString().trim()
+      if (stderr) error.message = stderr
+    }
     throw error
   }
 }
