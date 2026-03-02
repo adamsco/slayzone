@@ -965,7 +965,12 @@ const migrations: Migration[] = [
   {
     version: 51,
     up: (db) => {
-      db.exec(`ALTER TABLE projects ADD COLUMN worktree_source_branch TEXT DEFAULT NULL`)
+      // Idempotent for drifted local DBs where column exists but user_version < 51.
+      const projectColumns = db.prepare(`PRAGMA table_info(projects)`).all() as Array<{ name: string }>
+      const hasWorktreeSourceBranch = projectColumns.some((column) => column.name === 'worktree_source_branch')
+      if (!hasWorktreeSourceBranch) {
+        db.exec(`ALTER TABLE projects ADD COLUMN worktree_source_branch TEXT DEFAULT NULL`)
+      }
     }
   }
 ]
