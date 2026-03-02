@@ -1,6 +1,41 @@
 # Changelog
 
 
+## v0.2.1
+
+[compare changes](https://github.com/debuglebowski/SlayZone/compare/v0.2.0...v0.2.1)
+
+### 🚀 Enhancements
+
+- **ui:** Add IconButton with required aria-label, migrate all icon buttons ([7721d22](https://github.com/debuglebowski/SlayZone/commit/7721d22))
+- **worktrees:** .slay/worktree-setup.sh convention + source branch ([94ac2e0](https://github.com/debuglebowski/SlayZone/commit/94ac2e0))
+- Undo/redo system for task mutations ([ba4e8b6](https://github.com/debuglebowski/SlayZone/commit/ba4e8b6))
+- **settings:** Light/dark/system theme selector + light theme polish ([dc2c269](https://github.com/debuglebowski/SlayZone/commit/dc2c269))
+- **task:** Add Settings panel header matching other panel headers ([acfd862](https://github.com/debuglebowski/SlayZone/commit/acfd862))
+
+### 🩹 Fixes
+
+- **cli:** Cross-platform esbuild build script ([fc9897e](https://github.com/debuglebowski/SlayZone/commit/fc9897e))
+- **terminal:** Auto-detect Codex session ID from disk ([fddb4d0](https://github.com/debuglebowski/SlayZone/commit/fddb4d0))
+- **worktrees:** Strip "Command failed" prefix from execGit errors ([4ad5ef6](https://github.com/debuglebowski/SlayZone/commit/4ad5ef6))
+- **db:** Make v51 migration idempotent for drifted DBs ([ce306e7](https://github.com/debuglebowski/SlayZone/commit/ce306e7))
+
+### 💅 Refactors
+
+- **ai-config:** Extract shared sync components, fix sync bugs, improve nav ([cd1e02c](https://github.com/debuglebowski/SlayZone/commit/cd1e02c))
+
+### 🏡 Chore
+
+- **ci:** Add typecheck + build CI workflow, gate releases on typecheck ([fafffb8](https://github.com/debuglebowski/SlayZone/commit/fafffb8))
+
+### ✅ Tests
+
+- **db:** Add worktree source branch migration test ([ca9e430](https://github.com/debuglebowski/SlayZone/commit/ca9e430))
+
+### ❤️ Contributors
+
+- Debuglebowski
+
 ## v0.2.0
 
 [compare changes](https://github.com/debuglebowski/SlayZone/compare/v0.1.69...v0.2.0)

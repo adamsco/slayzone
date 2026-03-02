@@ -16,6 +16,49 @@ export interface ChangelogEntry {
 // Newest first. Only user-facing versions with meaningful changes.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.2.1',
+    date: '2026-03-02',
+    tagline: 'Light up your workflow',
+    items: [
+      {
+        category: 'feature',
+        title: 'Light & dark theme selector',
+        description:
+          'Choose between light, dark, or system theme from settings — light mode fully polished.',
+      },
+      {
+        category: 'feature',
+        title: 'Undo/redo for task mutations',
+        description:
+          'Accidentally moved a task? Undo and redo any task change instantly.',
+      },
+      {
+        category: 'feature',
+        title: 'Worktree setup scripts',
+        description:
+          'Drop a .slay/worktree-setup.sh in your project — it runs automatically when creating worktrees.',
+      },
+      {
+        category: 'improvement',
+        title: 'Task settings panel header',
+        description:
+          'Settings panel now matches the consistent header style of other panels.',
+      },
+      {
+        category: 'fix',
+        title: 'Codex session detection',
+        description:
+          'Codex session IDs are now auto-detected from disk instead of requiring manual entry.',
+      },
+      {
+        category: 'fix',
+        title: 'Git error messages cleaned up',
+        description:
+          'Worktree git errors no longer show the "Command failed" prefix.',
+      },
+    ],
+  },
+  {
     version: '0.2.0',
     date: '2026-03-01',
     tagline: 'Your workflow, your rules',
