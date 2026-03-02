@@ -876,11 +876,11 @@ function App(): React.JSX.Element {
         label: `Completed "${task.title}"`,
         undo: async () => {
           await window.api.db.updateTask({ id: task.id, status: prevStatus })
-          updateTask({ ...task, status: prevStatus })
+          setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status: prevStatus } : t)))
         },
         redo: async () => {
           await window.api.db.updateTask({ id: task.id, status: doneStatus })
-          updateTask({ ...task, status: doneStatus })
+          setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, status: doneStatus } : t)))
         }
       })
       toast(`Completed "${task.title}"`, {
