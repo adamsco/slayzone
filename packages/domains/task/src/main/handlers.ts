@@ -21,11 +21,13 @@ interface DiagnosticEventPayload {
 
 interface TaskRuntimeAdapters {
   killPtysByTaskId: (taskId: string) => void
+  killTaskProcesses: (taskId: string) => void
   recordDiagnosticEvent: (event: DiagnosticEventPayload) => void
 }
 
 const defaultRuntimeAdapters: TaskRuntimeAdapters = {
   killPtysByTaskId: () => {},
+  killTaskProcesses: () => {},
   recordDiagnosticEvent: () => {}
 }
 
@@ -87,9 +89,10 @@ function cleanupTaskImmediate(taskId: string): void {
   runtimeAdapters.killPtysByTaskId(taskId)
 }
 
-/** Kill PTY + remove worktree — used for archive and hard purge */
+/** Kill PTY + processes + remove worktree — used for archive and hard purge */
 function cleanupTaskFull(db: Database, taskId: string): void {
   cleanupTaskImmediate(taskId)
+  runtimeAdapters.killTaskProcesses(taskId)
 
   const task = db.prepare(
     'SELECT worktree_path, project_id FROM tasks WHERE id = ?'

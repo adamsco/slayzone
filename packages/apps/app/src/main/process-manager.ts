@@ -205,12 +205,7 @@ export function restartProcess(id: string): boolean {
 /** Kill all processes belonging to a specific task. Project-scoped processes are unaffected. */
 export function killTaskProcesses(taskId: string): void {
   for (const [id, proc] of processes.entries()) {
-    if (proc.taskId === taskId) {
-      proc.autoRestart = false
-      proc.child?.kill()
-      proc.child = null
-      processes.delete(id)
-    }
+    if (proc.taskId === taskId) killProcess(id)
   }
 }
 

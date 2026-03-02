@@ -800,6 +800,7 @@ app.whenReady().then(async () => {
 
   configureTaskRuntimeAdapters({
     killPtysByTaskId,
+    killTaskProcesses,
     recordDiagnosticEvent,
   })
   logBoot('task runtime adapters configured')
