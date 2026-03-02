@@ -734,7 +734,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
       onBlur={handleBlur}
     >
       {/* Tab Bar */}
-      <div className="shrink-0 flex items-center h-10 px-2 gap-1 border-b border-border overflow-x-auto scrollbar-hide">
+      <div className="shrink-0 flex items-center h-10 px-2 gap-1 border-b border-border bg-surface-1 overflow-x-auto scrollbar-hide">
         {tabs.tabs.map(tab => {
           const isActive = tab.id === tabs.activeTabId
           const displayUrl = tab.url === 'about:blank' ? 'New Tab' : tab.url

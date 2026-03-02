@@ -153,7 +153,7 @@ export function OnboardingDialog({
         onEscapeKeyDown={handleSkip}
       >
         <motion.div
-          className="bg-background rounded-lg border shadow-lg"
+          className="bg-modal rounded-lg border shadow-lg"
           animate={{ opacity: closing ? 0 : 1, scale: closing ? 0.96 : 1 }}
           transition={{ duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
           onAnimationComplete={handleFadeOutComplete}

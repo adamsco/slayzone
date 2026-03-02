@@ -2,7 +2,9 @@
 <html>
   <head>
     <meta charset="UTF-8" />
+    <meta name="color-scheme" content="light dark" />
     <title>SlayZone</title>
+    <style>html, body { margin: 0; background: #0a0a0a; }</style>
     <link rel="icon" type="image/svg+xml" href="/src/assets/logo-solid.svg" />
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
     <meta
@@ -11,8 +13,9 @@
     />
   </head>
 
-  <body style="background:#0a0a0a">
+  <body>
     <div id="root"></div>
+    <script type="module" src="/src/theme-init.ts"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

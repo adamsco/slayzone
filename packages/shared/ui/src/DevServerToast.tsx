@@ -17,7 +17,7 @@ export function DevServerToast({ url, onOpen, onDismiss }: DevServerToastProps):
           exit={{ opacity: 0, y: 20, scale: 0.95 }}
           transition={{ type: 'spring', stiffness: 1800, damping: 60 }}
           data-testid="dev-server-toast"
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 rounded-xl bg-surface-2 border border-border px-5 py-3.5 shadow-2xl"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 rounded-xl bg-surface-1 border border-border px-5 py-3.5 shadow-2xl"
         >
           <Globe className="size-5 text-blue-500 shrink-0" />
           <span className="text-sm">

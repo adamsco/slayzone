@@ -684,9 +684,7 @@ app.whenReady().then(async () => {
     | { value: string }
     | undefined
   const savedTheme = row?.value as 'light' | 'dark' | 'system' | undefined
-  if (savedTheme) {
-    nativeTheme.themeSource = savedTheme
-  }
+  nativeTheme.themeSource = savedTheme ?? 'dark'
 
   // Set dock icon on macOS (needed for dev mode)
   if (process.platform === 'darwin') {

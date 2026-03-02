@@ -142,7 +142,7 @@ export function TerminalTabBar({
   return (
     <div
       data-testid="terminal-tabbar"
-      className="flex items-center h-10 px-2 bg-neutral-100 border-b border-neutral-200 dark:bg-transparent dark:border-border"
+      className="flex items-center h-10 px-2 bg-surface-1 border-b border-border"
     >
       <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-hide">
         {groups.map(group => {

@@ -235,7 +235,7 @@ export function TabBar({
 
   return (
     /* window-drag-region: all interactive children MUST have window-no-drag */
-    <div className="flex items-center h-11 pr-2 gap-1 bg-surface-1 window-drag-region">
+    <div className="flex items-center h-11 pr-2 gap-1 bg-sidebar window-drag-region">
       {/* Scrollable tabs area */}
       <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide flex-1 min-w-0">
         {/* Leaderboard tab — self-contained, guards its own Convex hooks */}

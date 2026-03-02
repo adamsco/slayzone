@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Theme, ThemePreference } from '@slayzone/settings/shared'
+import { applyTheme } from './apply-theme'
 
 interface ThemeContextValue {
   theme: Theme
@@ -11,11 +12,7 @@ const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>('dark')
-  const [preference, setPreferenceState] = useState<ThemePreference>('system')
-
-  const applyTheme = (nextTheme: Theme) => {
-    document.documentElement.classList.toggle('dark', nextTheme === 'dark')
-  }
+  const [preference, setPreferenceState] = useState<ThemePreference>('dark')
 
   useEffect(() => {
     let disposed = false

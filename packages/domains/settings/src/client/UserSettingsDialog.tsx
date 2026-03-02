@@ -509,8 +509,8 @@ export function UserSettingsDialog({
 
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Settings">
-      <div className="fixed inset-0 bg-white/80 dark:bg-black/60 backdrop-blur-sm" onMouseDown={() => onOpenChange(false)} />
-      <div className="fixed top-[50%] left-[50%] z-50 grid h-[88vh] !w-[94vw] !max-w-[94vw] translate-x-[-50%] translate-y-[-50%] overflow-hidden rounded-lg border bg-background p-0 shadow-lg outline-none sm:!w-[94vw] sm:!max-w-[94vw] xl:!max-w-[1320px]" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm" onMouseDown={() => onOpenChange(false)} />
+      <div className="fixed top-[50%] left-[50%] z-50 grid h-[88vh] !w-[94vw] !max-w-[94vw] translate-x-[-50%] translate-y-[-50%] overflow-hidden rounded-lg border bg-modal p-0 shadow-lg outline-none sm:!w-[94vw] sm:!max-w-[94vw] xl:!max-w-[1320px]" onMouseDown={(e) => e.stopPropagation()}>
         <div className="border-b px-6 py-4">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-lg leading-none font-semibold">Settings</h2>
@@ -546,13 +546,13 @@ export function UserSettingsDialog({
                   <div className="grid grid-cols-[220px_minmax(0,1fr)] items-center gap-4">
                     <span className="text-sm">Appearance</span>
                     <Select value={preference} onValueChange={(v) => setPreference(v as 'light' | 'dark' | 'system')}>
-                      <SelectTrigger className="w-32">
+                      <SelectTrigger className="w-48">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="dark">Dark</SelectItem>
-                        <SelectItem value="light">Light</SelectItem>
-                        <SelectItem value="system">System</SelectItem>
+                        <SelectItem value="light">Light (Experimental)</SelectItem>
+                        <SelectItem value="system">System (Experimental)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

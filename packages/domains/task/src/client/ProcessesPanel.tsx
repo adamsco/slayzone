@@ -434,7 +434,7 @@ export function ProcessesPanel({ taskId, projectId, cwd, terminalSessionId }: { 
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface-1">
       {/* Header */}
-      <div className="shrink-0 h-10 px-2 border-b border-border flex items-center gap-1">
+      <div className="shrink-0 h-10 px-2 border-b border-border bg-surface-1 flex items-center gap-1">
         {view === 'list' ? (
           <>
             <span className="text-xs font-medium text-muted-foreground px-1">Processes</span>

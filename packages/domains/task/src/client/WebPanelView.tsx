@@ -189,7 +189,7 @@ export function WebPanelView({
   return (
     <div className="flex flex-col h-full">
       {/* Header — h-10 matches Terminal/Browser/Editor tab bars */}
-      <div className="shrink-0 flex items-center h-10 px-2 gap-1.5 border-b border-border">
+      <div className="shrink-0 flex items-center h-10 px-2 gap-1.5 border-b border-border bg-surface-1">
         <Globe className="size-3.5 text-muted-foreground shrink-0" />
         <span className="text-xs font-medium text-muted-foreground flex-1">{name}</span>
 
