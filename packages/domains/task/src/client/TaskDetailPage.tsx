@@ -1605,11 +1605,11 @@ export function TaskDetailPage({
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="claude-code">Claude Code</SelectItem>
-                              <SelectItem value="ccs">CCS</SelectItem>
                               <SelectItem value="codex">Codex</SelectItem>
                               <SelectItem value="cursor-agent">Cursor Agent</SelectItem>
                               <SelectItem value="gemini">Gemini</SelectItem>
                               <SelectItem value="opencode">OpenCode</SelectItem>
+                              <SelectItem value="ccs">CCS - Claude Code</SelectItem>
                               <SelectItem value="terminal">Terminal</SelectItem>
                             </SelectContent>
                           </Select>
