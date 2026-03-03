@@ -1,5 +1,5 @@
 import type { TerminalAdapter, SpawnResult, PromptInfo, CodeMode, ActivityState, ErrorInfo, ValidationResult } from './types'
-import { buildExecCommand, getShellStartupArgs, resolveUserShell, whichBinary, validateShellEnv } from '../shell-env'
+import { getShellStartupArgs, resolveUserShell, whichBinary, validateShellEnv } from '../shell-env'
 
 /**
  * Adapter for Claude Code CLI.
@@ -10,42 +10,29 @@ export class ClaudeAdapter implements TerminalAdapter {
   readonly idleTimeoutMs = null // use default 60s
 
   buildSpawnConfig(_cwd: string, conversationId?: string, resuming?: boolean, initialPrompt?: string, providerArgs: string[] = [], codeMode?: CodeMode): SpawnResult {
-    const claudeArgs: string[] = []
+    const args: string[] = []
+    const flags: string[] = []
 
-    // Pass --resume for existing sessions, --session-id for new ones
     if (resuming && conversationId) {
-      claudeArgs.push('--resume', conversationId)
+      args.push('--resume', conversationId)
     } else if (conversationId) {
-      claudeArgs.push('--session-id', conversationId)
+      args.push('--session-id', conversationId)
     }
 
-    // Add bypass flag if code mode requests full automation.
     if (codeMode === 'bypass') {
-      claudeArgs.push('--allow-dangerously-skip-permissions')
+      flags.push('--allow-dangerously-skip-permissions')
     }
 
-    claudeArgs.push(...providerArgs)
+    flags.push(...providerArgs)
 
-    // Handle accept-edits mode: allow edit tools without prompting
     if (codeMode === 'accept-edits') {
-      claudeArgs.push('--allowedTools', 'Edit,Write,MultiEdit,NotebookEdit')
-    }
-
-    // Add initial prompt as positional argument (claude "prompt")
-    // Note: Do NOT use -p flag, that's for non-interactive "print and exit" mode
-    // Note: Plan mode prefix (/plan) is handled by injecting into terminal, not here
-    if (initialPrompt) {
-      claudeArgs.push(initialPrompt)
+      flags.push('--allowedTools', 'Edit,Write,MultiEdit,NotebookEdit')
     }
 
     const shell = resolveUserShell()
     return {
-      config: {
-        shell,
-        args: getShellStartupArgs(shell),
-        postSpawnCommand: buildExecCommand('claude', claudeArgs),
-      },
-      binary: { name: 'claude', args: claudeArgs }
+      config: { shell, args: getShellStartupArgs(shell) },
+      binary: { name: 'claude', args, providerArgs: flags, initialPrompt }
     }
   }
 

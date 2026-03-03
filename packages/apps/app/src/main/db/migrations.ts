@@ -985,6 +985,18 @@ const migrations: Migration[] = [
       db.exec(`ALTER TABLE tasks ADD COLUMN ccs_profile TEXT DEFAULT NULL`)
       db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`).run('ccs_enabled', '0')
     }
+  },
+  {
+    // CCS is now its own terminal mode — migrate ccs_profile to provider_config['ccs'].flags
+    version: 54,
+    up: (db) => {
+      // Copy ccs_profile into provider_config for tasks that had a profile set
+      db.exec(`
+        UPDATE tasks
+        SET provider_config = json_set(COALESCE(provider_config, '{}'), '$.ccs', json_object('flags', ccs_profile))
+        WHERE ccs_profile IS NOT NULL AND ccs_profile != ''
+      `)
+    }
   }
 ]
 

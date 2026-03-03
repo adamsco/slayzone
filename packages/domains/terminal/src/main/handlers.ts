@@ -1,7 +1,7 @@
 import { BrowserWindow } from 'electron'
 import type { IpcMain } from 'electron'
 import type { Database } from 'better-sqlite3'
-import { createPty, writePty, resizePty, killPty, hasPty, getBuffer, clearBuffer, getBufferSince, listPtys, getState, setDatabase, dismissAllNotifications, setTerminalTheme, setCcsEnabled, testExecutionContext } from './pty-manager'
+import { createPty, writePty, resizePty, killPty, hasPty, getBuffer, clearBuffer, getBufferSince, listPtys, getState, setDatabase, dismissAllNotifications, setTerminalTheme, testExecutionContext } from './pty-manager'
 import { getAdapter, type TerminalMode, type ExecutionContext } from './adapters'
 import type { CodeMode } from '@slayzone/terminal/shared'
 import { parseShellArgs } from './adapters/flag-parser'
@@ -17,7 +17,6 @@ interface PtyCreateOpts {
   codeMode?: CodeMode | null
   providerFlags?: string | null
   executionContext?: ExecutionContext | null
-  ccsProfile?: string | null
 }
 
 export function registerPtyHandlers(ipcMain: IpcMain, db: Database): void {
@@ -28,9 +27,6 @@ export function registerPtyHandlers(ipcMain: IpcMain, db: Database): void {
     const value = row?.value?.trim()
     return value ? value : null
   })
-  // Read initial CCS setting; updated via pty:setCcsEnabled IPC
-  const ccsRow = db.prepare('SELECT value FROM settings WHERE key = ?').get('ccs_enabled') as { value: string } | undefined
-  setCcsEnabled(ccsRow?.value === '1')
 
   ipcMain.handle(
     'pty:create',
@@ -45,16 +41,12 @@ export function registerPtyHandlers(ipcMain: IpcMain, db: Database): void {
         console.warn('[pty:create] Invalid provider flags, ignoring:', (err as Error).message)
       }
 
-      return createPty(win, opts.sessionId, opts.cwd, opts.conversationId, opts.existingConversationId, opts.mode, opts.initialPrompt, providerArgs, opts.codeMode, opts.executionContext, opts.ccsProfile)
+      return createPty(win, opts.sessionId, opts.cwd, opts.conversationId, opts.existingConversationId, opts.mode, opts.initialPrompt, providerArgs, opts.codeMode, opts.executionContext)
     }
   )
 
   ipcMain.handle('pty:testExecutionContext', async (_, context: ExecutionContext) => {
     return testExecutionContext(context)
-  })
-
-  ipcMain.handle('pty:setCcsEnabled', (_, enabled: boolean) => {
-    setCcsEnabled(enabled)
   })
 
   ipcMain.handle('pty:ccsListProfiles', async () => {

@@ -185,7 +185,6 @@ const api: ElectronAPI = {
   pty: {
     create: (opts) => ipcRenderer.invoke('pty:create', opts),
     testExecutionContext: (context) => ipcRenderer.invoke('pty:testExecutionContext', context),
-    setCcsEnabled: (enabled) => ipcRenderer.invoke('pty:setCcsEnabled', enabled),
     ccsListProfiles: () => ipcRenderer.invoke('pty:ccsListProfiles'),
     write: (sessionId, data) => ipcRenderer.invoke('pty:write', sessionId, data),
     setTheme: (theme) => ipcRenderer.invoke('pty:set-theme', theme),

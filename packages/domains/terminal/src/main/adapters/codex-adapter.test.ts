@@ -67,29 +67,28 @@ test('detects alternative working indicator phrases', () => {
 
 console.log('\nCodexAdapter.buildSpawnConfig\n')
 
-const isWin = process.platform === 'win32'
+function expectDeepEqual(actual: unknown, expected: unknown) {
+  const a = JSON.stringify(actual), b = JSON.stringify(expected)
+  if (a !== b) throw new Error(`Expected ${b}, got ${a}`)
+}
 
 test('starts fresh codex session by default', () => {
   const result = adapter.buildSpawnConfig('/tmp')
-  expect(result.config.postSpawnCommand).toBe(isWin ? 'codex' : "exec 'codex'")
+  expect(result.binary?.name).toBe('codex')
+  expectDeepEqual(result.binary?.args, [])
+  expectDeepEqual(result.binary?.providerArgs, [])
 })
 
 test('resumes codex session when existing conversation ID is provided', () => {
   const result = adapter.buildSpawnConfig('/tmp', '11111111-2222-4333-8444-555555555555', true)
-  expect(result.config.postSpawnCommand).toBe(
-    isWin
-      ? 'codex resume 11111111-2222-4333-8444-555555555555'
-      : "exec 'codex' 'resume' '11111111-2222-4333-8444-555555555555'"
-  )
+  expectDeepEqual(result.binary?.args, ['resume', '11111111-2222-4333-8444-555555555555'])
+  expectDeepEqual(result.binary?.providerArgs, [])
 })
 
-test('includes provider flags while resuming', () => {
+test('separates structural args from provider flags', () => {
   const result = adapter.buildSpawnConfig('/tmp', 'thread-123', true, undefined, ['--search'])
-  expect(result.config.postSpawnCommand).toBe(
-    isWin
-      ? 'codex resume thread-123 --search'
-      : "exec 'codex' 'resume' 'thread-123' '--search'"
-  )
+  expectDeepEqual(result.binary?.args, ['resume', 'thread-123'])
+  expectDeepEqual(result.binary?.providerArgs, ['--search'])
 })
 
 console.log('\nCodexAdapter.detectError\n')

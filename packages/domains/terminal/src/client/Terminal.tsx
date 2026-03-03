@@ -75,11 +75,6 @@ function waitForDimensions(
   })
 }
 
-// Check if a dialog is open (don't steal focus from dialogs)
-function isDialogOpen(): boolean {
-  return document.querySelector('[role="dialog"]') !== null
-}
-
 interface TerminalProps {
   sessionId: string
   cwd: string
@@ -90,8 +85,6 @@ interface TerminalProps {
   codeMode?: CodeMode | null
   providerFlags?: string | null
   executionContext?: import('@slayzone/terminal/shared').ExecutionContext | null
-  ccsProfile?: string | null
-  autoFocus?: boolean
   onConversationCreated?: (conversationId: string) => void
   onSessionInvalid?: () => void
   onReady?: (api: {
@@ -121,8 +114,6 @@ export function Terminal({
   codeMode,
   providerFlags,
   executionContext,
-  ccsProfile,
-  autoFocus = false,
   onConversationCreated,
   onSessionInvalid,
   onReady,
@@ -243,9 +234,6 @@ export function Terminal({
 
           // Simple fit - container is guaranteed to have dimensions
           cached.fitAddon.fit()
-          if (autoFocus && !isDialogOpen()) {
-            cached.terminal.focus()
-          }
           window.api.pty.resize(sessionId, cached.terminal.cols, cached.terminal.rows)
           cached.terminal.write('\x1b[0m') // Reset ANSI state on reattach
 
@@ -328,9 +316,6 @@ export function Terminal({
       terminal.clear() // Ensure terminal starts completely fresh
       // Simple fit - container is guaranteed to have dimensions from waitForDimensions
       fitAddon.fit()
-      if (autoFocus && !isDialogOpen()) {
-        terminal.focus()
-      }
 
       // Let Ctrl+Tab and Ctrl+Shift+Tab bubble up for tab switching
       // Intercept Cmd+F / Ctrl+F for terminal search
@@ -374,7 +359,7 @@ export function Terminal({
           sessionId, cwd,
           conversationId: effectiveConversationId,
           existingConversationId: effectiveExistingConversationId,
-          mode, codeMode, providerFlags, executionContext, ccsProfile
+          mode, codeMode, providerFlags, executionContext
         })
         if (!result.success) {
           const message = result.error || 'Failed to create terminal process'
@@ -442,7 +427,7 @@ export function Terminal({
         setIsInitializing(false)
       }
     }
-  }, [sessionId, cwd, mode, conversationId, existingConversationId, initialPrompt, codeMode, providerFlags, ccsProfile, autoFocus, resetTaskState, handleTerminalKeyEvent, clearBufferWithoutRestart])
+  }, [sessionId, cwd, mode, conversationId, existingConversationId, initialPrompt, codeMode, providerFlags, executionContext, resetTaskState, handleTerminalKeyEvent, clearBufferWithoutRestart])
 
   // Initialize terminal
   useEffect(() => {

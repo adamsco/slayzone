@@ -23,6 +23,7 @@ const MODE_ICONS: Record<TerminalMode, typeof TerminalIcon> = {
   'cursor-agent': MousePointerClick,
   'gemini': Sparkles,
   'opencode': Code,
+  'ccs': Bot,
   'terminal': TerminalIcon
 }
 
@@ -35,6 +36,7 @@ function getTabLabel(tab: TerminalTab): string {
       case 'cursor-agent': return 'Cursor'
       case 'gemini': return 'Gemini'
       case 'opencode': return 'OpenCode'
+      case 'ccs': return 'CCS'
       default: return 'Terminal'
     }
   }

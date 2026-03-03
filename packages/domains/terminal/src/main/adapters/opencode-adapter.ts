@@ -1,9 +1,9 @@
 import type { TerminalAdapter, SpawnResult, PromptInfo, CodeMode, ActivityState, ErrorInfo, ValidationResult } from './types'
-import { buildExecCommand, getShellStartupArgs, resolveUserShell, whichBinary, validateShellEnv } from '../shell-env'
+import { getShellStartupArgs, resolveUserShell, whichBinary, validateShellEnv } from '../shell-env'
 
 /**
  * Adapter for OpenCode CLI.
- * Bubble Tea (Go) full-screen TUI — spawned via shell + postSpawnCommand like Codex.
+ * Bubble Tea (Go) full-screen TUI — spawned via shell + exec like Codex.
  */
 export class OpencodeAdapter implements TerminalAdapter {
   readonly mode = 'opencode' as const
@@ -13,22 +13,16 @@ export class OpencodeAdapter implements TerminalAdapter {
   readonly transitionOnInput = true
 
   buildSpawnConfig(_cwd: string, conversationId?: string, resuming?: boolean, _initialPrompt?: string, providerArgs: string[] = [], _codeMode?: CodeMode): SpawnResult {
-    const cmdArgs: string[] = []
+    const args: string[] = []
 
     if (conversationId && resuming) {
-      cmdArgs.push('--session', conversationId)
+      args.push('--session', conversationId)
     }
-
-    cmdArgs.push(...providerArgs)
 
     const shell = resolveUserShell()
     return {
-      config: {
-        shell,
-        args: getShellStartupArgs(shell),
-        postSpawnCommand: buildExecCommand('opencode', cmdArgs),
-      },
-      binary: { name: 'opencode', args: cmdArgs }
+      config: { shell, args: getShellStartupArgs(shell) },
+      binary: { name: 'opencode', args, providerArgs }
     }
   }
 

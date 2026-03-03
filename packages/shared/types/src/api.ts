@@ -136,7 +136,6 @@ export interface PtyCreateOptions {
   codeMode?: CodeMode | null
   providerFlags?: string | null
   executionContext?: ExecutionContext | null
-  ccsProfile?: string | null
 }
 
 // ElectronAPI interface - the IPC contract between renderer and main
@@ -259,7 +258,6 @@ export interface ElectronAPI {
   pty: {
     create: (opts: PtyCreateOptions) => Promise<{ success: boolean; error?: string }>
     testExecutionContext: (context: ExecutionContext) => Promise<{ success: boolean; error?: string }>
-    setCcsEnabled: (enabled: boolean) => Promise<void>
     ccsListProfiles: () => Promise<{ profiles: string[]; error?: string }>
     write: (sessionId: string, data: string) => Promise<boolean>
     resize: (sessionId: string, cols: number, rows: number) => Promise<boolean>

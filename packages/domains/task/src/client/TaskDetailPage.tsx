@@ -235,7 +235,6 @@ export function TaskDetailPage({
   const [isMainTabActive, setIsMainTabActive] = useState(true)
   const [flagsInputValue, setFlagsInputValue] = useState('')
   const [isEditingFlags, setIsEditingFlags] = useState(false)
-  const [ccsEnabled, setCcsEnabled] = useState(false)
   const [ccsProfiles, setCcsProfiles] = useState<string[]>([])
   const flagsInputRef = useRef<HTMLInputElement>(null)
 
@@ -319,22 +318,23 @@ export function TaskDetailPage({
   }, [])
   useEffect(() => { browserOpenRef.current = panelVisibility.browser }, [panelVisibility.browser])
 
-  // Load dev server settings + CCS enabled (re-read on settingsRevision change)
+  // Load dev server settings (re-read on settingsRevision change)
   useEffect(() => {
     Promise.all([
       window.api.settings.get('dev_server_toast_enabled'),
       window.api.settings.get('dev_server_auto_open_browser'),
-      window.api.settings.get('ccs_enabled')
-    ]).then(([toast, autoOpen, ccs]) => {
+    ]).then(([toast, autoOpen]) => {
       devServerToastEnabledRef.current = toast !== '0'
       devServerAutoOpenRef.current = autoOpen === '1'
-      const on = ccs === '1'
-      setCcsEnabled(on)
-      if (on) {
-        window.api.pty.ccsListProfiles().then(({ profiles }) => setCcsProfiles(profiles)).catch(() => {})
-      }
     })
   }, [settingsRevision])
+
+  // Load CCS profiles when mode is 'ccs'
+  useEffect(() => {
+    if (task?.terminal_mode === 'ccs') {
+      window.api.pty.ccsListProfiles().then(({ profiles }) => setCcsProfiles(profiles)).catch(() => {})
+    }
+  }, [task?.terminal_mode])
 
   useEffect(() => {
     if (!task) return
@@ -1576,7 +1576,6 @@ export function TaskDetailPage({
                   codeMode={getQuickRunCodeMode(task.id)}
                   providerFlags={getProviderFlagsForMode(task)}
                   executionContext={project?.execution_context}
-                  ccsProfile={task.ccs_profile}
                   focusRequestId={terminalFocusRequestId}
                   onConversationCreated={handleSessionCreated}
                   onSessionInvalid={handleSessionInvalid}
@@ -1606,6 +1605,7 @@ export function TaskDetailPage({
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="claude-code">Claude Code</SelectItem>
+                              <SelectItem value="ccs">CCS</SelectItem>
                               <SelectItem value="codex">Codex</SelectItem>
                               <SelectItem value="cursor-agent">Cursor Agent</SelectItem>
                               <SelectItem value="gemini">Gemini</SelectItem>
@@ -1619,14 +1619,17 @@ export function TaskDetailPage({
                             </TooltipContent>
                           </Tooltip>
 
-                          {ccsEnabled && task.terminal_mode !== 'terminal' && task.terminal_mode !== 'opencode' && (
+                          {task.terminal_mode === 'ccs' && (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Select
-                                  value={task.ccs_profile ?? '__none__'}
+                                  value={getProviderFlags(task.provider_config, 'ccs') || '__none__'}
                                   onValueChange={async (val) => {
-                                    const profile = val === '__none__' ? null : val
-                                    const updated = await window.api.db.updateTask({ id: task.id, ccsProfile: profile })
+                                    const profile = val === '__none__' ? '' : val
+                                    const updated = await window.api.db.updateTask({
+                                      id: task.id,
+                                      providerConfig: setProviderFlags(task.provider_config, 'ccs', profile)
+                                    })
                                     if (updated) {
                                       setTask(updated)
                                       onTaskUpdated(updated)
@@ -1641,19 +1644,22 @@ export function TaskDetailPage({
                                     {ccsProfiles.map((p) => (
                                       <SelectItem key={p} value={p}>{p}</SelectItem>
                                     ))}
-                                    {task.ccs_profile && !ccsProfiles.includes(task.ccs_profile) && (
-                                      <SelectItem value={task.ccs_profile}>{task.ccs_profile}</SelectItem>
-                                    )}
+                                    {(() => {
+                                      const currentProfile = getProviderFlags(task.provider_config, 'ccs')
+                                      return currentProfile && !ccsProfiles.includes(currentProfile) ? (
+                                        <SelectItem value={currentProfile}>{currentProfile}</SelectItem>
+                                      ) : null
+                                    })()}
                                   </SelectContent>
                                 </Select>
                               </TooltipTrigger>
                               <TooltipContent side="bottom">
-                                CCS profile{task.terminal_mode === 'claude-code' ? '' : ' (only applies to Claude)'}
+                                CCS profile
                               </TooltipContent>
                             </Tooltip>
                           )}
 
-                          {task.terminal_mode !== 'terminal' && (
+                          {task.terminal_mode !== 'terminal' && task.terminal_mode !== 'ccs' && (
                             isEditingFlags ? (
                               <Input
                                 ref={flagsInputRef}

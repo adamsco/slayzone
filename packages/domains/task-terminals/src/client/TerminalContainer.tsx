@@ -19,7 +19,6 @@ interface TerminalContainerProps {
   codeMode?: CodeMode | null
   providerFlags?: string
   executionContext?: import('@slayzone/terminal/shared').ExecutionContext | null
-  ccsProfile?: string | null
   isActive?: boolean
   focusRequestId?: number
   onConversationCreated?: (conversationId: string) => void
@@ -47,7 +46,6 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
   codeMode,
   providerFlags,
   executionContext,
-  ccsProfile,
   isActive = true,
   focusRequestId = 0,
   onConversationCreated,
@@ -267,14 +265,13 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
       codeMode: tab.isMain ? codeMode : undefined,
       providerFlags: tab.isMain ? providerFlags : undefined,
       executionContext,
-      ccsProfile: tab.isMain ? ccsProfile : undefined,
       onConversationCreated: tab.isMain ? handleConversationCreated : undefined,
       onSessionInvalid: tab.isMain ? onSessionInvalid : undefined,
       onReady: tab.isMain ? handleTerminalReady : undefined,
       onFirstInput: tab.isMain ? onFirstInput : undefined,
       onRetry: tab.isMain ? onRetry : undefined
     }))
-  }, [activeGroup, getSessionId, cwd, conversationId, existingConversationId, initialPrompt, codeMode, providerFlags, executionContext, ccsProfile, handleConversationCreated, onSessionInvalid, handleTerminalReady, onFirstInput, onRetry])
+  }, [activeGroup, getSessionId, cwd, conversationId, existingConversationId, initialPrompt, codeMode, providerFlags, executionContext, handleConversationCreated, onSessionInvalid, handleTerminalReady, onFirstInput, onRetry])
 
   if (isLoading || !activeGroup) {
     return (

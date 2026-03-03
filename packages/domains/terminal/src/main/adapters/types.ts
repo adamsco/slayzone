@@ -1,6 +1,6 @@
 import type { CodeMode, ExecutionContext } from '@slayzone/terminal/shared'
 
-export type TerminalMode = 'claude-code' | 'codex' | 'cursor-agent' | 'gemini' | 'opencode' | 'terminal'
+export type TerminalMode = 'claude-code' | 'ccs' | 'codex' | 'cursor-agent' | 'gemini' | 'opencode' | 'terminal'
 export type { CodeMode, ExecutionContext }
 
 // Activity states for CLI tools
@@ -20,26 +20,34 @@ export interface CLIState {
   error: ErrorInfo | null
 }
 
-export interface SpawnConfig {
+/** Shell config returned by adapters */
+export interface SpawnShellConfig {
   shell: string
   args: string[]
   env?: Record<string, string>
-  /** Command to run after shell starts (e.g., "claude --session-id X") */
-  postSpawnCommand?: string
 }
 
-/** Metadata returned alongside SpawnConfig for CCS wrapping */
+/** Binary metadata for command construction (pty-manager builds the final command) */
 export interface SpawnBinaryInfo {
-  /** Raw binary name (e.g. 'claude', 'codex') */
+  /** Binary name (e.g. 'claude', 'codex') */
   name: string
-  /** Raw args passed to the binary */
+  /** Structural args (resume, session-id) — used for direct CLI, skipped for CCS */
   args: string[]
+  /** Provider-specific flags (--full-auto, --yolo, etc.) — used for direct CLI, skipped for CCS */
+  providerArgs: string[]
+  /** Initial prompt text — passed through to both direct CLI and CCS */
+  initialPrompt?: string
 }
 
 export interface SpawnResult {
-  config: SpawnConfig
+  config: SpawnShellConfig
   /** Present for AI modes; absent for plain terminal */
   binary?: SpawnBinaryInfo
+}
+
+/** Internal pty-manager type — adds postSpawnCommand constructed from binary info */
+export interface SpawnConfig extends SpawnShellConfig {
+  postSpawnCommand?: string
 }
 
 export interface PromptInfo {

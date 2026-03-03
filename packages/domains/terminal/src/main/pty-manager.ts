@@ -7,9 +7,9 @@ import { DEV_SERVER_URL_PATTERN } from '@slayzone/terminal/shared'
 import type { TerminalState, PtyInfo, CodeMode, BufferSinceResult } from '@slayzone/terminal/shared'
 import { getDiagnosticsConfig, recordDiagnosticEvent } from '@slayzone/diagnostics/main'
 import { RingBuffer, type BufferChunk } from './ring-buffer'
-import { getAdapter, type TerminalMode, type TerminalAdapter, type ActivityState, type ErrorInfo, type ExecutionContext } from './adapters'
+import { getAdapter, type TerminalMode, type TerminalAdapter, type SpawnConfig, type ActivityState, type ErrorInfo, type ExecutionContext } from './adapters'
 import { StateMachine, activityToTerminalState } from './state-machine'
-import { quoteForShell, buildCcsExecCommand } from './shell-env'
+import { quoteForShell, buildExecCommand } from './shell-env'
 
 // Database reference for notifications
 let db: Database | null = null
@@ -18,15 +18,9 @@ export function setDatabase(database: Database): void {
   db = database
 }
 
-// CCS (Claude Code Switch) — cached setting, updated via setCcsEnabled
-let ccsEnabled = false
-
-export function setCcsEnabled(enabled: boolean): void {
-  ccsEnabled = enabled
-}
-
 const MODE_LABELS: Record<string, string> = {
   'claude-code': 'Claude',
+  'ccs': 'CCS',
   'codex': 'Codex',
   'cursor-agent': 'Cursor',
   'gemini': 'Gemini',
@@ -438,8 +432,7 @@ export async function createPty(
   initialPrompt?: string | null,
   providerArgs?: string[],
   codeMode?: CodeMode | null,
-  executionContext?: ExecutionContext | null,
-  ccsProfile?: string | null
+  executionContext?: ExecutionContext | null
 ): Promise<{ success: boolean; error?: string }> {
   const taskId = taskIdFromSessionId(sessionId)
   const createStartedAt = Date.now()
@@ -477,14 +470,17 @@ export async function createPty(
     const resuming = !!existingConversationId
     const effectiveConversationId = existingConversationId || conversationId
 
-    // Get spawn config from adapter
-    const { config: spawnConfig, binary } = adapter.buildSpawnConfig(cwd || homedir(), effectiveConversationId || undefined, resuming, initialPrompt || undefined, providerArgs ?? [], codeMode || undefined)
+    // Get shell + binary info from adapter
+    const { config: shellConfig, binary } = adapter.buildSpawnConfig(cwd || homedir(), effectiveConversationId || undefined, resuming, initialPrompt || undefined, providerArgs ?? [], codeMode || undefined)
 
-    // Apply CCS wrapping if enabled
-    if (ccsEnabled && binary) {
-      const wrapped = buildCcsExecCommand(binary.name, binary.args, ccsProfile)
-      if (wrapped) spawnConfig.postSpawnCommand = wrapped
+    // Build full spawn config — pty-manager owns postSpawnCommand construction
+    let postSpawnCommand: string | undefined
+    if (binary) {
+      const allArgs = [...binary.args, ...binary.providerArgs]
+      if (binary.initialPrompt) allArgs.push(binary.initialPrompt)
+      postSpawnCommand = buildExecCommand(binary.name, allArgs)
     }
+    const spawnConfig: SpawnConfig = { ...shellConfig, postSpawnCommand }
 
     spawnAttempt = {
       shell: spawnConfig.shell,

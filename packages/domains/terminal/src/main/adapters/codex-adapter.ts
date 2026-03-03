@@ -2,7 +2,7 @@ import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { TerminalAdapter, SpawnResult, PromptInfo, CodeMode, ActivityState, ErrorInfo, ValidationResult } from './types'
-import { buildExecCommand, getShellStartupArgs, resolveUserShell, whichBinary, validateShellEnv } from '../shell-env'
+import { getShellStartupArgs, resolveUserShell, whichBinary, validateShellEnv } from '../shell-env'
 
 /**
  * Adapter for OpenAI Codex.
@@ -17,23 +17,16 @@ export class CodexAdapter implements TerminalAdapter {
   readonly sessionIdCommand = '/status'
 
   buildSpawnConfig(_cwd: string, conversationId?: string, resuming?: boolean, _initialPrompt?: string, providerArgs: string[] = [], _codeMode?: CodeMode): SpawnResult {
-    const cmdArgs: string[] = []
-    const shouldResume = !!conversationId && !!resuming
+    const args: string[] = []
 
-    if (shouldResume) {
-      cmdArgs.push('resume', conversationId)
+    if (conversationId && resuming) {
+      args.push('resume', conversationId)
     }
-
-    cmdArgs.push(...providerArgs)
 
     const shell = resolveUserShell()
     return {
-      config: {
-        shell,
-        args: getShellStartupArgs(shell),
-        postSpawnCommand: buildExecCommand('codex', cmdArgs),
-      },
-      binary: { name: 'codex', args: cmdArgs }
+      config: { shell, args: getShellStartupArgs(shell) },
+      binary: { name: 'codex', args, providerArgs }
     }
   }
 

@@ -28,6 +28,7 @@ export const PROVIDER_DEFAULTS: Record<string, { settingsKey: string; fallback: 
   'cursor-agent': { settingsKey: 'default_cursor_flags',   fallback: '--force',                              label: 'Cursor' },
   'gemini':       { settingsKey: 'default_gemini_flags',   fallback: '--yolo',                               label: 'Gemini' },
   'opencode':     { settingsKey: 'default_opencode_flags', fallback: '',                                     label: 'OpenCode' },
+  'ccs':          { settingsKey: 'ccs_default_profile',   fallback: '',                                     label: 'CCS' },
 }
 
 export function getProviderConversationId(cfg: ProviderConfig | undefined | null, mode: string): string | null {
@@ -244,8 +245,6 @@ export interface UpdateTaskInput {
   // Merge mode
   mergeState?: MergeState | null
   mergeContext?: MergeContext | null
-  // CCS profile
-  ccsProfile?: string | null
   // Temporary task
   isTemporary?: boolean
   // Legacy
