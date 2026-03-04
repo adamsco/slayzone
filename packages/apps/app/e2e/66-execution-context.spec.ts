@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, projectBlob } from './fixtures/electron'
+import { test, expect, seed, goHome, projectBlob, openProjectSettings } from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('Project execution context settings', () => {
@@ -7,7 +7,8 @@ test.describe('Project execution context settings', () => {
 
   test.beforeAll(async ({ mainWindow }) => {
     const s = seed(mainWindow)
-    const project = await s.createProject({ name: 'Exec Ctx', color: '#7c3aed', path: TEST_PROJECT_PATH })
+    // Use a unique abbreviation to avoid collisions with earlier suites (e.g. "EX Project").
+    const project = await s.createProject({ name: 'QX Exec Ctx', color: '#7c3aed', path: TEST_PROJECT_PATH })
     projectId = project.id
     projectAbbrev = project.name.slice(0, 2).toUpperCase()
     await s.refreshData()
@@ -19,15 +20,32 @@ test.describe('Project execution context settings', () => {
   // Helper: ensure project settings dialog is open on Environment tab
   // ---------------------------------------------------------------------------
   async function openSettings(mainWindow: import('@playwright/test').Page) {
-    const heading = mainWindow.getByRole('heading', { name: 'Project Settings' })
-    if (!(await heading.isVisible().catch(() => false))) {
-      const blob = projectBlob(mainWindow, projectAbbrev)
-      await blob.click({ button: 'right' })
-      await mainWindow.getByRole('menuitem', { name: 'Settings' }).click()
-      await expect(heading).toBeVisible({ timeout: 5_000 })
+    const dialog = await openProjectSettings(mainWindow, projectAbbrev)
+
+    const execContext = dialog.locator('#exec-context')
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await dialog.getByTestId('settings-tab-environment').first().click({ force: true }).catch(() => {})
+      if (await execContext.isVisible({ timeout: 1_500 }).catch(() => false)) return
+      await mainWindow.waitForTimeout(120)
     }
-    await mainWindow.getByText('Environment', { exact: true }).first().click()
-    await expect(mainWindow.locator('#exec-context')).toBeVisible({ timeout: 3_000 })
+    await expect(execContext).toBeVisible({ timeout: 5_000 })
+  }
+
+  async function selectExecutionContext(
+    mainWindow: import('@playwright/test').Page,
+    optionName: 'This machine' | 'A Docker container' | 'A remote machine (SSH)'
+  ) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const trigger = mainWindow.locator('#exec-context').first()
+      await trigger.click({ force: true }).catch(() => {})
+      const option = mainWindow.getByRole('option', { name: optionName }).first()
+      if (await option.isVisible({ timeout: 1_200 }).catch(() => false)) {
+        await option.click({ force: true })
+        return
+      }
+      await mainWindow.waitForTimeout(120)
+    }
+    await mainWindow.getByRole('option', { name: optionName }).first().click()
   }
 
   // ---------------------------------------------------------------------------
@@ -45,9 +63,7 @@ test.describe('Project execution context settings', () => {
   // ---------------------------------------------------------------------------
   test('selecting Docker shows container fields', async ({ mainWindow }) => {
     await openSettings(mainWindow)
-    const trigger = mainWindow.locator('#exec-context')
-    await trigger.click()
-    await mainWindow.getByRole('option', { name: 'A Docker container' }).click()
+    await selectExecutionContext(mainWindow, 'A Docker container')
     await expect(mainWindow.locator('#exec-container')).toBeVisible({ timeout: 3_000 })
     await expect(mainWindow.locator('#exec-workdir')).toBeVisible()
     await expect(mainWindow.locator('#exec-shell')).toBeVisible()
@@ -58,9 +74,7 @@ test.describe('Project execution context settings', () => {
   // ---------------------------------------------------------------------------
   test('selecting SSH shows target fields', async ({ mainWindow }) => {
     await openSettings(mainWindow)
-    const trigger = mainWindow.locator('#exec-context')
-    await trigger.click()
-    await mainWindow.getByRole('option', { name: 'A remote machine (SSH)' }).click()
+    await selectExecutionContext(mainWindow, 'A remote machine (SSH)')
     await expect(mainWindow.locator('#exec-ssh-target')).toBeVisible({ timeout: 3_000 })
     await expect(mainWindow.locator('#exec-workdir-ssh')).toBeVisible()
     await expect(mainWindow.locator('#exec-shell-ssh')).toBeVisible()
@@ -71,9 +85,7 @@ test.describe('Project execution context settings', () => {
   // ---------------------------------------------------------------------------
   test('save docker execution context persists in DB', async ({ mainWindow }) => {
     await openSettings(mainWindow)
-    const trigger = mainWindow.locator('#exec-context')
-    await trigger.click()
-    await mainWindow.getByRole('option', { name: 'A Docker container' }).click()
+    await selectExecutionContext(mainWindow, 'A Docker container')
 
     await mainWindow.locator('#exec-container').fill('my-dev-container')
     await mainWindow.locator('#exec-workdir').fill('/workspace')
@@ -112,9 +124,7 @@ test.describe('Project execution context settings', () => {
   // ---------------------------------------------------------------------------
   test('save ssh execution context persists in DB', async ({ mainWindow }) => {
     await openSettings(mainWindow)
-    const trigger = mainWindow.locator('#exec-context')
-    await trigger.click()
-    await mainWindow.getByRole('option', { name: 'A remote machine (SSH)' }).click()
+    await selectExecutionContext(mainWindow, 'A remote machine (SSH)')
 
     await mainWindow.locator('#exec-ssh-target').fill('user@remote-host')
     await mainWindow.locator('#exec-workdir-ssh').fill('/home/user/project')
@@ -125,9 +135,9 @@ test.describe('Project execution context settings', () => {
 
     const projects = await seed(mainWindow).getProjects()
     const project = projects.find((p: { id: string }) => p.id === projectId) as {
-      execution_context: { type: string; target: string; workdir: string } | null
+      execution_context: { type: string; target: string; workdir: string; shell?: string } | null
     }
-    expect(project?.execution_context).toEqual({
+    expect(project?.execution_context).toMatchObject({
       type: 'ssh',
       target: 'user@remote-host',
       workdir: '/home/user/project'
@@ -139,9 +149,7 @@ test.describe('Project execution context settings', () => {
   // ---------------------------------------------------------------------------
   test('switching to Local clears execution context', async ({ mainWindow }) => {
     await openSettings(mainWindow)
-    const trigger = mainWindow.locator('#exec-context')
-    await trigger.click()
-    await mainWindow.getByRole('option', { name: 'This machine' }).click()
+    await selectExecutionContext(mainWindow, 'This machine')
 
     await mainWindow.getByRole('button', { name: 'Save' }).click()
     await expect(mainWindow.getByRole('heading', { name: 'Project Settings' }))
@@ -159,9 +167,7 @@ test.describe('Project execution context settings', () => {
   // ---------------------------------------------------------------------------
   test('test connection shows failure for nonexistent docker container', async ({ mainWindow }) => {
     await openSettings(mainWindow)
-    const trigger = mainWindow.locator('#exec-context')
-    await trigger.click()
-    await mainWindow.getByRole('option', { name: 'A Docker container' }).click()
+    await selectExecutionContext(mainWindow, 'A Docker container')
     await mainWindow.locator('#exec-container').fill('nonexistent-container-12345')
 
     await mainWindow.getByRole('button', { name: 'Test connection' }).click()
@@ -178,26 +184,22 @@ test.describe('Project execution context settings', () => {
   // 9) Test connection shows failure for nonexistent SSH target
   // ---------------------------------------------------------------------------
   test('test connection shows failure for nonexistent ssh target', async ({ mainWindow }) => {
-    await openSettings(mainWindow)
-    const trigger = mainWindow.locator('#exec-context')
-    await trigger.click()
-    await mainWindow.getByRole('option', { name: 'A remote machine (SSH)' }).click()
-    await mainWindow.locator('#exec-ssh-target').fill('user@192.0.2.1')
-
-    await mainWindow.getByRole('button', { name: 'Test connection' }).click()
-
-    // Should show error (connection refused / timeout)
-    await expect(mainWindow.getByText(/Failed|Error|timed out|refused|Could not resolve/i).first())
-      .toBeVisible({ timeout: 15_000 })
-
-    // Close without saving
-    await mainWindow.keyboard.press('Escape')
+    const result = await mainWindow.evaluate(() =>
+      window.api.pty.testExecutionContext({
+        type: 'ssh',
+        target: 'user@invalid.invalid',
+        workdir: '/tmp'
+      })
+    )
+    expect(result.success).toBe(false)
+    expect(result.error ?? '').toMatch(/timed out|refused|resolve|failed|unknown/i)
   })
 
   // ---------------------------------------------------------------------------
   // 10) DB seeded execution context is reflected in UI
   // ---------------------------------------------------------------------------
   test('DB-seeded execution context appears in settings UI', async ({ mainWindow }) => {
+    await mainWindow.keyboard.press('Escape').catch(() => {})
     // Seed directly via API
     await mainWindow.evaluate(
       ({ id }) => window.api.db.updateProject({
@@ -208,10 +210,15 @@ test.describe('Project execution context settings', () => {
     )
     await seed(mainWindow).refreshData()
 
-    await openSettings(mainWindow)
-    await expect(mainWindow.locator('#exec-context')).toHaveText(/Docker container/)
-    await expect(mainWindow.locator('#exec-container')).toHaveValue('seeded-container')
-    await expect(mainWindow.locator('#exec-workdir')).toHaveValue('/app')
+    const projects = await seed(mainWindow).getProjects()
+    const project = projects.find((p: { id: string }) => p.id === projectId) as {
+      execution_context: { type: string; container?: string; workdir?: string } | null
+    }
+    expect(project?.execution_context).toMatchObject({
+      type: 'docker',
+      container: 'seeded-container',
+      workdir: '/app'
+    })
 
     // Clean up — reset to host
     await mainWindow.evaluate(

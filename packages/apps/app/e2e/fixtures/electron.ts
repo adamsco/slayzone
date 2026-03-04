@@ -1,4 +1,4 @@
-import { test as base, type Page } from '@playwright/test'
+import { test as base, expect, type Page, type Locator } from '@playwright/test'
 import { _electron as electron, type ElectronApplication } from 'playwright'
 import path from 'path'
 import fs from 'fs'
@@ -107,6 +107,41 @@ function closeSessionLogCapture(): void {
   sessionStderrStream?.end()
   sessionStdoutStream = null
   sessionStderrStream = null
+}
+
+async function dismissOnboardingIfPresent(page: Page): Promise<void> {
+  const onboardingDialog = page
+    .locator('[role="dialog"]')
+    .filter({ hasText: /Welcome to SlayZone|Your AI, your responsibility|Choose your default AI|Analytics|You're all set!/i })
+    .last()
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const visible = await onboardingDialog.isVisible({ timeout: 250 }).catch(() => false)
+    if (!visible) return
+
+    const actions = [
+      onboardingDialog.getByRole('button', { name: 'Skip', exact: true }),
+      onboardingDialog.getByRole('button', { name: 'I understand', exact: true }),
+      onboardingDialog.getByRole('button', { name: 'Continue', exact: true }),
+      onboardingDialog.getByRole('button', { name: 'No', exact: true }),
+      onboardingDialog.getByRole('button', { name: 'Yes', exact: true }),
+    ]
+
+    let clicked = false
+    for (const action of actions) {
+      const actionVisible = await action.isVisible({ timeout: 150 }).catch(() => false)
+      if (!actionVisible) continue
+      await action.click({ timeout: 2_000 }).catch(() => {})
+      clicked = true
+      break
+    }
+
+    if (!clicked) break
+    await page.waitForTimeout(200)
+  }
+
+  // Step 4 auto-closes after animation; give it time to complete.
+  await page.waitForTimeout(2_000)
 }
 
 /**
@@ -317,12 +352,7 @@ export const test = base.extend<ElectronFixtures>({
       })
 
       // Dismiss onboarding if it appears
-      const skip = sharedPage.getByRole('button', { name: 'Skip' })
-      if (await skip.isVisible({ timeout: 2_000 }).catch(() => false)) {
-        await skip.click({ timeout: 2_000 }).catch(async () => {
-          await skip.first().click({ force: true, timeout: 2_000 }).catch(() => {})
-        })
-      }
+      await dismissOnboardingIfPresent(sharedPage)
 
       await use(sharedPage)
     },
@@ -429,8 +459,11 @@ export async function clickProject(page: Page, abbrev: string) {
   const target = sidebar(page).getByRole('button', { name: abbrev, exact: true }).last()
   for (let attempt = 0; attempt < 25; attempt += 1) {
     if ((await target.count()) > 0) {
-      await target.click()
-      return
+      await target.scrollIntoViewIfNeeded().catch(() => {})
+      const clicked = await target.click({ timeout: 1_000 }).then(() => true).catch(async () => {
+        return await target.click({ force: true, timeout: 1_000 }).then(() => true).catch(() => false)
+      })
+      if (clicked) return
     }
     await page.evaluate(async () => {
       const refresh = (window as { __slayzone_refreshData?: () => Promise<void> | void }).__slayzone_refreshData
@@ -453,12 +486,19 @@ export async function clickAddProject(page: Page) {
 
 /** Click the settings button in the sidebar footer */
 export async function clickSettings(page: Page) {
-  // Settings button is in sidebar footer, has tooltip "Settings" but no title attr
-  const button = sidebar(page).locator('[data-sidebar="footer"] button').last()
-  try {
-    await button.click()
-  } catch {
-    await page.keyboard.press('Meta+,')
+  const dialog = page.locator('[role="dialog"][aria-label="Settings"]').first()
+  await page.keyboard.press('Meta+,').catch(() => {})
+  if (await dialog.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    return
+  }
+
+  const footer = sidebar(page).locator('[data-sidebar="footer"]').first()
+  const settingsButton = footer
+    .locator('button')
+    .filter({ has: page.locator('.lucide-settings') })
+    .first()
+  if (await settingsButton.isVisible({ timeout: 1_000 }).catch(() => false)) {
+    await settingsButton.click({ force: true })
   }
 }
 
@@ -477,7 +517,91 @@ export async function goHome(page: Page) {
 
 /** Check if a project blob exists in the sidebar */
 export function projectBlob(page: Page, abbrev: string) {
-  return sidebar(page).getByText(abbrev, { exact: true })
+  return sidebar(page).getByRole('button', { name: abbrev, exact: true }).last()
 }
 
-export { expect } from '@playwright/test'
+/** Open Project Settings for a given sidebar project abbreviation. */
+export async function openProjectSettings(page: Page, abbrev: string): Promise<Locator> {
+  const dialog = page
+    .getByRole('dialog')
+    .filter({ has: page.getByRole('heading', { name: 'Project Settings' }) })
+    .last()
+
+  // Fast path: dialog is already open from a prior action in the same test flow.
+  if (await dialog.isVisible({ timeout: 400 }).catch(() => false)) {
+    return dialog
+  }
+
+  // Clean up any stray modal/dialog left by prior specs.
+  const openDialogs = page.locator('[role="dialog"][data-state="open"], [role="dialog"][aria-modal="true"]')
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if ((await openDialogs.count()) === 0) break
+    const top = openDialogs.last()
+    const closeButton = top.getByRole('button', { name: /close|cancel|done|skip/i }).first()
+    if (await closeButton.isVisible({ timeout: 200 }).catch(() => false)) {
+      await closeButton.click({ force: true }).catch(() => {})
+    } else {
+      await top.press('Escape').catch(() => {})
+      await page.keyboard.press('Escape').catch(() => {})
+    }
+    await page.waitForTimeout(120)
+  }
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    if (await dialog.isVisible({ timeout: 500 }).catch(() => false)) break
+
+    await goHome(page)
+    await clickProject(page, abbrev)
+    const blob = projectBlob(page, abbrev)
+    await expect(blob).toBeVisible({ timeout: 5_000 })
+    await blob.scrollIntoViewIfNeeded().catch(() => {})
+
+    let clickedFromContextMenu = false
+    for (let menuAttempt = 0; menuAttempt < 3; menuAttempt += 1) {
+      await blob.click({ button: 'right', force: true }).catch(async () => {
+        await blob.focus().catch(() => {})
+        await page.keyboard.press('Shift+F10').catch(() => {})
+      })
+
+      const settingsItem = page.getByRole('menuitem', { name: 'Settings' }).first()
+      if (await settingsItem.isVisible({ timeout: 1_000 }).catch(() => false)) {
+        await settingsItem.click({ force: true }).catch(() => {})
+        clickedFromContextMenu = true
+        break
+      }
+
+      // Pointer events can be flaky on first interaction in long ordered runs.
+      // Fire a DOM contextmenu event directly as a fallback before retrying.
+      await blob.evaluate((node) => {
+        node.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true,
+          cancelable: true,
+          button: 2,
+          buttons: 2,
+        }))
+      }).catch(() => {})
+
+      if (await settingsItem.isVisible({ timeout: 600 }).catch(() => false)) {
+        await settingsItem.click({ force: true }).catch(() => {})
+        clickedFromContextMenu = true
+        break
+      }
+      await page.waitForTimeout(120)
+    }
+
+    if (await dialog.isVisible({ timeout: 1_000 }).catch(() => false)) break
+
+    if (!clickedFromContextMenu) {
+      // Fallback to app accelerator if context menu path is unavailable.
+      await page.keyboard.press('Meta+Shift+,').catch(() => {})
+    }
+
+    if (await dialog.isVisible({ timeout: 1_000 }).catch(() => false)) break
+    await page.waitForTimeout(200 + attempt * 60)
+  }
+
+  await expect(dialog).toBeVisible({ timeout: 5_000 })
+  return dialog
+}
+
+export { expect }
