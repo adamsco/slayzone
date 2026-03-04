@@ -759,12 +759,18 @@ importers:
       '@slayzone/diagnostics':
         specifier: workspace:*
         version: link:../diagnostics
+      '@slayzone/projects':
+        specifier: workspace:*
+        version: link:../projects
       '@slayzone/settings':
         specifier: workspace:*
         version: link:../settings
       '@slayzone/task':
         specifier: workspace:*
         version: link:../task
+      '@slayzone/tasks':
+        specifier: workspace:*
+        version: link:../tasks
       '@slayzone/ui':
         specifier: workspace:*
         version: link:../../shared/ui

@@ -284,4 +284,14 @@ SUMMARY: <2-3 sentences explaining what each branch changed and why they conflic
   ipcMain.handle('git:getStatusSummary', (_, repoPath: string) => {
     return getStatusSummary(repoPath)
   })
+
+  ipcMain.handle('git:revealInFinder', (_, path: string) => {
+    const { shell } = require('electron')
+    shell.openPath(path)
+  })
+
+  ipcMain.handle('git:isDirty', (_, path: string) => {
+    const summary = getStatusSummary(path)
+    return (summary.staged + summary.unstaged + summary.untracked) > 0
+  })
 }

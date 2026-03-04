@@ -1,29 +1,37 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { Check, X, SkipForward, AlertTriangle, RefreshCw } from 'lucide-react'
+import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { Check, X, SkipForward, AlertTriangle, RefreshCw, Plus } from 'lucide-react'
 import { Button, Checkbox, IconButton, cn } from '@slayzone/ui'
 import type { Task, UpdateTaskInput, MergeContext } from '@slayzone/task/shared'
+import type { FilterState } from '@slayzone/tasks'
+import type { Project } from '@slayzone/projects/shared'
 import type { RebaseProgress } from '../shared/types'
 import { GitDiffPanel, type GitDiffPanelHandle } from './GitDiffPanel'
 import { ConflictFileView } from './ConflictFileView'
 import { CommitTimeline } from './CommitTimeline'
 import { GeneralTabContent } from './GeneralTabContent'
 import { ProjectGeneralTab } from './ProjectGeneralTab'
+import { WorktreesTab, type WorktreesTabHandle } from './WorktreesTab'
 
-export type GitTabId = 'general' | 'changes' | 'conflicts'
+export type GitTabId = 'general' | 'changes' | 'conflicts' | 'worktrees'
 const isMac = navigator.platform.startsWith('Mac')
 const gitGeneralShortcut = isMac ? '⌘G' : 'Ctrl+G'
 const gitDiffShortcut = isMac ? '⌘⇧G' : 'Ctrl+Shift+G'
 
 type UnifiedGitPanelProps = {
+  task?: Task | null
   projectPath: string | null
   completedStatus?: string
   visible: boolean
   pollIntervalMs?: number
   defaultTab?: GitTabId
-} & (
-  | { task: Task; onUpdateTask: (data: UpdateTaskInput) => Promise<Task>; onTaskUpdated: (task: Task) => void }
-  | { task?: null; onUpdateTask?: never; onTaskUpdated?: never }
-)
+  tasks?: Task[]
+  filter?: FilterState
+  projects?: Project[]
+  onTaskClick?: (task: Task) => void
+  onUpdateTask?: (data: UpdateTaskInput) => Promise<Task>
+  onTaskUpdated?: (task: Task) => void
+  onCreateTask?: (defaults: Partial<Task>) => void
+}
 
 interface ConflictToolbarData {
   resolvedCount: number
@@ -38,6 +46,26 @@ export interface UnifiedGitPanelHandle {
   getActiveTab: () => GitTabId
 }
 
+interface GitPanelContextValue {
+  tasks: Task[]
+  filter?: FilterState
+  projects: Project[]
+  activeTask?: Task | null
+  projectPath: string | null
+  onTaskClick?: (task: Task) => void
+  onUpdateTask?: (data: UpdateTaskInput) => Promise<Task>
+  onTaskUpdated?: (task: Task) => void
+  onCreateTask?: (defaults: Partial<Task>) => void
+}
+
+const GitPanelContext = createContext<GitPanelContextValue | null>(null)
+
+export function useGitPanelContext() {
+  const context = useContext(GitPanelContext)
+  if (!context) throw new Error('useGitPanelContext must be used within UnifiedGitPanel')
+  return context
+}
+
 export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanelProps>(function UnifiedGitPanel({
   task,
   projectPath,
@@ -46,7 +74,12 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
   pollIntervalMs,
   defaultTab = 'general',
   onUpdateTask,
-  onTaskUpdated
+  onTaskUpdated,
+  tasks = [],
+  filter,
+  projects = [],
+  onTaskClick,
+  onCreateTask
 }, ref) {
   const [activeTab, setActiveTab] = useState<GitTabId>(defaultTab)
 
@@ -58,7 +91,10 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
   const isUncommitted = !!task && task.merge_state === 'uncommitted'
   const isRebase = !!task && task.merge_state === 'rebase-conflicts'
   const diffRef = useRef<GitDiffPanelHandle>(null)
+  const worktreesRef = useRef<WorktreesTabHandle>(null)
   const [conflictToolbar, setConflictToolbar] = useState<ConflictToolbarData | null>(null)
+
+  const showWorktrees = !task
 
   // Auto-switch to conflicts tab when conflicts detected
   useEffect(() => {
@@ -70,9 +106,16 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
     if (isUncommitted) setActiveTab('changes')
   }, [isUncommitted])
 
+  // Reset active tab if worktrees becomes hidden
+  useEffect(() => {
+    if (!showWorktrees && activeTab === 'worktrees') {
+      setActiveTab('general')
+    }
+  }, [showWorktrees, activeTab])
+
   // Merge-mode: commit and continue merge
   const handleCommitAndContinueMerge = useCallback(async () => {
-    if (!task) return
+    if (!task || !onUpdateTask || !onTaskUpdated) return
     const targetPath = task.worktree_path ?? projectPath
     if (!targetPath) return
 
@@ -106,7 +149,7 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
   }, [task, projectPath, completedStatus, onUpdateTask, onTaskUpdated])
 
   const handleAbortMerge = useCallback(async () => {
-    if (!task) return
+    if (!task || !onUpdateTask || !onTaskUpdated) return
     if (projectPath) {
       try { await window.api.git.abortMerge(projectPath) } catch { /* already aborted */ }
     }
@@ -115,7 +158,18 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
   }, [task, projectPath, onUpdateTask, onTaskUpdated])
 
   return (
-    <div className="h-full flex flex-col">
+    <GitPanelContext.Provider value={{
+      tasks,
+      filter,
+      projects,
+      activeTask: task,
+      projectPath,
+      onTaskClick,
+      onUpdateTask,
+      onTaskUpdated,
+      onCreateTask
+    }}>
+      <div className="h-full flex flex-col">
       {/* Unified header: tabs left, actions right */}
       <div className="shrink-0 h-10 px-2 border-b border-border bg-surface-1 flex items-center gap-1">
         <TabButton
@@ -132,6 +186,14 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
         >
           Diff
         </TabButton>
+        {showWorktrees && (
+          <TabButton
+            active={activeTab === 'worktrees'}
+            onClick={() => setActiveTab('worktrees')}
+          >
+            Worktrees
+          </TabButton>
+        )}
         {hasConflicts && (
           <TabButton
             active={activeTab === 'conflicts'}
@@ -153,6 +215,17 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
             onClick={() => diffRef.current?.refresh()}
           >
             <RefreshCw className="h-3.5 w-3.5" />
+          </IconButton>
+        )}
+        {activeTab === 'worktrees' && (
+          <IconButton
+            aria-label="Add Worktree"
+            variant="ghost"
+            className="h-7 w-7"
+            title="Add Worktree"
+            onClick={() => worktreesRef.current?.openCreateDialog()}
+          >
+            <Plus className="h-3.5 w-3.5" />
           </IconButton>
         )}
         {activeTab === 'conflicts' && conflictToolbar && (
@@ -182,8 +255,8 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
               completedStatus={completedStatus}
               visible={visible && activeTab === 'general'}
               pollIntervalMs={pollIntervalMs}
-              onUpdateTask={onUpdateTask}
-              onTaskUpdated={onTaskUpdated}
+              onUpdateTask={onUpdateTask!}
+              onTaskUpdated={onTaskUpdated!}
               onSwitchTab={setActiveTab}
             />
           ) : (
@@ -206,6 +279,12 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
             onAbortMerge={task ? handleAbortMerge : undefined}
           />
         </div>
+        <div className={cn('absolute inset-0', activeTab !== 'worktrees' && 'hidden')}>
+          <WorktreesTab
+            ref={worktreesRef}
+            visible={visible && activeTab === 'worktrees'}
+          />
+        </div>
         {hasConflicts && task && (
           <div className={cn('absolute inset-0', activeTab !== 'conflicts' && 'hidden')}>
             <ConflictPhaseContent
@@ -213,14 +292,15 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
               projectPath={projectPath!}
               completedStatus={completedStatus}
               isRebase={isRebase}
-              onUpdateTask={onUpdateTask}
-              onTaskUpdated={onTaskUpdated}
+              onUpdateTask={onUpdateTask!}
+              onTaskUpdated={onTaskUpdated!}
               onToolbarChange={setConflictToolbar}
             />
           </div>
         )}
       </div>
     </div>
+    </GitPanelContext.Provider>
   )
 })
 
@@ -267,6 +347,7 @@ function ConflictPhaseContent({ task, projectPath, completedStatus, isRebase, on
   onTaskUpdated: (task: Task) => void
   onToolbarChange: (data: ConflictToolbarData) => void
 }) {
+
   const [conflictedFiles, setConflictedFiles] = useState<string[]>([])
   const [resolvedFiles, setResolvedFiles] = useState<Set<string>>(new Set())
   const [selectedFile, setSelectedFile] = useState<string | null>(null)

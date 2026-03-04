@@ -290,7 +290,9 @@ const api: ElectronAPI = {
     getMergeContext: (repoPath) => ipcRenderer.invoke('git:getMergeContext', repoPath),
     getRecentCommits: (repoPath, count) => ipcRenderer.invoke('git:getRecentCommits', repoPath, count),
     getAheadBehind: (repoPath, branch, upstream) => ipcRenderer.invoke('git:getAheadBehind', repoPath, branch, upstream),
-    getStatusSummary: (repoPath) => ipcRenderer.invoke('git:getStatusSummary', repoPath)
+    getStatusSummary: (repoPath) => ipcRenderer.invoke('git:getStatusSummary', repoPath),
+    revealInFinder: (path) => ipcRenderer.invoke('git:revealInFinder', path),
+    isDirty: (path) => ipcRenderer.invoke('git:isDirty', path)
   },
   tabs: {
     list: (taskId) => ipcRenderer.invoke('tabs:list', taskId),
@@ -472,9 +474,20 @@ const api: ElectronAPI = {
     }
   },
   integrations: {
+    connectGithub: (input) => ipcRenderer.invoke('integrations:connect-github', input),
     connectLinear: (input) => ipcRenderer.invoke('integrations:connect-linear', input),
     listConnections: (provider) => ipcRenderer.invoke('integrations:list-connections', provider),
     disconnect: (connectionId) => ipcRenderer.invoke('integrations:disconnect', connectionId),
+    listGithubRepositories: (connectionId) =>
+      ipcRenderer.invoke('integrations:list-github-repositories', connectionId),
+    listGithubProjects: (connectionId) =>
+      ipcRenderer.invoke('integrations:list-github-projects', connectionId),
+    listGithubIssues: (input) => ipcRenderer.invoke('integrations:list-github-issues', input),
+    importGithubIssues: (input) => ipcRenderer.invoke('integrations:import-github-issues', input),
+    listGithubRepositoryIssues: (input) =>
+      ipcRenderer.invoke('integrations:list-github-repository-issues', input),
+    importGithubRepositoryIssues: (input) =>
+      ipcRenderer.invoke('integrations:import-github-repository-issues', input),
     listLinearTeams: (connectionId) => ipcRenderer.invoke('integrations:list-linear-teams', connectionId),
     listLinearProjects: (connectionId, teamId) =>
       ipcRenderer.invoke('integrations:list-linear-projects', connectionId, teamId),
@@ -484,6 +497,9 @@ const api: ElectronAPI = {
       ipcRenderer.invoke('integrations:get-project-mapping', projectId, provider),
     importLinearIssues: (input) => ipcRenderer.invoke('integrations:import-linear-issues', input),
     syncNow: (input) => ipcRenderer.invoke('integrations:sync-now', input),
+    getTaskSyncStatus: (taskId, provider) => ipcRenderer.invoke('integrations:get-task-sync-status', taskId, provider),
+    pushTask: (input) => ipcRenderer.invoke('integrations:push-task', input),
+    pullTask: (input) => ipcRenderer.invoke('integrations:pull-task', input),
     getLink: (taskId, provider) => ipcRenderer.invoke('integrations:get-link', taskId, provider),
     unlinkTask: (taskId, provider) => ipcRenderer.invoke('integrations:unlink-task', taskId, provider)
   }

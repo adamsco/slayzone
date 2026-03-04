@@ -20,7 +20,13 @@ import {
 import { CreateTaskDialog, EditTaskDialog, DeleteTaskDialog, TaskDetailPage, ProcessesPanel, ResizeHandle, usePanelSizes } from '@slayzone/task'
 import { UnifiedGitPanel, type UnifiedGitPanelHandle, type GitTabId } from '@slayzone/worktrees'
 import { FileEditorView, QuickOpenDialog, type FileEditorViewHandle } from '@slayzone/file-editor/client'
-import { CreateProjectDialog, ProjectSettingsDialog, DeleteProjectDialog } from '@slayzone/projects'
+import {
+  CreateProjectDialog,
+  ProjectSettingsDialog,
+  DeleteProjectDialog,
+  type ProjectCreationContext,
+  type ProjectStartMode
+} from '@slayzone/projects'
 import { UserSettingsDialog, useViewState, AppearanceProvider } from '@slayzone/settings'
 import { OnboardingDialog } from '@slayzone/onboarding'
 import { track } from '@slayzone/telemetry/client'
@@ -65,6 +71,8 @@ import { TutorialAnimationModal } from '@/components/tutorial/TutorialAnimationM
 import { useOnboardingChecklist } from '@/hooks/useOnboardingChecklist'
 
 type HomePanel = 'kanban' | 'git' | 'editor' | 'processes'
+type ProjectSettingsTab = 'general' | 'environment' | 'columns' | 'integrations' | 'ai-config'
+type ProjectIntegrationOnboardingProvider = Exclude<ProjectStartMode, 'scratch'>
 const HOME_PANEL_ORDER: HomePanel[] = ['kanban', 'git', 'editor', 'processes']
 const HOME_PANEL_SIZE_KEY: Record<HomePanel, string> = { kanban: 'kanban', git: 'diff', editor: 'editor', processes: 'processes' }
 const HANDLE_WIDTH = 16
@@ -122,6 +130,9 @@ function App(): React.JSX.Element {
   const [deletingTask, setDeletingTask] = useState<Task | null>(null)
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
+  const [projectSettingsInitialTab, setProjectSettingsInitialTab] = useState<ProjectSettingsTab>('general')
+  const [projectSettingsOnboardingProvider, setProjectSettingsOnboardingProvider] =
+    useState<ProjectIntegrationOnboardingProvider | null>(null)
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsRevision, setSettingsRevision] = useState(0)
@@ -796,7 +807,10 @@ function App(): React.JSX.Element {
     return window.api.app.onOpenProjectSettings(() => {
       if (!selectedProjectId) return
       const project = projects.find((p) => p.id === selectedProjectId)
-      if (project) setEditingProject(project)
+      if (!project) return
+      setProjectSettingsInitialTab('general')
+      setProjectSettingsOnboardingProvider(null)
+      setEditingProject(project)
     })
   }, [selectedProjectId, projects])
 
@@ -1099,16 +1113,40 @@ function App(): React.JSX.Element {
     moveTask(taskId, newColumnId, targetIndex, getViewConfig(filter).groupBy)
   }
 
+  const openProjectSettings = useCallback((
+    project: Project,
+    options?: {
+      initialTab?: ProjectSettingsTab
+      integrationOnboardingProvider?: ProjectIntegrationOnboardingProvider | null
+    }
+  ): void => {
+    setProjectSettingsInitialTab(options?.initialTab ?? 'general')
+    setProjectSettingsOnboardingProvider(options?.integrationOnboardingProvider ?? null)
+    setEditingProject(project)
+  }, [])
+
+  const closeProjectSettings = useCallback((): void => {
+    setEditingProject(null)
+    setProjectSettingsInitialTab('general')
+    setProjectSettingsOnboardingProvider(null)
+  }, [])
+
   // Project handlers
-  const handleProjectCreated = (project: Project): void => {
+  const handleProjectCreated = (project: Project, context: ProjectCreationContext): void => {
     setProjects((prev) => [...prev, project])
     setSelectedProjectId(project.id)
     setCreateProjectOpen(false)
+    if (context.startMode === 'github' || context.startMode === 'linear') {
+      openProjectSettings(project, {
+        initialTab: 'integrations',
+        integrationOnboardingProvider: context.startMode
+      })
+    }
   }
 
   const handleProjectUpdated = (project: Project): void => {
     updateProject(project)
-    setEditingProject(null)
+    closeProjectSettings()
     validateProjectPath(project)
   }
 
@@ -1191,7 +1229,7 @@ function App(): React.JSX.Element {
           selectedProjectId={selectedProjectId}
           onSelectProject={handleSidebarSelectProject}
           onAddProject={() => setCreateProjectOpen(true)}
-          onProjectSettings={setEditingProject}
+          onProjectSettings={(project) => openProjectSettings(project)}
           onProjectDelete={setDeletingProject}
           onSettings={handleOpenSettings}
           onChangelog={() => setChangelogOpen(true)}
@@ -1419,7 +1457,23 @@ function App(): React.JSX.Element {
                                           onDeleteTask={deleteTask}
                                         />
                                       )}
-                                      {id === 'git' && <UnifiedGitPanel ref={homeGitPanelRef} projectPath={projectPath} visible={true} defaultTab={homeGitDefaultTab} />}
+                                      {id === 'git' && (
+                                        <UnifiedGitPanel
+                                          ref={homeGitPanelRef}
+                                          projectPath={projectPath}
+                                          visible={true}
+                                          defaultTab={homeGitDefaultTab}
+                                          tasks={tasks}
+                                          filter={filter}
+                                          projects={projects}
+                                          onTaskClick={(t) => handleTaskClick(t, { metaKey: false })}
+                                          onUpdateTask={(data) => window.api.db.updateTask(data).then(t => { updateTask(t); return t })}
+                                          onCreateTask={(defaults) => {
+                                            setCreateTaskDefaults(defaults)
+                                            setCreateOpen(true)
+                                          }}
+                                        />
+                                      )}
                                       {id === 'editor' && <FileEditorView ref={homeEditorRefCallback} projectPath={projectPath ?? ''} />}
                                       {id === 'processes' && <ProcessesPanel taskId={null} projectId={selectedProjectId} cwd={projectPath} />}
                                     </div>
@@ -1526,7 +1580,10 @@ function App(): React.JSX.Element {
         <ProjectSettingsDialog
           project={editingProject}
           open={!!editingProject}
-          onOpenChange={(open) => !open && setEditingProject(null)}
+          onOpenChange={(open) => !open && closeProjectSettings()}
+          initialTab={projectSettingsInitialTab}
+          integrationOnboardingProvider={projectSettingsOnboardingProvider}
+          onIntegrationOnboardingHandled={() => setProjectSettingsOnboardingProvider(null)}
           onUpdated={handleProjectUpdated}
         />
         <DeleteProjectDialog

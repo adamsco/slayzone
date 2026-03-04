@@ -31,20 +31,35 @@ import type {
 } from '@slayzone/ai-config/shared'
 import type { DirEntry, ReadFileResult, FileSearchResult, SearchFilesOptions } from '@slayzone/file-editor/shared'
 import type {
+  ConnectGithubInput,
   ConnectLinearInput,
   ExternalLink,
+  GithubIssueSummary,
+  GithubProjectSummary,
+  GithubRepositorySummary,
+  ImportGithubRepositoryIssuesInput,
+  ImportGithubRepositoryIssuesResult,
+  ImportGithubIssuesInput,
+  ImportGithubIssuesResult,
   ImportLinearIssuesInput,
   ImportLinearIssuesResult,
   IntegrationConnectionPublic,
   IntegrationProjectMapping,
   IntegrationProvider,
+  ListGithubRepositoryIssuesInput,
+  ListGithubIssuesInput,
   ListLinearIssuesInput,
   LinearIssueSummary,
   LinearProject,
   LinearTeam,
+  PullTaskInput,
+  PullTaskResult,
+  PushTaskInput,
+  PushTaskResult,
   SetProjectMappingInput,
   SyncNowInput,
-  SyncNowResult
+  SyncNowResult,
+  TaskSyncStatus
 } from '@slayzone/integrations/shared'
 
 export type { ExecutionContext } from '@slayzone/projects/shared'
@@ -320,6 +335,8 @@ export interface ElectronAPI {
     getRecentCommits: (repoPath: string, count?: number) => Promise<CommitInfo[]>
     getAheadBehind: (repoPath: string, branch: string, upstream: string) => Promise<AheadBehind>
     getStatusSummary: (repoPath: string) => Promise<StatusSummary>
+    revealInFinder: (path: string) => Promise<void>
+    isDirty: (path: string) => Promise<boolean>
   }
   tabs: {
     list: (taskId: string) => Promise<TerminalTab[]>
@@ -445,9 +462,22 @@ export interface ElectronAPI {
     unregisterBrowserPanel: (taskId: string) => Promise<void>
   }
   integrations: {
+    connectGithub: (input: ConnectGithubInput) => Promise<IntegrationConnectionPublic>
     connectLinear: (input: ConnectLinearInput) => Promise<IntegrationConnectionPublic>
     listConnections: (provider?: IntegrationProvider) => Promise<IntegrationConnectionPublic[]>
     disconnect: (connectionId: string) => Promise<boolean>
+    listGithubRepositories: (connectionId: string) => Promise<GithubRepositorySummary[]>
+    listGithubProjects: (connectionId: string) => Promise<GithubProjectSummary[]>
+    listGithubIssues: (
+      input: ListGithubIssuesInput
+    ) => Promise<{ issues: GithubIssueSummary[]; nextCursor: string | null }>
+    importGithubIssues: (input: ImportGithubIssuesInput) => Promise<ImportGithubIssuesResult>
+    listGithubRepositoryIssues: (
+      input: ListGithubRepositoryIssuesInput
+    ) => Promise<{ issues: GithubIssueSummary[]; nextCursor: string | null }>
+    importGithubRepositoryIssues: (
+      input: ImportGithubRepositoryIssuesInput
+    ) => Promise<ImportGithubRepositoryIssuesResult>
     listLinearTeams: (connectionId: string) => Promise<LinearTeam[]>
     listLinearProjects: (connectionId: string, teamId: string) => Promise<LinearProject[]>
     listLinearIssues: (
@@ -457,6 +487,9 @@ export interface ElectronAPI {
     getProjectMapping: (projectId: string, provider: IntegrationProvider) => Promise<IntegrationProjectMapping | null>
     importLinearIssues: (input: ImportLinearIssuesInput) => Promise<ImportLinearIssuesResult>
     syncNow: (input: SyncNowInput) => Promise<SyncNowResult>
+    getTaskSyncStatus: (taskId: string, provider: IntegrationProvider) => Promise<TaskSyncStatus>
+    pushTask: (input: PushTaskInput) => Promise<PushTaskResult>
+    pullTask: (input: PullTaskInput) => Promise<PullTaskResult>
     getLink: (taskId: string, provider: IntegrationProvider) => Promise<ExternalLink | null>
     unlinkTask: (taskId: string, provider: IntegrationProvider) => Promise<boolean>
   }
