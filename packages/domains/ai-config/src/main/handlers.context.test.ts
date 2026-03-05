@@ -259,6 +259,27 @@ describe('ai-config:load-global-item', () => {
 
     expect(result.syncHealth).toBe('synced')
   })
+
+  test('rejects loading when explicit frontmatter is missing even if status is forced to valid', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'status-valid-but-missing-frontmatter',
+      content: '# no frontmatter'
+    }) as { id: string; metadata_json: string }
+
+    const metadata = JSON.parse(item.metadata_json) as Record<string, unknown>
+    metadata.skillValidation = { status: 'valid', issues: [] }
+    h.db.prepare("UPDATE ai_config_items SET metadata_json = ? WHERE id = ?")
+      .run(JSON.stringify(metadata), item.id)
+
+    expect(() => h.invoke('ai-config:load-global-item', {
+      projectId,
+      projectPath: root,
+      itemId: item.id,
+      providers: ['claude']
+    })).toThrow()
+  })
 })
 
 // --- Sync linked file ---

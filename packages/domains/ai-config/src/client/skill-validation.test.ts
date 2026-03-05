@@ -45,6 +45,7 @@ test('status=valid is authoritative even if stale error issues exist', () => {
   const validation = getSkillValidation({
     type: 'skill',
     metadata_json: buildSkillMetadata({
+      skillCanonical: { frontmatter: { name: 'x', description: 'x' }, explicitFrontmatter: true },
       skillValidation: {
         status: 'valid',
         issues: [{ code: 'frontmatter_invalid_line', severity: 'error', message: 'stale', line: 1 }]
@@ -69,6 +70,17 @@ test('missing validation falls back to canonical explicitFrontmatter=false as in
     type: 'skill',
     metadata_json: buildSkillMetadata({
       skillCanonical: { frontmatter: { name: 'x', description: 'x' }, explicitFrontmatter: false }
+    })
+  })
+  expect(validation?.status).toBe('invalid')
+})
+
+test('explicitFrontmatter=false stays invalid even when status is forced to valid', () => {
+  const validation = getSkillValidation({
+    type: 'skill',
+    metadata_json: buildSkillMetadata({
+      skillCanonical: { frontmatter: { name: 'x', description: 'x' }, explicitFrontmatter: false },
+      skillValidation: { status: 'valid', issues: [] }
     })
   })
   expect(validation?.status).toBe('invalid')

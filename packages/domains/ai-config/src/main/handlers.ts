@@ -209,15 +209,19 @@ function parseYamlScalar(value: string): string {
 }
 
 function parseLeadingFrontmatter(content: string): ParsedFrontmatter | null {
-  const normalized = content.replace(/\r\n/g, '\n')
-  if (!normalized.startsWith('---\n')) return null
+  const normalized = content.replace(/\r\n/g, '\n').replace(/^\uFEFF/, '')
+  const lines = normalized.split('\n')
+  let startLine = 0
+  while (startLine < lines.length && lines[startLine].trim().length === 0) {
+    startLine += 1
+  }
+  if (lines[startLine] !== '---') return null
 
   const frontmatter: Record<string, string> = {}
   const issues: SkillValidationIssue[] = []
-  const lines = normalized.split('\n')
   let closingLine = -1
-  for (let i = 1; i < lines.length; i += 1) {
-    if (lines[i] === '---') {
+  for (let i = startLine + 1; i < lines.length; i += 1) {
+    if (lines[i] === '---' || lines[i] === '...') {
       closingLine = i
       break
     }
@@ -228,16 +232,16 @@ function parseLeadingFrontmatter(content: string): ParsedFrontmatter | null {
       code: 'frontmatter_unclosed',
       severity: 'error',
       message: 'Frontmatter starts with "---" but has no closing delimiter.',
-      line: 1
+      line: startLine + 1
     })
     return { frontmatter, body: normalized, issues }
   }
 
-  for (let i = 1; i < closingLine; i += 1) {
+  for (let i = startLine + 1; i < closingLine; i += 1) {
     const line = lines[i]
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith('#')) continue
-    const match = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/)
+    const match = trimmed.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/)
     if (!match) {
       issues.push({
         code: 'frontmatter_invalid_line',
@@ -394,6 +398,11 @@ function ensureSkillValidationForSync(itemSlug: string, itemContent: string, ite
   const validation = readSkillValidationMetadata(itemMetadataJson) ?? validateSkillFrontmatter(itemSlug, parsed, {
     allowMissing: canonical?.explicitFrontmatter === true
   })
+  if (!parsed && canonical?.explicitFrontmatter !== true) {
+    throw new Error(
+      `Cannot sync skill "${itemSlug}" because frontmatter is invalid (line 1): Skill "${itemSlug}" is missing frontmatter. Add a leading "---" block with at least name/description.`
+    )
+  }
   if (validation?.status !== 'invalid') return
 
   const firstError = validation.issues.find((issue) => issue.severity === 'error')
@@ -428,8 +437,9 @@ function normalizeCanonicalSkillForPersistence(
     frontmatter.description = deriveSkillDescription(slug, body)
   }
 
+  const parsedHasErrors = parsedFrontmatter?.issues.some((issue) => issue.severity === 'error') ?? false
   const explicitFrontmatter = parsedFrontmatter
-    ? true
+    ? !parsedHasErrors
     : (existingCanonical?.explicitFrontmatter ?? false)
   const validation = validateSkillFrontmatter(slug, parsedFrontmatter, {
     allowMissing: existingCanonical?.explicitFrontmatter === true

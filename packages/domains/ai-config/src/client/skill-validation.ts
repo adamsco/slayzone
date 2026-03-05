@@ -15,18 +15,14 @@ function parseJsonObject(raw: string): Record<string, unknown> {
 export function getSkillValidation(item: Pick<AiConfigItem, 'type' | 'metadata_json'>): SkillValidationState | null {
   if (item.type !== 'skill') return null
   const parsed = parseJsonObject(item.metadata_json)
-  const raw = parsed.skillValidation
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    const canonical = parsed.skillCanonical
-    const explicitFrontmatter = !!(
-      canonical
-      && typeof canonical === 'object'
-      && !Array.isArray(canonical)
-      && (canonical as Record<string, unknown>).explicitFrontmatter === true
-    )
-    if (explicitFrontmatter) {
-      return { status: 'valid', issues: [] }
-    }
+  const canonical = parsed.skillCanonical
+  const explicitFrontmatter = !!(
+    canonical
+    && typeof canonical === 'object'
+    && !Array.isArray(canonical)
+    && (canonical as Record<string, unknown>).explicitFrontmatter === true
+  )
+  if (!explicitFrontmatter) {
     return {
       status: 'invalid',
       issues: [{
@@ -36,6 +32,11 @@ export function getSkillValidation(item: Pick<AiConfigItem, 'type' | 'metadata_j
         line: 1
       }]
     }
+  }
+
+  const raw = parsed.skillValidation
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { status: 'valid', issues: [] }
   }
 
   const rawObj = raw as Record<string, unknown>
