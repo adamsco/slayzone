@@ -184,14 +184,15 @@ test.describe('Kanban keyboard shortcuts', () => {
     expect(await focusedTaskId(mainWindow)).toBeNull()
   })
 
-  test('hover sets focus', async ({ mainWindow }) => {
+  test('hover seeds focus for keyboard navigation', async ({ mainWindow }) => {
     await press(mainWindow, 'Escape') // clear focus
     expect(await focusedTaskId(mainWindow)).toBeNull()
 
     // Hover over a card
-    const card = mainWindow.getByText('KN rev-1').first()
+    const card = mainWindow.locator(`[data-task-id="${taskIds.t4}"]`).first()
     await card.hover()
-    await mainWindow.waitForTimeout(100)
+    // Hover no longer sets keyboard focus directly; it seeds the starting point.
+    await press(mainWindow, 'j')
     expect(await focusedTaskId(mainWindow)).toBe(taskIds.t4)
   })
 

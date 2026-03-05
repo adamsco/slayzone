@@ -5,7 +5,7 @@ test.describe('Settings', () => {
     mainWindow.getByRole('dialog').last()
 
   const findCard = (dialog: import('@playwright/test').Locator, name: string) =>
-    dialog.locator('.space-y-2 > div').filter({ hasText: name }).first()
+    dialog.locator('.space-y-2 > *').filter({ hasText: name }).first()
 
   const openTerminalSettings = async (mainWindow: import('@playwright/test').Page) => {
     const dialog = settingsDialog(mainWindow)
@@ -15,12 +15,12 @@ test.describe('Settings', () => {
     }
     await clickSettings(mainWindow)
     await expect(dialog).toBeVisible({ timeout: 5_000 })
-    // Terminal config is inside the Panels tab → Terminal card → gear button
+    // Terminal config is inside the Panels tab.
     await dialog.locator('aside button').filter({ hasText: 'Panels' }).first().click()
     await expect(findCard(settingsDialog(mainWindow), 'Terminal')).toBeVisible({ timeout: 5_000 })
-    // Click the gear button (only non-switch button in the card header)
+    // Terminal row is clickable and opens the terminal detail settings.
     const terminalCard = findCard(dialog, 'Terminal')
-    await terminalCard.locator('button:not([role="switch"])').first().click()
+    await terminalCard.click()
     await expect(dialog.getByText('Default mode')).toBeVisible({ timeout: 5_000 })
   }
 

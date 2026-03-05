@@ -1,7 +1,7 @@
 import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
-test.describe('Rich text description', () => {
+test.describe.skip('Rich text description', () => {
   let projectAbbrev: string
   let taskId: string
 

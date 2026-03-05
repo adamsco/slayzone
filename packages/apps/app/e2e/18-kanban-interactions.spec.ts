@@ -121,10 +121,9 @@ test.describe('Kanban interactions', () => {
     // Previous test archived "Done bulk 1/2" — they should be hidden
     await expect(mainWindow.getByText('Done bulk 1')).not.toBeVisible({ timeout: 3_000 })
 
-    // Open View popover, then toggle show archived switch
-    const viewBtn = mainWindow.locator('button').filter({ has: mainWindow.locator('.lucide-eye') }).first()
-    await viewBtn.click()
-    const archivedSwitch = mainWindow.locator('#b-archived')
+    // Open Display popover, then toggle show archived switch
+    await mainWindow.getByRole('button', { name: /Display/ }).first().click()
+    const archivedSwitch = mainWindow.locator('#display-archived')
     await expect(archivedSwitch).toBeVisible({ timeout: 3_000 })
     await archivedSwitch.click()
 
