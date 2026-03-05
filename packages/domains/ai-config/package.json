@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@slayzone/ui": "workspace:*",
+    "js-yaml": "^4.1.1",
     "lucide-react": "^0.562.0"
   },
   "peerDependencies": {

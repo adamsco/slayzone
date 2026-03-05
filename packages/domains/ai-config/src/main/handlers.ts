@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
+import * as yaml from 'js-yaml'
 import { app } from 'electron'
 import type { IpcMain } from 'electron'
 import type { Database } from 'better-sqlite3'
@@ -196,16 +197,22 @@ function parseJsonObject(raw: string): Record<string, unknown> {
   return {}
 }
 
-function parseYamlScalar(value: string): string {
-  const trimmed = value.trim()
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    const unquoted = trimmed.slice(1, -1)
-    return unquoted
-      .replace(/\\n/g, '\n')
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, '\\')
+interface YamlExceptionLike extends Error {
+  reason?: string
+  mark?: { line?: number }
+}
+
+function normalizeFrontmatterValue(value: unknown): string {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value)
   }
-  return trimmed
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
 }
 
 function parseLeadingFrontmatter(content: string): ParsedFrontmatter | null {
@@ -215,13 +222,13 @@ function parseLeadingFrontmatter(content: string): ParsedFrontmatter | null {
   while (startLine < lines.length && lines[startLine].trim().length === 0) {
     startLine += 1
   }
-  if (lines[startLine] !== '---') return null
+  if (lines[startLine]?.trim() !== '---') return null
 
   const frontmatter: Record<string, string> = {}
   const issues: SkillValidationIssue[] = []
   let closingLine = -1
   for (let i = startLine + 1; i < lines.length; i += 1) {
-    if (lines[i] === '---' || lines[i] === '...') {
+    if (lines[i].trim() === '---' || lines[i].trim() === '...') {
       closingLine = i
       break
     }
@@ -237,31 +244,46 @@ function parseLeadingFrontmatter(content: string): ParsedFrontmatter | null {
     return { frontmatter, body: normalized, issues }
   }
 
-  for (let i = startLine + 1; i < closingLine; i += 1) {
-    const line = lines[i]
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const match = trimmed.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/)
-    if (!match) {
+  const rawFrontmatter = lines.slice(startLine + 1, closingLine).join('\n')
+  try {
+    const parsed = yaml.load(rawFrontmatter)
+    if (parsed === null || parsed === undefined) {
+      // Empty frontmatter is valid; defaults are derived later.
+    } else if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       issues.push({
         code: 'frontmatter_invalid_line',
         severity: 'error',
-        message: `Invalid frontmatter line: "${trimmed}". Expected "key: value".`,
-        line: i + 1
+        message: 'Frontmatter must be a YAML object (key: value pairs).',
+        line: startLine + 2
       })
-      continue
+    } else {
+      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+        frontmatter[key] = normalizeFrontmatterValue(value)
+      }
     }
-    const key = match[1]
-    if (frontmatter[key] !== undefined) {
+  } catch (error) {
+    const yamlError = error as YamlExceptionLike
+    const reason = typeof yamlError.reason === 'string'
+      ? yamlError.reason
+      : (yamlError.message || 'Invalid YAML frontmatter.')
+    const markLine = typeof yamlError.mark?.line === 'number'
+      ? startLine + yamlError.mark.line + 2
+      : null
+    if (/duplicated mapping key/i.test(reason)) {
       issues.push({
         code: 'frontmatter_duplicate_key',
         severity: 'error',
-        message: `Duplicate frontmatter key "${key}".`,
-        line: i + 1
+        message: 'Duplicate frontmatter key.',
+        line: markLine
       })
-      continue
+    } else {
+      issues.push({
+        code: 'frontmatter_invalid_line',
+        severity: 'error',
+        message: `Invalid YAML frontmatter: ${reason}`,
+        line: markLine
+      })
     }
-    frontmatter[key] = parseYamlScalar(match[2] ?? '')
   }
 
   const body = lines.slice(closingLine + 1).join('\n')
@@ -347,6 +369,11 @@ function toTitleCaseFromSlug(slug: string): string {
 
 function escapeYamlDoubleQuoted(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+function toYamlKey(key: string): string {
+  if (/^[A-Za-z0-9_.-]+$/.test(key)) return key
+  return `"${escapeYamlDoubleQuoted(key)}"`
 }
 
 function deriveSkillDescription(itemSlug: string, body: string): string {
@@ -482,10 +509,15 @@ function getCanonicalSkillDocument(itemSlug: string, itemContent: string, itemMe
 }
 
 function toYamlLine(key: string, value: string): string {
-  if (key === 'name' && /^[a-z0-9][a-z0-9._-]*$/i.test(value)) return `${key}: ${value}`
-  if (key === 'description') return `${key}: "${escapeYamlDoubleQuoted(value)}"`
-  if (/^[a-z0-9][a-z0-9._-]*$/i.test(value)) return `${key}: ${value}`
-  return `${key}: "${escapeYamlDoubleQuoted(value)}"`
+  const yamlKey = toYamlKey(key)
+  if (value.includes('\n')) {
+    const indented = value.split('\n').map((line) => `  ${line}`).join('\n')
+    return `${yamlKey}: |\n${indented}`
+  }
+  if (key === 'name' && /^[a-z0-9][a-z0-9._-]*$/i.test(value)) return `${yamlKey}: ${value}`
+  if (key === 'description') return `${yamlKey}: "${escapeYamlDoubleQuoted(value)}"`
+  if (/^[a-z0-9][a-z0-9._-]*$/i.test(value)) return `${yamlKey}: ${value}`
+  return `${yamlKey}: "${escapeYamlDoubleQuoted(value)}"`
 }
 
 function renderFrontmatter(frontmatter: Record<string, string>): string {
@@ -563,6 +595,21 @@ function toProjectRelativePath(projectRoot: string, filePath: string): string {
 }
 
 export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
+  function repairSkillItemValidation(item: AiConfigItem): AiConfigItem {
+    if (item.type !== 'skill') return item
+    const normalized = normalizeCanonicalSkillForPersistence(item.slug, item.content, item.metadata_json, item.slug)
+    if (normalized.body === item.content && normalized.metadataJson === item.metadata_json) {
+      return item
+    }
+    db.prepare('UPDATE ai_config_items SET content = ?, metadata_json = ? WHERE id = ?')
+      .run(normalized.body, normalized.metadataJson, item.id)
+    return {
+      ...item,
+      content: normalized.body,
+      metadata_json: normalized.metadataJson
+    }
+  }
+
   ipcMain.handle('ai-config:list-items', (_event, input: ListAiConfigItemsInput) => {
     const where: string[] = ['scope = ?']
     const values: unknown[] = [input.scope]
@@ -583,12 +630,12 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       ORDER BY updated_at DESC, created_at DESC
     `).all(...values) as AiConfigItem[]
 
-    return rows
+    return rows.map(repairSkillItemValidation)
   })
 
   ipcMain.handle('ai-config:get-item', (_event, id: string) => {
     const row = db.prepare('SELECT * FROM ai_config_items WHERE id = ?').get(id) as AiConfigItem | undefined
-    return row ?? null
+    return row ? repairSkillItemValidation(row) : null
   })
 
   ipcMain.handle('ai-config:create-item', (_event, input: CreateAiConfigItemInput) => {
@@ -1481,7 +1528,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     const results: ProjectSkillStatus[] = []
     for (const [, sels] of byItem) {
       const first = sels[0]
-      const item: AiConfigItem = {
+      const item = repairSkillItemValidation({
         id: first.item_id,
         type: first.item_type as AiConfigItem['type'],
         scope: first.item_scope as AiConfigItem['scope'],
@@ -1492,14 +1539,14 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
         metadata_json: first.item_metadata,
         created_at: first.item_created,
         updated_at: first.item_updated
-      }
+      })
 
       const providerMap: ProjectSkillStatus['providers'] = {}
       for (const provider of providers) {
         const sel = sels.find(s => s.provider === provider)
         if (sel) {
           const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, sel.item_type, sel.item_slug, sel.target_path)
-          const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
+          const expectedContent = getSyncedItemContent(provider, item.type, item.slug, effectiveTargetPath, item.content, item.metadata_json)
           const filePath = path.isAbsolute(effectiveTargetPath)
             ? effectiveTargetPath
             : path.join(resolvedProject, effectiveTargetPath)
@@ -1535,7 +1582,8 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     const providers = getEnabledProviders(projectId)
     const resolvedProject = path.resolve(projectPath)
 
-    const item = db.prepare('SELECT * FROM ai_config_items WHERE id = ?').get(itemId) as AiConfigItem | undefined
+    const rawItem = db.prepare('SELECT * FROM ai_config_items WHERE id = ?').get(itemId) as AiConfigItem | undefined
+    const item = rawItem ? repairSkillItemValidation(rawItem) : undefined
     if (!item) throw new Error('Item not found')
 
     const selections = (db.prepare(`

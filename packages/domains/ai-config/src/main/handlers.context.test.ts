@@ -127,6 +127,83 @@ describe('ai-config:create-global-file', () => {
   })
 })
 
+describe('ai-config:list-items', () => {
+  test('recomputes stale invalid metadata to valid from current content', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'stale-invalid-repair',
+      content: '# body'
+    }) as { id: string; metadata_json: string }
+
+    const staleMeta = JSON.parse(item.metadata_json) as Record<string, unknown>
+    staleMeta.skillCanonical = {
+      frontmatter: { name: 'stale-invalid-repair', description: 'old broken parse' },
+      explicitFrontmatter: false
+    }
+    staleMeta.skillValidation = {
+      status: 'invalid',
+      issues: [{ code: 'frontmatter_invalid_line', severity: 'error', message: 'stale issue', line: 4 }]
+    }
+    h.db.prepare('UPDATE ai_config_items SET content = ?, metadata_json = ? WHERE id = ?')
+      .run(
+        '---\nname: stale-invalid-repair\ndescription: |\n  Multi-line\n  Description\n---\n# body',
+        JSON.stringify(staleMeta),
+        item.id
+      )
+
+    const listed = h.invoke('ai-config:list-items', {
+      scope: 'global',
+      type: 'skill'
+    }) as Array<{ id: string; content: string; metadata_json: string }>
+    const repaired = listed.find((row) => row.id === item.id)
+    expect(repaired).toBeTruthy()
+    expect(repaired!.content).toBe('# body')
+    const metadata = JSON.parse(repaired!.metadata_json) as {
+      skillCanonical?: { explicitFrontmatter?: boolean }
+      skillValidation?: { status?: string }
+    }
+    expect(metadata.skillCanonical?.explicitFrontmatter).toBe(true)
+    expect(metadata.skillValidation?.status).toBe('valid')
+  })
+
+  test('recomputes stale valid metadata to invalid from current content', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'stale-valid-repair',
+      content: '# body'
+    }) as { id: string; metadata_json: string }
+
+    const staleMeta = JSON.parse(item.metadata_json) as Record<string, unknown>
+    staleMeta.skillCanonical = {
+      frontmatter: { name: 'stale-valid-repair', description: 'appears valid' },
+      explicitFrontmatter: true
+    }
+    staleMeta.skillValidation = { status: 'valid', issues: [] }
+    h.db.prepare('UPDATE ai_config_items SET content = ?, metadata_json = ? WHERE id = ?')
+      .run(
+        '---\nname: stale-valid-repair\ntags: [one, two\n---\n# body',
+        JSON.stringify(staleMeta),
+        item.id
+      )
+
+    const listed = h.invoke('ai-config:list-items', {
+      scope: 'global',
+      type: 'skill'
+    }) as Array<{ id: string; metadata_json: string }>
+    const repaired = listed.find((row) => row.id === item.id)
+    expect(repaired).toBeTruthy()
+    const metadata = JSON.parse(repaired!.metadata_json) as {
+      skillCanonical?: { explicitFrontmatter?: boolean }
+      skillValidation?: { status?: string; issues?: Array<{ code?: string }> }
+    }
+    expect(metadata.skillCanonical?.explicitFrontmatter).toBe(false)
+    expect(metadata.skillValidation?.status).toBe('invalid')
+    expect(metadata.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_invalid_line')).toBe(true)
+  })
+})
+
 // --- Load global item ---
 
 describe('ai-config:load-global-item', () => {
@@ -192,6 +269,63 @@ describe('ai-config:load-global-item', () => {
       scope: 'global',
       slug: 'invalid-frontmatter-load',
       content: '---\nname invalid\n---\n# bad frontmatter'
+    }) as { id: string; metadata_json: string }
+
+    const metadata = JSON.parse(item.metadata_json) as {
+      skillValidation?: { status?: string; issues?: Array<{ code?: string }> }
+    }
+    expect(metadata.skillValidation?.status).toBe('invalid')
+    expect(metadata.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_invalid_line')).toBe(true)
+
+    expect(() => h.invoke('ai-config:load-global-item', {
+      projectId,
+      projectPath: root,
+      itemId: item.id,
+      providers: ['claude']
+    })).toThrow()
+  })
+
+  test('accepts multiline/list YAML frontmatter as valid', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'valid-yaml-frontmatter',
+      content: [
+        '---',
+        'name: valid-yaml-frontmatter',
+        'description: |',
+        '  Multi-line description.',
+        '  Still valid YAML.',
+        'tags:',
+        '  - planning',
+        '  - review',
+        '---',
+        '# works'
+      ].join('\n')
+    }) as { id: string; metadata_json: string }
+
+    const metadata = JSON.parse(item.metadata_json) as {
+      skillCanonical?: { explicitFrontmatter?: boolean }
+      skillValidation?: { status?: string }
+    }
+    expect(metadata.skillCanonical?.explicitFrontmatter).toBe(true)
+    expect(metadata.skillValidation?.status).toBe('valid')
+
+    const result = h.invoke('ai-config:load-global-item', {
+      projectId,
+      projectPath: root,
+      itemId: item.id,
+      providers: ['claude']
+    }) as { syncHealth: string }
+    expect(result.syncHealth).toBe('synced')
+  })
+
+  test('rejects malformed YAML frontmatter structures', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'malformed-yaml-frontmatter',
+      content: '---\nname: malformed-yaml-frontmatter\ntags: [one, two\n---\n# bad frontmatter'
     }) as { id: string; metadata_json: string }
 
     const metadata = JSON.parse(item.metadata_json) as {
