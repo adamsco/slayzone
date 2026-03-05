@@ -120,7 +120,10 @@ export async function waitForPtyState(
 }
 
 export async function readFullBuffer(page: Page, sessionId: string): Promise<string> {
-  return page.evaluate((id) => window.api.pty.getBuffer(id) ?? '', sessionId)
+  return page.evaluate(async (id) => {
+    const buffer = await window.api.pty.getBuffer(id)
+    return buffer ?? ''
+  }, sessionId)
 }
 
 export async function readBufferSince(
