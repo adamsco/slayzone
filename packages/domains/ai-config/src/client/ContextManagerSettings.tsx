@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
-  ArrowLeft, ChevronRight,
+  ArrowLeft, AlertTriangle, ChevronRight,
   Plus, Sparkles, Server, FileText, FolderTree, Settings2,
   type LucideIcon
 } from 'lucide-react'
@@ -16,6 +16,7 @@ import { McpServersPanel } from './McpServersPanel'
 import { ProjectContextFlat } from './ProjectContextFlat'
 import { ProjectContextFilesView } from './ProjectContextFilesView'
 import { ProjectInstructions } from './ProjectInstructions'
+import { getSkillValidation } from './skill-validation'
 
 export type GlobalContextManagerSection = 'providers' | 'instructions' | 'skill' | 'mcp' | 'files'
 type Section = GlobalContextManagerSection
@@ -69,6 +70,23 @@ function OverviewCard({ testId, icon: Icon, label, detail, onClick }: {
       {detail && <span className="w-20 shrink-0 text-right text-xs text-muted-foreground">{detail}</span>}
       <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
     </button>
+  )
+}
+
+function SkillValidationBadge({ status }: { status: 'invalid' | 'warning' }) {
+  const invalid = status === 'invalid'
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium',
+        invalid
+          ? 'bg-destructive/15 text-destructive'
+          : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+      )}
+    >
+      <AlertTriangle className="size-3" />
+      {invalid ? 'Invalid frontmatter' : 'Frontmatter warning'}
+    </span>
   )
 }
 
@@ -371,31 +389,42 @@ function GlobalContextManager({ initialSection }: { initialSection: GlobalContex
               </div>
             ) : (
               <div className="space-y-2">
-                {items.map((item) => (
-                  <div key={item.id}>
-                    {editingId === item.id ? (
-                      <ContextItemEditor
-                        item={item}
-                        onUpdate={(patch) => handleUpdate(item.id, patch)}
-                        onDelete={() => handleDelete(item.id)}
-                        onClose={() => setEditingId(null)}
-                      />
-                    ) : (
-                      <button
-                        onClick={() => setEditingId(item.id)}
-                        data-testid={`context-global-item-${item.slug}`}
-                        className="flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate font-mono text-sm">{item.slug}</p>
-                        </div>
-                        <span className="shrink-0 text-[11px] text-muted-foreground">
-                          {formatTimestamp(item.updated_at)}
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                ))}
+                {items.map((item) => {
+                  const validation = getSkillValidation(item)
+                  const validationStatus = validation?.status === 'invalid' || validation?.status === 'warning'
+                    ? validation.status
+                    : null
+
+                  return (
+                    <div key={item.id}>
+                      {editingId === item.id ? (
+                        <ContextItemEditor
+                          item={item}
+                          validationState={validation}
+                          onUpdate={(patch) => handleUpdate(item.id, patch)}
+                          onDelete={() => handleDelete(item.id)}
+                          onClose={() => setEditingId(null)}
+                        />
+                      ) : (
+                        <button
+                          onClick={() => setEditingId(item.id)}
+                          data-testid={`context-global-item-${item.slug}`}
+                          className="flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate font-mono text-sm">{item.slug}</p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2">
+                            {validationStatus && <SkillValidationBadge status={validationStatus} />}
+                            <span className="text-[11px] text-muted-foreground">
+                              {formatTimestamp(item.updated_at)}
+                            </span>
+                          </div>
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </>

@@ -73,6 +73,7 @@ import { useOnboardingChecklist } from '@/hooks/useOnboardingChecklist'
 type HomePanel = 'kanban' | 'git' | 'editor' | 'processes'
 type ProjectSettingsTab = 'general' | 'environment' | 'columns' | 'integrations' | 'ai-config'
 type ProjectIntegrationOnboardingProvider = Exclude<ProjectStartMode, 'scratch'>
+type GlobalAiConfigSection = 'providers' | 'instructions' | 'skill' | 'mcp' | 'files'
 const HOME_PANEL_ORDER: HomePanel[] = ['kanban', 'git', 'editor', 'processes']
 const HOME_PANEL_SIZE_KEY: Record<HomePanel, string> = { kanban: 'kanban', git: 'diff', editor: 'editor', processes: 'processes' }
 const HANDLE_WIDTH = 16
@@ -139,6 +140,7 @@ function App(): React.JSX.Element {
   const [leaderboardEnabled, setLeaderboardEnabled] = useState<boolean | null>(null)
   const [colorTintsEnabled, setColorTintsEnabled] = useState(true)
   const [settingsInitialTab, setSettingsInitialTab] = useState<string>('general')
+  const [settingsInitialAiConfigSection, setSettingsInitialAiConfigSection] = useState<GlobalAiConfigSection | null>(null)
   const [onboardingOpen, setOnboardingOpen] = useState(false)
   const [changelogOpen, setChangelogOpen] = useState(false)
   const [autoChangelogOpen, dismissAutoChangelog] = useChangelogAutoOpen()
@@ -799,6 +801,7 @@ function App(): React.JSX.Element {
   useEffect(() => {
     return window.api.app.onOpenSettings(() => {
       setSettingsInitialTab('general')
+      setSettingsInitialAiConfigSection(null)
       setSettingsOpen(true)
     })
   }, [])
@@ -1131,6 +1134,12 @@ function App(): React.JSX.Element {
     setProjectSettingsOnboardingProvider(null)
   }, [])
 
+  const openGlobalAiConfigFromProject = useCallback((section: GlobalAiConfigSection): void => {
+    setSettingsInitialTab('ai-config')
+    setSettingsInitialAiConfigSection(section)
+    setSettingsOpen(true)
+  }, [])
+
   // Project handlers
   const handleProjectCreated = (project: Project, context: ProjectCreationContext): void => {
     setProjects((prev) => [...prev, project])
@@ -1216,6 +1225,7 @@ function App(): React.JSX.Element {
 
   const handleOpenSettings = (): void => {
     setSettingsInitialTab('general')
+    setSettingsInitialAiConfigSection(null)
     setSettingsOpen(true)
   }
 
@@ -1584,6 +1594,7 @@ function App(): React.JSX.Element {
           initialTab={projectSettingsInitialTab}
           integrationOnboardingProvider={projectSettingsOnboardingProvider}
           onIntegrationOnboardingHandled={() => setProjectSettingsOnboardingProvider(null)}
+          onOpenGlobalAiConfig={openGlobalAiConfigFromProject}
           onUpdated={handleProjectUpdated}
         />
         <DeleteProjectDialog
@@ -1594,8 +1605,15 @@ function App(): React.JSX.Element {
         />
         <UserSettingsDialog
           open={settingsOpen}
-          onOpenChange={(open) => { setSettingsOpen(open); if (!open) setSettingsRevision((r) => r + 1) }}
+          onOpenChange={(open) => {
+            setSettingsOpen(open)
+            if (!open) {
+              setSettingsRevision((r) => r + 1)
+              setSettingsInitialAiConfigSection(null)
+            }
+          }}
           initialTab={settingsInitialTab}
+          initialAiConfigSection={settingsInitialAiConfigSection}
           onTabChange={setSettingsInitialTab}
         />
         <SearchDialog

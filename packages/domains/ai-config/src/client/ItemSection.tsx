@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import {
-  ChevronDown, ChevronRight,
+  AlertTriangle, ChevronDown, ChevronRight,
   Plus, Loader2, X
 } from 'lucide-react'
 import {
@@ -16,6 +16,7 @@ import { PROVIDER_PATHS } from '../shared/provider-registry'
 import { AddItemPicker } from './AddItemPicker'
 import { StatusBadge, ProviderFileCard } from './SyncComponents'
 import { aggregateProviderSyncHealth, hasPendingProviderSync } from './sync-view-model'
+import { getSkillValidation } from './skill-validation'
 
 // ============================================================
 // Types & Helpers
@@ -97,6 +98,8 @@ function useSkillItem({
   projectPath: string
   onChanged: () => void
 }) {
+  const validation = getSkillValidation(item)
+  const hasValidationErrors = validation?.status === 'invalid'
   const [slug, setSlugRaw] = useState(item.slug)
   const [content, setContent] = useState(item.content)
   const [slugDirty, setSlugDirty] = useState(false)
@@ -237,6 +240,8 @@ function useSkillItem({
 
   return {
     item, slug, content, slugDirty, savingSlug, isLocal,
+    validation,
+    hasValidationErrors,
     providerRows, expandedProviders, diskContents, expectedContents,
     syncingProvider, pullingProvider, syncingAll,
     setSlug: (v: string) => { setSlugRaw(v); setSlugDirty(v !== item.slug) },
@@ -259,6 +264,9 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
   const [expanded, setExpanded] = useState(false)
   const status = aggregateProviderSyncHealth(providers)
   const hasPendingSync = hasPendingProviderSync(sk.providerRows.map((row) => row.syncHealth))
+  const validationStatus = sk.validation?.status === 'invalid' || sk.validation?.status === 'warning'
+    ? sk.validation.status
+    : null
 
   const handleToggleExpanded = () => setExpanded((prev) => !prev)
 
@@ -286,6 +294,19 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
           {item.slug}
           {isLocal && <span className="ml-1.5 font-sans text-[10px] text-muted-foreground">(local)</span>}
         </span>
+        {validationStatus && (
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium',
+              validationStatus === 'invalid'
+                ? 'bg-destructive/15 text-destructive'
+                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+            )}
+          >
+            <AlertTriangle className="size-3" />
+            {validationStatus === 'invalid' ? 'Invalid frontmatter' : 'Frontmatter warning'}
+          </span>
+        )}
         <StatusBadge syncHealth={status} />
         <IconButton
           aria-label="Remove skill"
@@ -356,6 +377,21 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
                 value={sk.content}
                 onChange={sk.handleContentChange}
               />
+              {sk.validation && sk.validation.status !== 'valid' && (
+                <div className="rounded border border-destructive/20 bg-destructive/5 px-2.5 py-2">
+                  <p className="text-xs font-medium text-destructive">
+                    {sk.validation.status === 'invalid' ? 'Frontmatter is invalid' : 'Frontmatter warning'}
+                  </p>
+                  <div className="mt-1 space-y-0.5">
+                    {sk.validation.issues.map((issue, index) => (
+                      <p key={`${issue.code}-${index}`} className="text-[11px] text-destructive/90">
+                        {issue.line ? `Line ${issue.line}: ` : ''}
+                        {issue.message}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -370,7 +406,7 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
                   <span className="inline-flex size-2 rounded-full bg-amber-500" />
                 )}
               </div>
-              {sk.providerRows.length > 1 && (hasPendingSync || sk.syncingAll) && (
+              {sk.providerRows.length > 1 && (hasPendingSync || sk.syncingAll || sk.hasValidationErrors) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
@@ -378,13 +414,17 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
                       size="sm"
                       className="h-7 px-2 text-[11px]"
                       onClick={sk.handleSyncAll}
-                      disabled={sk.syncingAll || !!sk.syncingProvider}
+                      disabled={sk.syncingAll || !!sk.syncingProvider || sk.hasValidationErrors}
                     >
                       {sk.syncingAll && <Loader2 className="size-3.5 animate-spin" />}
                       Config → All Files
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Overwrite all provider skill files on disk</TooltipContent>
+                  <TooltipContent>
+                    {sk.hasValidationErrors
+                      ? 'Fix frontmatter errors before syncing to files.'
+                      : 'Overwrite all provider skill files on disk'}
+                  </TooltipContent>
                 </Tooltip>
               )}
             </div>
@@ -406,6 +446,7 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
                       syncingAll={sk.syncingAll}
                       disk={sk.diskContents[row.provider]}
                       expected={sk.expectedContents[row.provider]}
+                      canPush={!sk.hasValidationErrors}
                       onToggleExpand={() => sk.toggleExpanded(row.provider)}
                       onPush={() => void sk.handlePush(row.provider)}
                       onPull={() => void sk.handlePull(row.provider)}

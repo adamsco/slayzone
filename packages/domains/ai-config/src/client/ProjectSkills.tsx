@@ -6,6 +6,7 @@ import { PROVIDER_LABELS } from '../shared/provider-registry'
 import { GlobalItemPicker } from './GlobalItemPicker'
 import { ContextItemEditor } from './ContextItemEditor'
 import { toSyncBadgeLabel } from './sync-view-model'
+import { getSkillValidation } from './skill-validation'
 
 interface ProjectSkillsProps {
   projectId: string
@@ -139,6 +140,7 @@ export function ProjectSkills({ projectId, projectPath, type, openPickerTrigger,
               {editingId === item.id ? (
                 <ContextItemEditor
                   item={item}
+                  validationState={getSkillValidation(item)}
                   onUpdate={(patch) => handleUpdate(item.id, patch)}
                   onDelete={() => handleDelete(item.id)}
                   onClose={() => setEditingId(null)}

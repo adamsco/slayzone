@@ -66,6 +66,21 @@ export interface ContextFileInfo {
 export type SyncHealth = 'synced' | 'stale' | 'unmanaged' | 'not_synced'
 export type SyncReason = 'external_edit' | 'missing_file' | 'not_linked' | 'provider_disabled'
 
+export type SkillValidationSeverity = 'error' | 'warning'
+export type SkillValidationStatus = 'valid' | 'warning' | 'invalid'
+
+export interface SkillValidationIssue {
+  code: string
+  severity: SkillValidationSeverity
+  message: string
+  line: number | null
+}
+
+export interface SkillValidationState {
+  status: SkillValidationStatus
+  issues: SkillValidationIssue[]
+}
+
 // CLI provider types
 export type CliProvider = 'claude' | 'codex' | 'cursor' | 'gemini' | 'opencode'
 export type CliProviderStatus = 'active' | 'placeholder'

@@ -1,16 +1,17 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import { Button, Input, Label, Textarea } from '@slayzone/ui'
-import type { AiConfigItem, UpdateAiConfigItemInput } from '../shared'
+import type { AiConfigItem, SkillValidationState, UpdateAiConfigItemInput } from '../shared'
 
 interface ContextItemEditorProps {
   item: AiConfigItem
+  validationState?: SkillValidationState | null
   onUpdate: (patch: Omit<UpdateAiConfigItemInput, 'id'>) => Promise<void>
   onDelete: () => Promise<void>
   onClose: () => void
 }
 
-export function ContextItemEditor({ item, onUpdate, onDelete, onClose }: ContextItemEditorProps) {
+export function ContextItemEditor({ item, validationState, onUpdate, onDelete, onClose }: ContextItemEditorProps) {
   const [slug, setSlug] = useState(item.slug)
   const [content, setContent] = useState(item.content)
   const [saving, setSaving] = useState(false)
@@ -73,6 +74,22 @@ export function ContextItemEditor({ item, onUpdate, onDelete, onClose }: Context
 
       {error && (
         <p className="text-xs text-destructive">{error}</p>
+      )}
+
+      {validationState && validationState.status !== 'valid' && (
+        <div className="rounded border border-destructive/20 bg-destructive/5 px-2.5 py-2">
+          <p className="text-xs font-medium text-destructive">
+            {validationState.status === 'invalid' ? 'Frontmatter is invalid' : 'Frontmatter warning'}
+          </p>
+          <div className="mt-1 space-y-0.5">
+            {validationState.issues.map((issue, index) => (
+              <p key={`${issue.code}-${index}`} className="text-[11px] text-destructive/90">
+                {issue.line ? `Line ${issue.line}: ` : ''}
+                {issue.message}
+              </p>
+            ))}
+          </div>
+        </div>
       )}
 
       <div className="flex items-center justify-between gap-2 pt-1">
