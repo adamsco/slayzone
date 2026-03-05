@@ -1,25 +1,32 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type MouseEvent as ReactMouseEvent } from 'react'
-import { File, FilePlus, Link, Unlink, RefreshCw, Save, Check, AlertCircle, Pencil, Trash2, RefreshCcw } from 'lucide-react'
+import { File, FilePlus, Link, Unlink, RefreshCw, Save, Check, AlertCircle, Circle, Pencil, Trash2, RefreshCcw } from 'lucide-react'
 import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Dialog, DialogContent, DialogHeader, DialogTitle, Input, Label, Textarea, FileTree, fileTreeIndent, cn } from '@slayzone/ui'
 import type { CliProvider, ContextTreeEntry } from '../shared'
 import { GlobalItemPicker } from './GlobalItemPicker'
+import { contextEntryToSyncHealth } from './sync-health'
 
-function SyncBadge({ status }: { status: ContextTreeEntry['syncStatus'] }) {
-  if (status === 'synced') {
+function SyncBadge({ entry }: { entry: ContextTreeEntry }) {
+  const health = entry.syncHealth
+  if (health === 'synced') {
     return (
       <span className="flex items-center gap-1 text-[11px] text-green-600 dark:text-green-400" title="Synced with source" aria-label="Synced with source">
         <Check className="size-3" />
       </span>
     )
   }
-  if (status === 'out_of_sync') {
+  if (health === 'stale') {
     return (
       <span className="flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400" title="Out of sync with source" aria-label="Out of sync with source">
         <AlertCircle className="size-3" />
       </span>
     )
   }
-  return null
+  if (health !== 'unmanaged') return null
+  return (
+    <span className="flex items-center gap-1 text-[11px] text-muted-foreground" title="Unmanaged (exists on disk but not linked in config)" aria-label="Unmanaged file">
+      <Circle className="size-3" />
+    </span>
+  )
 }
 
 function ProviderBadge({ provider }: { provider?: CliProvider }) {
@@ -219,6 +226,7 @@ export function ProjectContextTree({ projectPath, projectId }: ProjectContextTre
 
   const renderContextFile = useCallback((entry: ContextTreeEntry, { name, depth }: { name: string; depth: number }) => {
     const selected = selectedPath === entry.path
+    const isStaleLinked = !!entry.linkedItemId && contextEntryToSyncHealth(entry) === 'stale'
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
@@ -252,17 +260,17 @@ export function ProjectContextTree({ projectPath, projectId }: ProjectContextTre
                   <span title="Linked to global item" aria-label="Linked to global item">
                     <Link className="size-3 text-muted-foreground" />
                   </span>
-                  <SyncBadge status={entry.syncStatus} />
-                  {entry.syncStatus === 'out_of_sync' && (
-                    <button
-                      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
-                      onClick={(e) => { e.stopPropagation(); handleSync(entry) }}
-                      title="Sync from global"
-                    >
-                      <RefreshCw className="size-3" />
-                    </button>
-                  )}
                 </>
+              )}
+              <SyncBadge entry={entry} />
+              {isStaleLinked && (
+                <button
+                  className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  onClick={(e) => { e.stopPropagation(); handleSync(entry) }}
+                  title="Sync from global"
+                >
+                  <RefreshCw className="size-3" />
+                </button>
               )}
             </div>
           </div>
@@ -271,7 +279,7 @@ export function ProjectContextTree({ projectPath, projectId }: ProjectContextTre
           <ContextMenuItem onSelect={() => handleStartRename(entry)}>
             <Pencil className="size-4" /> Rename
           </ContextMenuItem>
-          {entry.linkedItemId && entry.syncStatus === 'out_of_sync' && (
+          {isStaleLinked && (
             <ContextMenuItem onSelect={() => handleSync(entry)}>
               <RefreshCw className="size-4" /> Sync from global
             </ContextMenuItem>

@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from 'react'
+import { useEffect, useState, type ChangeEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import { Button, Input, Label, Textarea } from '@slayzone/ui'
 import type { AiConfigItem, UpdateAiConfigItemInput } from '../shared'
@@ -15,6 +15,11 @@ export function ContextItemEditor({ item, onUpdate, onDelete, onClose }: Context
   const [content, setContent] = useState(item.content)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSlug(item.slug)
+    setContent(item.content)
+  }, [item.slug, item.content])
 
   const save = async (patch: Omit<UpdateAiConfigItemInput, 'id'>) => {
     setSaving(true)
@@ -40,7 +45,11 @@ export function ContextItemEditor({ item, onUpdate, onDelete, onClose }: Context
             setSlug(e.target.value)
             setError(null)
           }}
-          onBlur={() => save({ slug })}
+          onBlur={(e: ChangeEvent<HTMLInputElement>) => {
+            const nextSlug = e.currentTarget.value
+            setSlug(nextSlug)
+            void save({ slug: nextSlug })
+          }}
         />
       </div>
 
@@ -54,7 +63,11 @@ export function ContextItemEditor({ item, onUpdate, onDelete, onClose }: Context
             setContent(e.target.value)
             setError(null)
           }}
-          onBlur={() => save({ content })}
+          onBlur={(e: ChangeEvent<HTMLTextAreaElement>) => {
+            const nextContent = e.currentTarget.value
+            setContent(nextContent)
+            void save({ content: nextContent })
+          }}
         />
       </div>
 

@@ -4,53 +4,123 @@ import {
   FileText, RefreshCw, Server, Settings2, Sparkles,
   type LucideIcon
 } from 'lucide-react'
-import { Button, Switch, cn, toast } from '@slayzone/ui'
-import type { AiConfigItem, CliProvider, ContextTreeEntry, McpConfigFileResult, ProjectSkillStatus, ProviderSyncStatus } from '../shared'
-import { ItemSection } from './ItemSection'
+import { Button, Tooltip, TooltipContent, TooltipTrigger, cn, toast } from '@slayzone/ui'
+import type {
+  AiConfigItem,
+  CliProvider,
+  ContextTreeEntry,
+  McpConfigFileResult,
+  ProjectSkillStatus,
+  SyncHealth,
+  SyncReason
+} from '../shared'
+import type { GlobalContextManagerSection } from './ContextManagerSettings'
+import { ItemSection, type UnmanagedSkillRow } from './ItemSection'
 import { McpFlatSection } from './McpFlatSection'
 import { ProjectInstructions } from './ProjectInstructions'
 import { ProviderChips } from './ProviderChips'
+import { contextEntryToSyncHealth } from './sync-health'
 
 interface ProjectContextFlatProps {
   projectId: string
   projectPath: string
   projectName?: string
+  onOpenGlobalAiConfig?: (section: GlobalContextManagerSection) => void
 }
 
 type ProjectSection = 'providers' | 'instructions' | 'skill' | 'mcp'
+type InstructionsModeRequest = 'global' | 'custom' | null
 
 interface ContextData {
   linkedSkills: ProjectSkillStatus[]
   localItems: AiConfigItem[]
   enabledProviders: CliProvider[]
-  instructions: { content: string; providerStatus: Partial<Record<CliProvider, ProviderSyncStatus>> }
-  pruneUnmanaged: boolean
+  instructions: {
+    content: string
+    providerHealth?: Partial<Record<CliProvider, { health: SyncHealth; reason: SyncReason | null }>>
+  }
   contextTree: ContextTreeEntry[]
   mcpConfigs: McpConfigFileResult[]
 }
 
 interface SectionCounts { total: number; synced: number; stale: number; unmanaged: number }
 
-function parseBooleanSetting(value: string | null): boolean {
-  if (value === null) return false
-  const normalized = value.trim().toLowerCase()
-  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
-}
-
 function computeSkillCounts(tree: ContextTreeEntry[]): SectionCounts {
   const skills = tree.filter(e => e.category === 'skill')
-  const synced = skills.filter(e => e.linkedItemId !== null && e.syncStatus === 'synced').length
-  const stale = skills.filter(e => e.linkedItemId !== null && e.syncStatus === 'out_of_sync').length
-  const unmanaged = skills.filter(e => e.linkedItemId === null).length
+  const synced = skills.filter((entry) => contextEntryToSyncHealth(entry) === 'synced').length
+  const stale = skills.filter((entry) => contextEntryToSyncHealth(entry) === 'stale').length
+  const unmanaged = skills.filter((entry) => contextEntryToSyncHealth(entry) === 'unmanaged').length
   return { total: synced + stale + unmanaged, synced, stale, unmanaged }
 }
 
-function computeInstructionCounts(providerStatus: Partial<Record<CliProvider, ProviderSyncStatus>>): SectionCounts {
-  const entries = Object.values(providerStatus).filter(Boolean) as ProviderSyncStatus[]
-  const synced = entries.filter(s => s === 'synced').length
-  const stale = entries.filter(s => s === 'out_of_sync').length
-  const unmanaged = entries.filter(s => s === 'not_synced').length
-  return { total: entries.length, synced, stale, unmanaged }
+function skillSlugFromContextPath(relativePath: string): string | null {
+  const normalized = relativePath.split('\\').join('/')
+  const parts = normalized.split('/').filter(Boolean)
+  if (parts.length === 0) return null
+
+  const fileName = parts[parts.length - 1]
+  if (fileName === 'SKILL.md') {
+    if (parts.length < 2) return null
+    return parts[parts.length - 2]
+  }
+
+  if (fileName.toLowerCase().endsWith('.md')) {
+    return fileName.slice(0, -3)
+  }
+
+  return null
+}
+
+function computeUnmanagedSkillRows(tree: ContextTreeEntry[]): UnmanagedSkillRow[] {
+  const bySlug = new Map<string, UnmanagedSkillRow>()
+
+  for (const entry of tree) {
+    if (entry.category !== 'skill') continue
+    if (!entry.exists) continue
+    if (entry.linkedItemId !== null) continue
+    if (contextEntryToSyncHealth(entry) !== 'unmanaged') continue
+
+    const slug = skillSlugFromContextPath(entry.relativePath)
+    if (!slug) continue
+
+    const current = bySlug.get(slug) ?? {
+      slug,
+      locations: []
+    }
+
+    if (!current.locations.some((location) => location.path === entry.path)) {
+      current.locations.push({
+        path: entry.path,
+        relativePath: entry.relativePath,
+        provider: entry.provider
+      })
+    }
+    bySlug.set(slug, current)
+  }
+
+  return [...bySlug.values()]
+    .map((item) => ({
+      ...item,
+      locations: [...item.locations].sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+    }))
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+}
+
+function computeInstructionCounts(instructions: ContextData['instructions']): SectionCounts {
+  const providerHealth = instructions.providerHealth ?? {}
+  const providers = new Set<CliProvider>(Object.keys(providerHealth) as CliProvider[])
+  let synced = 0
+  let stale = 0
+  let unmanaged = 0
+
+  for (const provider of providers) {
+    const health = providerHealth[provider]?.health
+    if (health === 'synced') synced += 1
+    else if (health === 'stale') stale += 1
+    else if (health === 'unmanaged') unmanaged += 1
+  }
+
+  return { total: providers.size, synced, stale, unmanaged }
 }
 
 function computeMcpCounts(configs: McpConfigFileResult[]): SectionCounts {
@@ -106,19 +176,17 @@ function ProjectOverviewPanel({
   data,
   syncingMode,
   onNavigate,
-  onSetPruneUnmanaged,
   onResetAndSync,
   onSyncAll
 }: {
   data: ContextData
   syncingMode: 'sync' | 'reset' | null
   onNavigate: (section: ProjectSection) => void
-  onSetPruneUnmanaged: (enabled: boolean) => Promise<void>
   onResetAndSync: () => Promise<void>
   onSyncAll: () => Promise<void>
 }) {
   const skillCounts = computeSkillCounts(data.contextTree)
-  const instrCounts = computeInstructionCounts(data.instructions.providerStatus)
+  const instrCounts = computeInstructionCounts(data.instructions)
   const mcpCounts = computeMcpCounts(data.mcpConfigs)
 
   return (
@@ -129,37 +197,46 @@ function ProjectOverviewPanel({
       <OverviewCard testId="project-context-overview-mcp" icon={Server} label="MCP Servers" detail={`${mcpCounts.total} server${mcpCounts.total === 1 ? '' : 's'}`} onClick={() => onNavigate('mcp')} />
 
       <div className="flex items-center gap-2 pt-3">
-        <label className="flex items-center gap-2">
-          <Switch
-            checked={data.pruneUnmanaged}
-            onCheckedChange={(enabled) => { void onSetPruneUnmanaged(enabled) }}
-            data-testid="project-context-prune-unmanaged"
-          />
-          <div>
-            <p className="text-sm text-foreground">Prune unmanaged</p>
-            <p className="text-xs text-muted-foreground">Delete skill files and MCP configs not managed by your selections when syncing</p>
-          </div>
-        </label>
         <div className="flex-1" />
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => { void onResetAndSync() }}
-          disabled={syncingMode !== null}
-          data-testid="project-context-reset-sync"
-        >
-          <RefreshCw className={cn('mr-1.5 size-3.5', syncingMode === 'reset' && 'animate-spin')} />
-          Reset and sync
-        </Button>
-        <Button
-          size="sm"
-          onClick={() => { void onSyncAll() }}
-          disabled={syncingMode !== null}
-          data-testid="project-context-sync-all"
-        >
-          <RefreshCw className={cn('mr-1.5 size-3.5', syncingMode === 'sync' && 'animate-spin')} />
-          Sync All
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                variant="outline"
+                onClick={() => { void onResetAndSync() }}
+                disabled={syncingMode !== null}
+                data-testid="project-context-reset-sync"
+              >
+                <RefreshCw className={cn('mr-1.5 size-3.5', syncingMode === 'reset' && 'animate-spin')} />
+                Reset and sync
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            Remove unmanaged files, then sync all managed items.
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Button
+                size="sm"
+                className="h-7 px-2 text-[11px]"
+                onClick={() => { void onSyncAll() }}
+                disabled={syncingMode !== null}
+                data-testid="project-context-sync-all"
+              >
+                <RefreshCw className={cn('mr-1.5 size-3.5', syncingMode === 'sync' && 'animate-spin')} />
+                Sync All
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            Sync all managed items to provider files.
+          </TooltipContent>
+        </Tooltip>
       </div>
     </div>
   )
@@ -169,11 +246,13 @@ function ProjectOverviewPanel({
 // Main project layout
 // ---------------------------------------------------------------------------
 
-export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFlatProps) {
+export function ProjectContextFlat({ projectId, projectPath, onOpenGlobalAiConfig }: ProjectContextFlatProps) {
   const [data, setData] = useState<ContextData | null>(null)
   const [version, setVersion] = useState(0)
   const [syncingMode, setSyncingMode] = useState<'sync' | 'reset' | null>(null)
   const [section, setSection] = useState<ProjectSection | null>(null)
+  const [instructionsModeRequest, setInstructionsModeRequest] = useState<InstructionsModeRequest>(null)
+  const [instructionsUsingGlobal, setInstructionsUsingGlobal] = useState(false)
 
   const bumpVersion = useCallback(() => setVersion(v => v + 1), [])
 
@@ -181,12 +260,11 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
     let stale = false
     void (async () => {
       try {
-        const [skillsStatus, localItems, enabledProviders, instructions, pruneSetting, contextTree, mcpConfigs] = await Promise.all([
+        const [skillsStatus, localItems, enabledProviders, instructions, contextTree, mcpConfigs] = await Promise.all([
           window.api.aiConfig.getProjectSkillsStatus(projectId, projectPath),
           window.api.aiConfig.listItems({ scope: 'project', projectId }),
           window.api.aiConfig.getProjectProviders(projectId),
           window.api.aiConfig.getRootInstructions(projectId, projectPath),
-          window.api.settings.get(`ai_config:prune_unmanaged:${projectId}`),
           window.api.aiConfig.getContextTree(projectPath, projectId),
           window.api.aiConfig.discoverMcpConfigs(projectPath)
         ])
@@ -195,8 +273,10 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
           linkedSkills: skillsStatus.filter(s => s.item.type === 'skill'),
           localItems: localItems.filter(i => i.type !== 'root_instructions'),
           enabledProviders,
-          instructions,
-          pruneUnmanaged: parseBooleanSetting(pruneSetting),
+          instructions: {
+            ...instructions,
+            providerHealth: instructions.providerHealth ?? {}
+          },
           contextTree,
           mcpConfigs
         })
@@ -213,8 +293,7 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
     try {
       const result = await window.api.aiConfig.syncAll({
         projectId,
-        projectPath,
-        pruneUnmanaged: data.pruneUnmanaged
+        projectPath
       })
       const removed = result.deleted.length
       const added = result.written.length
@@ -246,11 +325,11 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
     }
   }
 
-  const handleSetPruneUnmanaged = async (enabled: boolean) => {
-    if (!data) return
-    setData((prev) => (prev ? { ...prev, pruneUnmanaged: enabled } : prev))
-    await window.api.settings.set(`ai_config:prune_unmanaged:${projectId}`, enabled ? '1' : '0')
-  }
+  useEffect(() => {
+    if (section !== 'instructions') {
+      setInstructionsModeRequest(null)
+    }
+  }, [section])
 
   if (!data) {
     return (
@@ -264,6 +343,7 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
 
   const linkedSkillIds = new Set(data.linkedSkills.map(s => s.item.id))
   const localSkills = data.localItems.filter(i => i.type === 'skill' && !linkedSkillIds.has(i.id))
+  const unmanagedSkills = computeUnmanagedSkillRows(data.contextTree)
 
   const sectionTitles: Record<ProjectSection, string> = {
     providers: 'Providers',
@@ -274,7 +354,7 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
 
   const sectionDescriptions: Record<ProjectSection, string> = {
     providers: 'Choose which providers this project syncs to. Defaults inherited from global settings.',
-    instructions: 'Project instructions are synced to each enabled provider config.',
+    instructions: 'Use the “Use global” button in the instructions editor to load shared content.',
     skill: 'Select, edit, and sync project skills.',
     mcp: 'Manage MCP servers synced for this project.'
   }
@@ -286,7 +366,6 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
           data={data}
           syncingMode={syncingMode}
           onNavigate={setSection}
-          onSetPruneUnmanaged={handleSetPruneUnmanaged}
           onResetAndSync={handleResetAndSync}
           onSyncAll={handleSyncAll}
         />
@@ -307,6 +386,9 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
           projectId={projectId}
           projectPath={projectPath}
           onChanged={bumpVersion}
+          requestedMode={instructionsModeRequest}
+          onRequestedModeHandled={() => setInstructionsModeRequest(null)}
+          onUseGlobalSourceChange={setInstructionsUsingGlobal}
         />
       )
     }
@@ -316,9 +398,11 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
           type="skill"
           linkedItems={data.linkedSkills}
           localItems={localSkills}
+          unmanagedItems={unmanagedSkills}
           enabledProviders={data.enabledProviders}
           projectId={projectId}
           projectPath={projectPath}
+          onOpenGlobalAiConfig={onOpenGlobalAiConfig}
           onChanged={bumpVersion}
         />
       )
@@ -327,6 +411,7 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
       <McpFlatSection
         projectPath={projectPath}
         enabledProviders={data.enabledProviders}
+        onOpenGlobalAiConfig={onOpenGlobalAiConfig}
         onChanged={bumpVersion}
       />
     )
@@ -343,9 +428,53 @@ export function ProjectContextFlat({ projectId, projectPath }: ProjectContextFla
             <ArrowLeft className="size-3.5" />
             {sectionTitles[section]}
           </button>
-          <span className="text-xs text-muted-foreground">
-            {sectionDescriptions[section]}
-          </span>
+          {section === 'instructions' ? (
+            <div className="flex items-center gap-2">
+              {instructionsUsingGlobal && onOpenGlobalAiConfig && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-[11px]"
+                  data-testid="instructions-go-to-global"
+                  onClick={() => onOpenGlobalAiConfig('instructions')}
+                >
+                  Go to global
+                </Button>
+              )}
+              <div className="inline-flex items-center rounded-md border bg-muted/40 p-0.5" data-testid="instructions-source-tabs">
+                <button
+                  type="button"
+                  data-testid="instructions-source-tab-project"
+                  className={cn(
+                    'rounded px-2 py-1 text-[11px] transition-colors',
+                    !instructionsUsingGlobal
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                  onClick={() => setInstructionsModeRequest('custom')}
+                >
+                  Use custom instructions
+                </button>
+                <button
+                  type="button"
+                  data-testid="instructions-source-tab-shared"
+                  className={cn(
+                    'rounded px-2 py-1 text-[11px] transition-colors',
+                    instructionsUsingGlobal
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  )}
+                  onClick={() => setInstructionsModeRequest('global')}
+                >
+                  Use global instructions
+                </button>
+              </div>
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              {sectionDescriptions[section]}
+            </span>
+          )}
         </div>
       )}
 

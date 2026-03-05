@@ -63,7 +63,8 @@ export interface ContextFileInfo {
   category: ContextFileCategory
 }
 
-export type ContextFileSyncStatus = 'synced' | 'out_of_sync' | 'local_only'
+export type SyncHealth = 'synced' | 'stale' | 'unmanaged' | 'not_synced'
+export type SyncReason = 'external_edit' | 'missing_file' | 'not_linked' | 'provider_disabled'
 
 // CLI provider types
 export type CliProvider = 'claude' | 'codex' | 'cursor' | 'gemini' | 'opencode'
@@ -86,7 +87,8 @@ export interface ContextTreeEntry {
   category: ContextFileCategory | 'skill'
   provider?: CliProvider
   linkedItemId: string | null
-  syncStatus: ContextFileSyncStatus
+  syncHealth: SyncHealth
+  syncReason: SyncReason | null
 }
 
 export interface LoadGlobalItemInput {
@@ -122,12 +124,9 @@ export interface SyncConflict {
   reason: 'external_edit'
 }
 
-// Root instructions + skills status
-export type ProviderSyncStatus = 'synced' | 'out_of_sync' | 'not_synced'
-
 export interface RootInstructionsResult {
   content: string
-  providerStatus: Partial<Record<CliProvider, ProviderSyncStatus>>
+  providerHealth: Partial<Record<CliProvider, { health: SyncHealth; reason: SyncReason | null }>>
 }
 
 export interface ProviderFileContent {
@@ -138,7 +137,11 @@ export interface ProviderFileContent {
 
 export interface ProjectSkillStatus {
   item: AiConfigItem
-  providers: Partial<Record<CliProvider, { path: string; status: ProviderSyncStatus }>>
+  providers: Partial<Record<CliProvider, {
+    path: string
+    syncHealth: SyncHealth
+    syncReason: SyncReason | null
+  }>>
 }
 
 // Global file management

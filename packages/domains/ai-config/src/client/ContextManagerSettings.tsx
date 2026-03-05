@@ -17,7 +17,8 @@ import { ProjectContextFlat } from './ProjectContextFlat'
 import { ProjectContextFilesView } from './ProjectContextFilesView'
 import { ProjectInstructions } from './ProjectInstructions'
 
-type Section = 'providers' | 'instructions' | 'skill' | 'mcp' | 'files'
+export type GlobalContextManagerSection = 'providers' | 'instructions' | 'skill' | 'mcp' | 'files'
+type Section = GlobalContextManagerSection
 
 interface ContextManagerSettingsProps {
   scope: AiConfigScope
@@ -25,6 +26,8 @@ interface ContextManagerSettingsProps {
   projectPath?: string | null
   projectName?: string
   projectTab?: ProjectContextManagerTab
+  onOpenGlobalAiConfig?: (section: GlobalContextManagerSection) => void
+  initialGlobalSection?: GlobalContextManagerSection | null
 }
 
 export type ProjectContextManagerTab = 'config' | 'files'
@@ -201,7 +204,15 @@ function ProvidersPanel() {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function ContextManagerSettings({ scope, projectId, projectPath, projectName, projectTab }: ContextManagerSettingsProps) {
+export function ContextManagerSettings({
+  scope,
+  projectId,
+  projectPath,
+  projectName,
+  projectTab,
+  onOpenGlobalAiConfig,
+  initialGlobalSection
+}: ContextManagerSettingsProps) {
   const isProject = scope === 'project' && !!projectId && !!projectPath
   const activeProjectTab = projectTab ?? 'config'
 
@@ -220,19 +231,20 @@ export function ContextManagerSettings({ scope, projectId, projectPath, projectN
         projectId={projectId!}
         projectPath={projectPath!}
         projectName={projectName}
+        onOpenGlobalAiConfig={onOpenGlobalAiConfig}
       />
     )
   }
 
-  return <GlobalContextManager />
+  return <GlobalContextManager initialSection={initialGlobalSection ?? null} />
 }
 
 // ---------------------------------------------------------------------------
 // Global context manager — own component so hooks are unconditional
 // ---------------------------------------------------------------------------
 
-function GlobalContextManager() {
-  const [section, setSection] = useState<Section | null>(null)
+function GlobalContextManager({ initialSection }: { initialSection: GlobalContextManagerSection | null }) {
+  const [section, setSection] = useState<Section | null>(initialSection)
   const [items, setItems] = useState<AiConfigItem[]>([])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -259,6 +271,10 @@ function GlobalContextManager() {
     void loadItems()
     setEditingId(null)
   }, [loadItems])
+
+  useEffect(() => {
+    setSection(initialSection)
+  }, [initialSection])
 
   const handleCreate = async () => {
     if (!isItemSection) return

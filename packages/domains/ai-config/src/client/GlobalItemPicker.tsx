@@ -43,11 +43,14 @@ export function GlobalItemPicker({ projectId, projectPath, existingLinks, type, 
     if (!selectedItem) return
     setLoading(true)
     try {
+      const providersToLoad = useManualPath
+        ? (selectedProviders.length > 0 ? [selectedProviders[0]] : [])
+        : selectedProviders
       await window.api.aiConfig.loadGlobalItem({
         projectId,
         projectPath,
         itemId: selectedItem.id,
-        providers: useManualPath ? ['claude'] : selectedProviders,
+        providers: providersToLoad,
         manualPath: useManualPath ? manualPath : undefined
       })
       onLoaded()
@@ -59,7 +62,11 @@ export function GlobalItemPicker({ projectId, projectPath, existingLinks, type, 
   }
 
   const alreadyLinked = (id: string) => existingLinks.includes(id)
-  const canLoad = selectedItem && !loading && (useManualPath ? manualPath.trim() : selectedProviders.length > 0)
+  const canLoad = selectedItem && !loading && (
+    useManualPath
+      ? (manualPath.trim().length > 0 && selectedProviders.length > 0)
+      : selectedProviders.length > 0
+  )
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>

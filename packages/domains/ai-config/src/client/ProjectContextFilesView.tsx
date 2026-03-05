@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, Check, File, FilePlus, Link, RefreshCw } from 'lucide-react'
+import { AlertCircle, Check, Circle, File, FilePlus, Link, RefreshCw } from 'lucide-react'
 import { Button, FileTree, Textarea, cn, fileTreeIndent } from '@slayzone/ui'
 import type { CliProvider, ContextTreeEntry } from '../shared'
 
@@ -8,22 +8,28 @@ interface ProjectContextFilesViewProps {
   projectPath: string
 }
 
-function SyncBadge({ status }: { status: ContextTreeEntry['syncStatus'] }) {
-  if (status === 'synced') {
+function SyncBadge({ entry }: { entry: ContextTreeEntry }) {
+  const health = entry.syncHealth
+  if (health === 'synced') {
     return (
       <span className="text-green-600 dark:text-green-400" title="Synced with source" aria-label="Synced with source">
         <Check className="size-3" />
       </span>
     )
   }
-  if (status === 'out_of_sync') {
+  if (health === 'stale') {
     return (
       <span className="text-amber-600 dark:text-amber-400" title="Out of sync with source" aria-label="Out of sync with source">
         <AlertCircle className="size-3" />
       </span>
     )
   }
-  return null
+  if (health !== 'unmanaged') return null
+  return (
+    <span className="text-muted-foreground" title="Unmanaged (exists on disk but not linked in config)" aria-label="Unmanaged file">
+      <Circle className="size-3" />
+    </span>
+  )
 }
 
 function ProviderBadge({ provider }: { provider?: CliProvider }) {
@@ -133,13 +139,11 @@ export function ProjectContextFilesView({ projectPath, projectId }: ProjectConte
         <div className="flex shrink-0 items-center gap-1">
           <ProviderBadge provider={entry.provider} />
           {entry.linkedItemId && (
-            <>
-              <span title="Linked to global item" aria-label="Linked to global item">
-                <Link className="size-3 text-muted-foreground" />
-              </span>
-              <SyncBadge status={entry.syncStatus} />
-            </>
+            <span title="Linked to global item" aria-label="Linked to global item">
+              <Link className="size-3 text-muted-foreground" />
+            </span>
           )}
+          <SyncBadge entry={entry} />
         </div>
       </button>
     )

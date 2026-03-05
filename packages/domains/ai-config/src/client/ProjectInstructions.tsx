@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Button, Textarea, Tooltip, TooltipContent, TooltipTrigger } from '@slayzone/ui'
-import type { CliProvider, ProviderSyncStatus } from '../shared'
+import type { CliProvider, SyncHealth, SyncReason } from '../shared'
 import { PROVIDER_PATHS } from '../shared/provider-registry'
 import { ProviderFileCard } from './SyncComponents'
 
@@ -9,31 +9,45 @@ interface ProjectInstructionsProps {
   projectId?: string | null
   projectPath?: string | null
   onChanged?: () => void
+  requestedMode?: 'global' | 'custom' | null
+  onRequestedModeHandled?: () => void
+  onUseGlobalSourceChange?: (useGlobal: boolean) => void
 }
 
-export function ProjectInstructions({ projectId, projectPath, onChanged }: ProjectInstructionsProps) {
+export function ProjectInstructions({
+  projectId,
+  projectPath,
+  onChanged,
+  requestedMode,
+  onRequestedModeHandled,
+  onUseGlobalSourceChange
+}: ProjectInstructionsProps) {
   const [content, setContent] = useState('')
-  const [providerStatus, setProviderStatus] = useState<Partial<Record<CliProvider, ProviderSyncStatus>>>({})
+  const [providerHealth, setProviderHealth] = useState<Partial<Record<CliProvider, { health: SyncHealth; reason: SyncReason | null }>>>({})
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [syncingProvider, setSyncingProvider] = useState<CliProvider | null>(null)
   const [syncingAll, setSyncingAll] = useState(false)
   const [expandedProviders, setExpandedProviders] = useState<Set<CliProvider>>(new Set())
   const [diskContents, setDiskContents] = useState<Partial<Record<CliProvider, string>>>({})
   const [pullingProvider, setPullingProvider] = useState<CliProvider | null>(null)
+  const [useGlobalSource, setUseGlobalSource] = useState(false)
+  const projectContentRef = useRef('')
 
   const isProject = !!projectId && !!projectPath
-  const providers = Object.keys(providerStatus) as CliProvider[]
+  const providers = Object.keys(providerHealth ?? {}) as CliProvider[]
+  const hasPendingProviderSync = providers.some((provider) => (providerHealth[provider]?.health ?? 'not_synced') !== 'synced')
 
   const load = useCallback(async () => {
     if (isProject) {
       const result = await window.api.aiConfig.getRootInstructions(projectId!, projectPath!)
-      setContent(result.content)
-      setProviderStatus(result.providerStatus)
+      projectContentRef.current = result.content
+      if (!useGlobalSource) setContent(result.content)
+      setProviderHealth(result.providerHealth ?? {})
     } else {
       const text = await window.api.aiConfig.getGlobalInstructions()
       setContent(text)
     }
-  }, [isProject, projectId, projectPath])
+  }, [isProject, projectId, projectPath, useGlobalSource])
 
   useEffect(() => { void load() }, [load])
 
@@ -42,7 +56,7 @@ export function ProjectInstructions({ projectId, projectPath, onChanged }: Proje
     try {
       if (isProject) {
         const result = await window.api.aiConfig.saveInstructionsContent(projectId!, projectPath!, text)
-        setProviderStatus(result.providerStatus)
+        setProviderHealth(result.providerHealth ?? {})
       } else {
         await window.api.aiConfig.saveGlobalInstructions(text)
       }
@@ -57,6 +71,7 @@ export function ProjectInstructions({ projectId, projectPath, onChanged }: Proje
     setContent(text)
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => void saveContent(text), 800)
+    if (!useGlobalSource) projectContentRef.current = text
   }
 
   useEffect(() => () => {
@@ -87,7 +102,7 @@ export function ProjectInstructions({ projectId, projectPath, onChanged }: Proje
     setSyncingProvider(provider)
     try {
       const result = await window.api.aiConfig.pushProviderInstructions(projectId!, projectPath!, provider, content)
-      setProviderStatus(result.providerStatus)
+      setProviderHealth(result.providerHealth ?? {})
       setDiskContents(prev => ({ ...prev, [provider]: content }))
       onChanged?.()
     } finally {
@@ -100,7 +115,7 @@ export function ProjectInstructions({ projectId, projectPath, onChanged }: Proje
     setPullingProvider(provider)
     try {
       const result = await window.api.aiConfig.pullProviderInstructions(projectId!, projectPath!, provider)
-      setProviderStatus(result.providerStatus)
+      setProviderHealth(result.providerHealth ?? {})
       if (saveTimer.current) clearTimeout(saveTimer.current)
       setContent(result.content)
       setDiskContents(prev => ({ ...prev, [provider]: result.content }))
@@ -115,7 +130,7 @@ export function ProjectInstructions({ projectId, projectPath, onChanged }: Proje
     setSyncingAll(true)
     try {
       const result = await window.api.aiConfig.saveRootInstructions(projectId!, projectPath!, content)
-      setProviderStatus(result.providerStatus)
+      setProviderHealth(result.providerHealth ?? {})
       // Update disk contents cache for all providers
       const updated: Partial<Record<CliProvider, string>> = {}
       for (const p of providers) updated[p] = content
@@ -126,18 +141,52 @@ export function ProjectInstructions({ projectId, projectPath, onChanged }: Proje
     }
   }
 
+  const handleUseGlobal = useCallback(async () => {
+    if (!isProject) return
+    const globalContent = await window.api.aiConfig.getGlobalInstructions()
+    setContent(globalContent)
+    setUseGlobalSource(true)
+  }, [isProject])
+
+  const handleUseCustom = useCallback(() => {
+    setUseGlobalSource(false)
+    setContent(projectContentRef.current)
+  }, [])
+
+  useEffect(() => {
+    onUseGlobalSourceChange?.(useGlobalSource)
+  }, [onUseGlobalSourceChange, useGlobalSource])
+
+  useEffect(() => {
+    if (!isProject || !requestedMode) return
+    let cancelled = false
+    const applyRequest = async () => {
+      if (requestedMode === 'global') {
+        if (!useGlobalSource) await handleUseGlobal()
+      } else if (useGlobalSource) {
+        handleUseCustom()
+      }
+      if (!cancelled) onRequestedModeHandled?.()
+    }
+    void applyRequest()
+    return () => { cancelled = true }
+  }, [handleUseCustom, handleUseGlobal, isProject, onRequestedModeHandled, requestedMode, useGlobalSource])
+
   return (
     <div className="space-y-4">
-      <Textarea
-        data-testid="instructions-textarea"
-        className="min-h-[300px] resize-y font-mono text-sm"
-        placeholder={isProject
-          ? 'Write your project instructions here. Use the buttons below to write to provider files.'
-          : 'Write global instructions here. These are stored centrally and can be included in project syncs.'
-        }
-        value={content}
-        onChange={handleChange}
-      />
+      <div className="space-y-2">
+        <Textarea
+          data-testid="instructions-textarea"
+          className="min-h-[300px] resize-y font-mono text-sm"
+          placeholder={isProject
+            ? 'Write your project instructions here. Use the buttons below to write to provider files.'
+            : 'Write global instructions here. These are stored centrally and can be included in project syncs.'
+          }
+          value={content}
+          onChange={handleChange}
+          disabled={isProject && useGlobalSource}
+        />
+      </div>
 
       {isProject && providers.length > 0 && (
         <>
@@ -150,7 +199,7 @@ export function ProjectInstructions({ projectId, projectPath, onChanged }: Proje
                   testIdPrefix="instructions"
                   provider={provider}
                   path={rootPath}
-                  status={providerStatus[provider]!}
+                  syncHealth={providerHealth[provider]?.health ?? 'not_synced'}
                   isPushing={syncingProvider === provider}
                   isPulling={pullingProvider === provider}
                   isExpanded={expandedProviders.has(provider)}
@@ -166,11 +215,17 @@ export function ProjectInstructions({ projectId, projectPath, onChanged }: Proje
             })}
           </div>
 
-          {providers.length > 1 && (
+          {providers.length > 1 && (hasPendingProviderSync || syncingAll) && (
             <div className="flex items-center justify-end">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button data-testid="instructions-push-all" size="sm" onClick={handleSyncAll} disabled={syncingAll || !!syncingProvider}>
+                  <Button
+                    data-testid="instructions-push-all"
+                    size="sm"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={handleSyncAll}
+                    disabled={syncingAll || !!syncingProvider}
+                  >
                     {syncingAll && <Loader2 className="size-3.5 animate-spin" />}
                     Config → All Files
                   </Button>

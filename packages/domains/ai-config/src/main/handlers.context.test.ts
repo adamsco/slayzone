@@ -38,6 +38,48 @@ describe('ai-config:discover-context-files', () => {
   })
 })
 
+describe('ai-config:get-context-tree', () => {
+  test('marks disk-only skill files as unmanaged', () => {
+    const fixture = createProjectFixture('context-tree-unmanaged-skill')
+    const diskOnlyPath = path.join(fixture.projectPath, '.agents/skills/disk-only-skill/SKILL.md')
+    fs.mkdirSync(path.dirname(diskOnlyPath), { recursive: true })
+    fs.writeFileSync(diskOnlyPath, '# disk only')
+
+    const entries = h.invoke('ai-config:get-context-tree', fixture.projectPath, fixture.projectId) as Array<{
+      relativePath: string
+      linkedItemId: string | null
+      syncHealth: string
+      syncReason: string | null
+    }>
+    const found = entries.find((entry) => entry.relativePath === '.agents/skills/disk-only-skill/SKILL.md')
+    expect(found).toBeTruthy()
+    expect(found!.linkedItemId).toBeNull()
+    expect(found!.syncHealth).toBe('unmanaged')
+    expect(found!.syncReason).toBe('not_linked')
+  })
+
+  test('discovers unmanaged skill files for non-claude/codex providers', () => {
+    const fixture = createProjectFixture('context-tree-unmanaged-cursor-skill')
+    const diskOnlyPath = path.join(fixture.projectPath, '.cursor/skills/disk-only-cursor-skill/SKILL.md')
+    fs.mkdirSync(path.dirname(diskOnlyPath), { recursive: true })
+    fs.writeFileSync(diskOnlyPath, '# cursor disk only')
+
+    const entries = h.invoke('ai-config:get-context-tree', fixture.projectPath, fixture.projectId) as Array<{
+      relativePath: string
+      provider?: string
+      linkedItemId: string | null
+      syncHealth: string
+      syncReason: string | null
+    }>
+    const found = entries.find((entry) => entry.relativePath === '.cursor/skills/disk-only-cursor-skill/SKILL.md')
+    expect(found).toBeTruthy()
+    expect(found!.provider).toBe('cursor')
+    expect(found!.linkedItemId).toBeNull()
+    expect(found!.syncHealth).toBe('unmanaged')
+    expect(found!.syncReason).toBe('not_linked')
+  })
+})
+
 describe('ai-config:read-context-file', () => {
   test('reads file content', () => {
     const content = h.invoke('ai-config:read-context-file', path.join(root, 'CLAUDE.md'), root)
@@ -91,9 +133,9 @@ describe('ai-config:load-global-item', () => {
     const result = h.invoke('ai-config:load-global-item', {
       projectId, projectPath: root, itemId: item.id,
       providers: ['claude'], manualPath: '.claude/skills/manual/deploy.md'
-    }) as { relativePath: string; syncStatus: string }
+    }) as { relativePath: string; syncHealth: string }
     expect(result.relativePath).toBe('.claude/skills/manual/deploy.md')
-    expect(result.syncStatus).toBe('synced')
+    expect(result.syncHealth).toBe('synced')
     expect(fs.readFileSync(path.join(root, '.claude/skills/manual/deploy.md'), 'utf-8')).toBe('# Deploy skill')
   })
 
@@ -107,6 +149,36 @@ describe('ai-config:load-global-item', () => {
       providers: ['codex']
     })
     expect(fs.readFileSync(path.join(root, '.agents/skills/codex-skill/SKILL.md'), 'utf-8')).toBe('# Codex skill')
+  })
+
+  test('uses selected provider semantics for manual path links', () => {
+    const fixture = createProjectFixture('manual-path-codex-provider')
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'manual-codex',
+      content: '# Manual codex skill'
+    }) as { id: string }
+
+    const result = h.invoke('ai-config:load-global-item', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      itemId: item.id,
+      providers: ['codex'],
+      manualPath: '.claude/skills/manual/manual-codex.md'
+    }) as { relativePath: string; provider?: string; syncHealth: string }
+
+    expect(result.relativePath).toBe('.claude/skills/manual/manual-codex.md')
+    expect(result.provider).toBe('codex')
+    expect(result.syncHealth).toBe('synced')
+    expect(fs.readFileSync(path.join(fixture.projectPath, '.claude/skills/manual/manual-codex.md'), 'utf-8')).toBe('# Manual codex skill')
+    const selections = h.invoke('ai-config:list-project-selections', fixture.projectId) as Array<{
+      provider: string
+      target_path: string
+    }>
+    const found = selections.find((entry) => entry.target_path === '.claude/skills/manual/manual-codex.md')
+    expect(found).toBeTruthy()
+    expect(found!.provider).toBe('codex')
   })
 })
 
@@ -128,9 +200,9 @@ describe('ai-config:sync-linked-file', () => {
     h.invoke('ai-config:update-item', { id: item.id, content: 'updated content' })
 
     const result = h.invoke('ai-config:sync-linked-file', projectId, root, item.id) as {
-      syncStatus: string
+      syncHealth: string
     }
-    expect(result.syncStatus).toBe('synced')
+    expect(result.syncHealth).toBe('synced')
     expect(fs.readFileSync(path.join(root, '.claude/skills/manual/sync-test.md'), 'utf-8')).toBe('updated content')
   })
 
@@ -298,11 +370,12 @@ describe('ai-config:save-root-instructions', () => {
   test('writes to provider dirs and returns synced status', () => {
     const result = h.invoke('ai-config:save-root-instructions', projectId, root, '# Project rules') as {
       content: string
-      providerStatus: Record<string, string>
+      providerHealth: Record<string, { health: string; reason: string | null }>
     }
     expect(result.content).toBe('# Project rules')
     // Claude should be synced (it's enabled)
-    expect(result.providerStatus.claude).toBe('synced')
+    expect(result.providerHealth.claude.health).toBe('synced')
+    expect(result.providerHealth.claude.reason).toBeNull()
     // File should exist on disk in project root
     expect(fs.existsSync(path.join(root, 'CLAUDE.md'))).toBe(true)
   })
@@ -312,10 +385,11 @@ describe('ai-config:get-root-instructions', () => {
   test('returns content and provider status', () => {
     const result = h.invoke('ai-config:get-root-instructions', projectId, root) as {
       content: string
-      providerStatus: Record<string, string>
+      providerHealth: Record<string, { health: string; reason: string | null }>
     }
     expect(result.content).toBe('# Project rules')
-    expect(result.providerStatus.claude).toBe('synced')
+    expect(result.providerHealth.claude.health).toBe('synced')
+    expect(result.providerHealth.claude.reason).toBeNull()
   })
 })
 
@@ -466,13 +540,14 @@ describe('ai-config:get-project-skills-status', () => {
 
     const results = h.invoke('ai-config:get-project-skills-status', projectId, root) as {
       item: { id: string; slug: string }
-      providers: Record<string, { path: string; status: string }>
+      providers: Record<string, { path: string; syncHealth: string; syncReason: string | null }>
     }[]
     expect(results.length).toBeGreaterThan(0)
     const found = results.find(r => r.item.id === skill.id)
     expect(found).toBeTruthy()
     expect(found!.providers.claude).toBeTruthy()
-    expect(found!.providers.claude.status).toBe('synced')
+    expect(found!.providers.claude.syncHealth).toBe('synced')
+    expect(found!.providers.claude.syncReason).toBeNull()
   })
 
   test('detects out-of-sync skill', () => {
@@ -480,11 +555,78 @@ describe('ai-config:get-project-skills-status', () => {
     fs.writeFileSync(path.join(root, '.claude/skills/manual/status-skill.md'), '# CHANGED')
     const results = h.invoke('ai-config:get-project-skills-status', projectId, root) as {
       item: { slug: string }
-      providers: Record<string, { status: string }>
+      providers: Record<string, { syncHealth: string; syncReason: string | null }>
     }[]
     const found = results.find(r => r.item.slug === 'status-skill')
     expect(found).toBeTruthy()
-    expect(found!.providers.claude.status).toBe('out_of_sync')
+    expect(found!.providers.claude.syncHealth).toBe('stale')
+    expect(found!.providers.claude.syncReason).toBe('external_edit')
+  })
+
+  test('marks all linked providers stale after skill body edit', () => {
+    const fixture = createProjectFixture('skills-status-body-edit')
+    h.invoke('ai-config:set-project-providers', fixture.projectId, ['claude', 'codex'])
+
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'status-body-edit',
+      content: '# Body v1\n\nOriginal body\n'
+    }) as { id: string }
+
+    h.invoke('ai-config:load-global-item', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      itemId: item.id,
+      providers: ['claude', 'codex']
+    })
+
+    h.invoke('ai-config:update-item', {
+      id: item.id,
+      content: '# Body v2\n\nChanged body\n'
+    })
+
+    const results = h.invoke('ai-config:get-project-skills-status', fixture.projectId, fixture.projectPath) as Array<{
+      item: { id: string }
+      providers: Record<string, { syncHealth: string; syncReason: string | null }>
+    }>
+    const found = results.find((entry) => entry.item.id === item.id)
+    expect(found).toBeTruthy()
+    expect(found!.providers.claude.syncHealth).toBe('stale')
+    expect(found!.providers.codex.syncHealth).toBe('stale')
+  })
+
+  test('frontmatter-only metadata changes affect claude skill files while codex body stays synced', () => {
+    const fixture = createProjectFixture('skills-status-frontmatter-edit')
+    h.invoke('ai-config:set-project-providers', fixture.projectId, ['claude', 'codex'])
+
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'status-frontmatter-edit',
+      content: '# Shared body\n\nSame body\n'
+    }) as { id: string }
+
+    h.invoke('ai-config:load-global-item', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      itemId: item.id,
+      providers: ['claude', 'codex']
+    })
+
+    h.invoke('ai-config:update-item', {
+      id: item.id,
+      content: '---\nfoo: bar\n---\n\n# Shared body\n\nSame body\n'
+    })
+
+    const results = h.invoke('ai-config:get-project-skills-status', fixture.projectId, fixture.projectPath) as Array<{
+      item: { id: string }
+      providers: Record<string, { syncHealth: string; syncReason: string | null }>
+    }>
+    const found = results.find((entry) => entry.item.id === item.id)
+    expect(found).toBeTruthy()
+    expect(found!.providers.claude.syncHealth).toBe('stale')
+    expect(found!.providers.codex.syncHealth).toBe('synced')
   })
 })
 
@@ -598,6 +740,44 @@ describe('ai-config:sync-all', () => {
     }) as { written: Array<{ provider: string }> }
 
     expect(result.written.some((entry) => entry.provider === 'claude')).toBe(true)
+  })
+
+  test('after pulling one provider, sync-all updates other linked providers without false conflicts', () => {
+    const fixture = createProjectFixture('sync-all-after-pull')
+    h.invoke('ai-config:set-project-providers', fixture.projectId, ['claude', 'codex'])
+
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'sync-after-pull',
+      content: '# baseline\n'
+    }) as { id: string }
+
+    h.invoke('ai-config:load-global-item', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      itemId: item.id,
+      providers: ['claude', 'codex']
+    })
+
+    const claudePath = path.join(fixture.projectPath, '.claude/skills/sync-after-pull/SKILL.md')
+    const codexPath = path.join(fixture.projectPath, '.agents/skills/sync-after-pull/SKILL.md')
+    fs.writeFileSync(claudePath, '---\nname: modified-on-disk\n---\n# pulled body\n')
+
+    h.invoke('ai-config:pull-provider-skill', fixture.projectId, fixture.projectPath, 'claude', item.id)
+    const result = h.invoke('ai-config:sync-all', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      providers: ['claude', 'codex']
+    }) as {
+      written: Array<{ path: string; provider: string }>
+      conflicts: Array<{ path: string; provider: string; reason: string }>
+    }
+
+    expect(result.conflicts.length).toBe(0)
+    expect(result.written.some((entry) => entry.provider === 'claude' && entry.path === '.claude/skills/sync-after-pull/SKILL.md')).toBe(true)
+    expect(result.written.some((entry) => entry.provider === 'codex' && entry.path === '.agents/skills/sync-after-pull/SKILL.md')).toBe(true)
+    expect(fs.readFileSync(codexPath, 'utf-8')).toBe('# pulled body\n')
   })
 
   test('prunes unmanaged skills and disabled-provider MCP configs when enabled', () => {

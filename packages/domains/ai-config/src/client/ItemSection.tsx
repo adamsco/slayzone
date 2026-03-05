@@ -5,16 +5,17 @@ import {
 } from 'lucide-react'
 import {
   Button, IconButton, Input, Label,
-  Tabs, TabsContent, TabsList, TabsTrigger,
   Textarea, Tooltip, TooltipContent, TooltipTrigger, cn, toast
 } from '@slayzone/ui'
 import type {
   AiConfigItem, AiConfigItemType, CliProvider,
-  ProjectSkillStatus, ProviderSyncStatus
+  ProjectSkillStatus, SyncHealth
 } from '../shared'
+import type { GlobalContextManagerSection } from './ContextManagerSettings'
 import { PROVIDER_PATHS } from '../shared/provider-registry'
 import { AddItemPicker } from './AddItemPicker'
 import { StatusBadge, ProviderFileCard } from './SyncComponents'
+import { aggregateProviderSyncHealth } from './sync-health'
 
 // ============================================================
 // Types & Helpers
@@ -24,30 +25,61 @@ interface ItemSectionProps {
   type: AiConfigItemType
   linkedItems: ProjectSkillStatus[]
   localItems: AiConfigItem[]
+  unmanagedItems: UnmanagedSkillRow[]
   enabledProviders: CliProvider[]
   projectId: string
   projectPath: string
+  onOpenGlobalAiConfig?: (section: GlobalContextManagerSection) => void
   onChanged: () => void
 }
 
 interface ProviderRow {
   provider: CliProvider
   path: string
-  status: ProviderSyncStatus
+  syncHealth: SyncHealth
+}
+
+export interface UnmanagedSkillRow {
+  slug: string
+  locations: Array<{
+    path: string
+    relativePath: string
+    provider?: CliProvider
+  }>
 }
 
 function providerSupportsType(provider: CliProvider): boolean {
   return !!PROVIDER_PATHS[provider]?.skillsDir
 }
 
-function aggregateStatus(
-  providers: Partial<Record<CliProvider, { status: ProviderSyncStatus }>>
-): ProviderSyncStatus {
-  const statuses = Object.values(providers).map(p => p?.status).filter(Boolean) as ProviderSyncStatus[]
-  if (statuses.length === 0) return 'not_synced'
-  if (statuses.every(s => s === 'synced')) return 'synced'
-  if (statuses.some(s => s === 'out_of_sync')) return 'out_of_sync'
-  return 'not_synced'
+function normalizeSlug(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'untitled'
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function toProjectRelativePath(filePath: string, projectPath: string): string {
+  const normalizedFile = filePath.replace(/\\/g, '/')
+  const normalizedProject = projectPath.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (!normalizedFile.startsWith(`${normalizedProject}/`)) return filePath
+  return normalizedFile.slice(normalizedProject.length + 1)
+}
+
+function renameUnmanagedSkillPath(filePath: string, oldSlug: string, newSlug: string): string | null {
+  const normalizedOldSlug = escapeRegExp(oldSlug)
+  const skillPathPattern = new RegExp(`[\\\\/]${normalizedOldSlug}[\\\\/]SKILL\\.md$`)
+  if (skillPathPattern.test(filePath)) {
+    return filePath.replace(skillPathPattern, `${filePath.includes('\\') ? '\\\\' : '/'}${newSlug}${filePath.includes('\\') ? '\\\\' : '/'}SKILL.md`)
+  }
+
+  const legacyPathPattern = new RegExp(`[\\\\/]${normalizedOldSlug}\\.md$`)
+  if (legacyPathPattern.test(filePath)) {
+    return filePath.replace(legacyPathPattern, `${filePath.includes('\\') ? '\\\\' : '/'}${newSlug}.md`)
+  }
+
+  return null
 }
 
 // ============================================================
@@ -85,12 +117,17 @@ function useSkillItem({
   }, [item.content, item.slug])
 
   const providerRows: ProviderRow[] = enabledProviders
-    .filter(p => providerSupportsType(p))
+    .filter(p => {
+      if (!providerSupportsType(p)) return false
+      if (isLocal) return true
+      const info = providers[p]
+      return info?.syncReason !== 'not_linked'
+    })
     .map(p => {
       const info = providers[p]
       const path = info?.path ?? `${PROVIDER_PATHS[p]?.skillsDir}/${item.slug}/SKILL.md`
-      const status = info?.status ?? 'not_synced'
-      return { provider: p, path, status }
+      const syncHealth = info?.syncHealth ?? 'not_synced'
+      return { provider: p, path, syncHealth }
     })
 
   const saveContent = useCallback(async (text: string) => {
@@ -209,27 +246,37 @@ function useSkillItem({
 }
 
 // ============================================================
-// Skill item detail (tabbed: Content | Sync)
+// Skill item detail
 // ============================================================
 
-function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId, projectPath, onChanged, onRemove }: {
+function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId, projectPath, onChanged, onRemove, onGoToGlobal }: {
   item: AiConfigItem; providers: ProjectSkillStatus['providers']; enabledProviders: CliProvider[]
   isLocal: boolean; projectId: string; projectPath: string; onChanged: () => void
   onRemove: () => void
+  onGoToGlobal?: () => void
 }) {
   const sk = useSkillItem({ item, providers, enabledProviders, isLocal, projectId, projectPath, onChanged })
   const [expanded, setExpanded] = useState(false)
-  const status = isLocal ? 'not_synced' as ProviderSyncStatus : aggregateStatus(providers)
+  const status = aggregateProviderSyncHealth(providers)
+  const hasPendingProviderSync = sk.providerRows.some((row) => row.syncHealth !== 'synced')
+
+  const handleToggleExpanded = () => setExpanded((prev) => !prev)
 
   return (
-    <div data-testid={`project-context-item-skill-${item.slug}`}>
+    <div
+      data-testid={`project-context-item-skill-${item.slug}`}
+      className={cn(
+        'rounded-md border overflow-hidden',
+        expanded && 'border-primary/30'
+      )}
+    >
       {/* Collapsed row */}
       <div
         className={cn(
-          'flex items-center gap-2 rounded-md border px-3 py-2 transition-colors cursor-pointer',
-          expanded ? 'bg-muted/50 border-primary/30' : 'hover:bg-muted/30'
+          'flex items-center gap-2 px-3 py-2 transition-colors cursor-pointer',
+          expanded ? 'border-b border-primary/20' : 'hover:bg-muted/30'
         )}
-        onClick={() => setExpanded(!expanded)}
+        onClick={handleToggleExpanded}
       >
         {expanded
           ? <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
@@ -239,7 +286,7 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
           {item.slug}
           {isLocal && <span className="ml-1.5 font-sans text-[10px] text-muted-foreground">(local)</span>}
         </span>
-        <StatusBadge status={status} />
+        <StatusBadge syncHealth={status} />
         <IconButton
           aria-label="Remove skill"
           size="icon-sm" variant="ghost"
@@ -250,107 +297,351 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
         </IconButton>
       </div>
 
-      {/* Expanded: filename + tabs */}
+      {/* Expanded: stacked edit + sync sections */}
       {expanded && (
-        <div className="mt-1 rounded-lg border bg-muted/20 p-4 space-y-3">
-          <Tabs defaultValue="content">
-            {/* Filename + tabs on same row */}
-            <div className="flex items-end gap-3">
-              <div className="flex-1 min-w-0 space-y-1">
-                <Label className="text-xs text-muted-foreground">Filename</Label>
+        <div className="p-4 space-y-3">
+          <div
+            data-testid={`skill-edit-section-${item.slug}`}
+            className="space-y-3"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-lg font-semibold leading-tight">Edit</p>
+              {!sk.isLocal && (
                 <div className="flex items-center gap-2">
-                  <Input
-                    data-testid="skill-detail-filename"
-                    className="font-mono text-xs"
-                    value={sk.slug}
-                    onChange={(e) => sk.setSlug(e.target.value)}
-                  />
-                  {sk.slugDirty && (
-                    <Button data-testid="skill-detail-rename" size="sm" onClick={sk.handleSlugSave} disabled={sk.savingSlug}>
-                      {sk.savingSlug ? 'Renaming...' : 'Rename'}
+                  {onGoToGlobal && (
+                    <Button
+                      data-testid={`skill-go-to-global-${item.slug}`}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-[11px]"
+                      onClick={onGoToGlobal}
+                    >
+                      Go to global
                     </Button>
                   )}
+                  <Button
+                    data-testid="skill-detail-revert"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[11px]"
+                    onClick={sk.handleRevert}
+                  >
+                    Revert to global
+                  </Button>
                 </div>
+              )}
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Filename</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  data-testid="skill-detail-filename"
+                  className="font-mono text-xs !bg-surface-1 dark:!bg-surface-1 shadow-none"
+                  value={sk.slug}
+                  onChange={(e) => sk.setSlug(e.target.value)}
+                />
+                {sk.slugDirty && (
+                  <Button data-testid="skill-detail-rename" size="sm" onClick={sk.handleSlugSave} disabled={sk.savingSlug}>
+                    {sk.savingSlug ? 'Renaming...' : 'Rename'}
+                  </Button>
+                )}
               </div>
-              <TabsList className="h-8 shrink-0">
-                <TabsTrigger value="content" className="text-xs px-3">Content</TabsTrigger>
-                <TabsTrigger value="sync" className="text-xs px-3">
-                  Sync
-                  {status === 'out_of_sync' && (
-                    <span className="ml-1.5 inline-flex size-2 rounded-full bg-amber-500" />
-                  )}
-                </TabsTrigger>
-              </TabsList>
             </div>
 
-            <TabsContent value="content" className="space-y-3">
+            <div className="space-y-3">
               <Textarea
                 data-testid="skill-detail-content"
-                className="min-h-[200px] resize-y font-mono text-sm"
+                className="min-h-[260px] max-h-[40vh] field-sizing-content resize-y font-mono text-sm !bg-surface-1 dark:!bg-surface-1 shadow-none"
                 placeholder="Write your skill content here."
                 value={sk.content}
                 onChange={sk.handleContentChange}
               />
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] text-muted-foreground">
-                  Source: {sk.isLocal ? 'Project only' : 'Global library'}
-                </span>
-                {!sk.isLocal && (
-                  <Button data-testid="skill-detail-revert" size="sm" variant="outline" onClick={sk.handleRevert}>
-                    Revert to global
+            </div>
+          </div>
+
+          <div
+            data-testid={`skill-sync-section-${item.slug}`}
+            className="space-y-3"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <p className="text-lg font-semibold leading-tight">Sync</p>
+                {status === 'stale' && (
+                  <span className="inline-flex size-2 rounded-full bg-amber-500" />
+                )}
+              </div>
+              {sk.providerRows.length > 1 && (hasPendingProviderSync || sk.syncingAll) && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      data-testid={`skill-push-all-${sk.item.slug}`}
+                      size="sm"
+                      className="h-7 px-2 text-[11px]"
+                      onClick={sk.handleSyncAll}
+                      disabled={sk.syncingAll || !!sk.syncingProvider}
+                    >
+                      {sk.syncingAll && <Loader2 className="size-3.5 animate-spin" />}
+                      Config → All Files
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Overwrite all provider skill files on disk</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+
+            {sk.providerRows.length > 0 ? (
+              <>
+                <div className="space-y-2">
+                  {sk.providerRows.map(row => (
+                    <ProviderFileCard
+                      key={row.provider}
+                      testIdPrefix="skill"
+                      testIdSuffix={sk.item.slug}
+                      provider={row.provider}
+                      path={row.path}
+                      syncHealth={row.syncHealth}
+                      isPushing={sk.syncingProvider === row.provider}
+                      isPulling={sk.pullingProvider === row.provider}
+                      isExpanded={sk.expandedProviders.has(row.provider)}
+                      syncingAll={sk.syncingAll}
+                      disk={sk.diskContents[row.provider]}
+                      expected={sk.expectedContents[row.provider]}
+                      onToggleExpand={() => sk.toggleExpanded(row.provider)}
+                      onPush={() => void sk.handlePush(row.provider)}
+                      onPull={() => void sk.handlePull(row.provider)}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground py-4 text-center">No providers configured</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function UnmanagedSkillItemRow({
+  item,
+  projectPath,
+  managingSlug,
+  onManage
+}: {
+  item: UnmanagedSkillRow
+  projectPath: string
+  managingSlug: string | null
+  onManage: (item: UnmanagedSkillRow) => Promise<void>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [committedSlug, setCommittedSlug] = useState(item.slug)
+  const [slug, setSlug] = useState(item.slug)
+  const [content, setContent] = useState('')
+  const [locations, setLocations] = useState(item.locations)
+  const [loadingContent, setLoadingContent] = useState(false)
+  const [savingSlug, setSavingSlug] = useState(false)
+  const [savingContent, setSavingContent] = useState(false)
+  const [slugDirty, setSlugDirty] = useState(false)
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    setCommittedSlug(item.slug)
+    setSlug(item.slug)
+    setLocations(item.locations)
+    setSlugDirty(false)
+  }, [item.slug, item.locations])
+
+  const loadPrimaryContent = useCallback(async () => {
+    const primary = locations[0]
+    if (!primary) {
+      setContent('')
+      return
+    }
+    setLoadingContent(true)
+    try {
+      const text = await window.api.aiConfig.readContextFile(primary.path, projectPath)
+      setContent(text)
+    } catch {
+      setContent('')
+    } finally {
+      setLoadingContent(false)
+    }
+  }, [locations, projectPath])
+
+  const saveContentToDisk = useCallback(async (text: string) => {
+    if (locations.length === 0) return
+    setSavingContent(true)
+    try {
+      await Promise.all(
+        locations.map((location) => window.api.aiConfig.writeContextFile(location.path, text, projectPath))
+      )
+    } catch {
+      toast.error('Failed to save unmanaged skill')
+    } finally {
+      setSavingContent(false)
+    }
+  }, [locations, projectPath])
+
+  const handleToggleExpanded = () => {
+    setExpanded((prev) => {
+      const next = !prev
+      if (next) void loadPrimaryContent()
+      return next
+    })
+  }
+
+  const handleContentChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
+    const text = e.target.value
+    setContent(text)
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => void saveContentToDisk(text), 800)
+  }
+
+  const handleSlugChange = (nextValue: string) => {
+    setSlug(nextValue)
+    setSlugDirty(normalizeSlug(nextValue) !== committedSlug)
+  }
+
+  const handleSlugSave = async () => {
+    const normalized = normalizeSlug(slug)
+    if (normalized === committedSlug) {
+      setSlug(normalized)
+      setSlugDirty(false)
+      return
+    }
+
+    setSavingSlug(true)
+    try {
+      const renamedLocations = locations.map((location) => {
+        const nextPath = renameUnmanagedSkillPath(location.path, committedSlug, normalized)
+        if (!nextPath) throw new Error(`Could not rename unmanaged path: ${location.relativePath}`)
+        return {
+          ...location,
+          path: nextPath,
+          relativePath: toProjectRelativePath(nextPath, projectPath)
+        }
+      })
+
+      for (let i = 0; i < locations.length; i += 1) {
+        await window.api.aiConfig.renameContextFile(locations[i].path, renamedLocations[i].path, projectPath)
+      }
+
+      setSlug(normalized)
+      setCommittedSlug(normalized)
+      setLocations(renamedLocations)
+      setSlugDirty(false)
+      toast.success(`Renamed unmanaged skill to ${normalized}.`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Rename failed')
+    } finally {
+      setSavingSlug(false)
+    }
+  }
+
+  const handleManageClick = async () => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current)
+      await saveContentToDisk(content)
+    }
+    await onManage({ slug: normalizeSlug(slug), locations })
+  }
+
+  const managing = managingSlug !== null && (
+    managingSlug === committedSlug ||
+    managingSlug === normalizeSlug(slug) ||
+    managingSlug === item.slug
+  )
+
+  useEffect(() => () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+  }, [])
+
+  return (
+    <div
+      data-testid={`project-context-item-unmanaged-skill-${item.slug}`}
+      className={cn(
+        'rounded-md border overflow-hidden',
+        expanded && 'border-primary/30'
+      )}
+    >
+      <div
+        className={cn(
+          'flex items-center gap-2 px-3 py-2 transition-colors cursor-pointer',
+          expanded ? 'border-b border-primary/20' : 'hover:bg-muted/30'
+        )}
+        onClick={handleToggleExpanded}
+      >
+        {expanded
+          ? <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+          : <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
+        }
+        <span className="flex-1 truncate font-mono text-xs">{committedSlug}</span>
+        <StatusBadge syncHealth="unmanaged" />
+      </div>
+      {expanded && (
+        <div className="p-4 space-y-3">
+          <div
+            data-testid={`unmanaged-skill-edit-section-${committedSlug}`}
+            className="space-y-3"
+          >
+            <p className="text-lg font-semibold leading-tight">Edit</p>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Filename</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  data-testid="skill-detail-filename"
+                  className="font-mono text-xs !bg-surface-1 dark:!bg-surface-1 shadow-none"
+                  value={slug}
+                  onChange={(e) => handleSlugChange(e.target.value)}
+                />
+                {slugDirty && (
+                  <Button data-testid="skill-detail-rename" size="sm" onClick={handleSlugSave} disabled={savingSlug}>
+                    {savingSlug ? 'Renaming...' : 'Rename'}
                   </Button>
                 )}
               </div>
-            </TabsContent>
+            </div>
 
-            <TabsContent value="sync" className="space-y-3">
-              {sk.providerRows.length > 0 ? (
-                <>
-                  <div className="space-y-2">
-                    {sk.providerRows.map(row => (
-                      <ProviderFileCard
-                        key={row.provider}
-                        testIdPrefix="skill"
-                        testIdSuffix={sk.item.slug}
-                        provider={row.provider}
-                        path={row.path}
-                        status={row.status}
-                        isPushing={sk.syncingProvider === row.provider}
-                        isPulling={sk.pullingProvider === row.provider}
-                        isExpanded={sk.expandedProviders.has(row.provider)}
-                        syncingAll={sk.syncingAll}
-                        disk={sk.diskContents[row.provider]}
-                        expected={sk.expectedContents[row.provider]}
-                        onToggleExpand={() => sk.toggleExpanded(row.provider)}
-                        onPush={() => void sk.handlePush(row.provider)}
-                        onPull={() => void sk.handlePull(row.provider)}
-                      />
-                    ))}
-                  </div>
-                  {sk.providerRows.length > 1 && (
-                    <div className="flex items-center justify-end">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            data-testid={`skill-push-all-${sk.item.slug}`}
-                            size="sm"
-                            onClick={sk.handleSyncAll}
-                            disabled={sk.syncingAll || !!sk.syncingProvider}
-                          >
-                            {sk.syncingAll && <Loader2 className="size-3.5 animate-spin" />}
-                            Config → All Files
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Overwrite all provider skill files on disk</TooltipContent>
-                      </Tooltip>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground py-4 text-center">No providers configured</p>
-              )}
-            </TabsContent>
-          </Tabs>
+            <div className="space-y-3">
+              <Textarea
+                data-testid="skill-detail-content"
+                className="min-h-[260px] max-h-[40vh] field-sizing-content resize-y font-mono text-sm !bg-surface-1 dark:!bg-surface-1 shadow-none"
+                placeholder="Write your skill content here."
+                value={loadingContent ? '' : content}
+                onChange={handleContentChange}
+              />
+              <div className="flex items-center justify-end">
+                {savingContent && (
+                  <span className="text-[11px] text-muted-foreground">Saving…</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div
+            data-testid={`unmanaged-skill-manage-section-${committedSlug}`}
+            className="space-y-3"
+          >
+            <p className="text-lg font-semibold leading-tight">Sync</p>
+            <div className="space-y-0.5">
+              {locations.map((location) => (
+                <p key={location.path} className="truncate font-mono text-[11px] text-muted-foreground">{location.relativePath}</p>
+              ))}
+            </div>
+            <div className="flex items-center justify-end">
+              <Button
+                size="sm"
+                variant="outline"
+                data-testid={`unmanaged-skill-manage-${committedSlug}`}
+                onClick={() => { void handleManageClick() }}
+                disabled={managing || slugDirty || savingSlug || savingContent}
+              >
+                {managing && <Loader2 className="size-3.5 animate-spin" />}
+                Turn into managed
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -362,15 +653,18 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
 // ============================================================
 
 export function ItemSection({
-  type, linkedItems, localItems, enabledProviders,
-  projectId, projectPath, onChanged
+  type, linkedItems, localItems, unmanagedItems, enabledProviders,
+  projectId, projectPath, onOpenGlobalAiConfig, onChanged
 }: ItemSectionProps) {
   const [showPicker, setShowPicker] = useState(false)
+  const [managingUnmanagedSlug, setManagingUnmanagedSlug] = useState<string | null>(null)
 
   const allItems = [
     ...localItems.map(item => ({ item, providers: {} as ProjectSkillStatus['providers'], isLocal: true })),
     ...linkedItems.map(s => ({ item: s.item, providers: s.providers, isLocal: s.item.scope === 'project' }))
   ]
+  const existingSlugs = new Set(allItems.map(({ item }) => item.slug))
+  const visibleUnmanagedItems = unmanagedItems.filter((item) => !existingSlugs.has(item.slug))
   const existingLinks = linkedItems.map(s => s.item.id)
 
   const handleRemove = async (itemId: string, isLocal: boolean) => {
@@ -382,6 +676,54 @@ export function ItemSection({
     onChanged()
   }
 
+  const handleManageUnmanaged = async (item: UnmanagedSkillRow) => {
+    setManagingUnmanagedSlug(item.slug)
+    let createdItemId: string | null = null
+    try {
+      const primaryLocation = item.locations[0]
+      if (!primaryLocation) throw new Error('No unmanaged file found')
+
+      const diskContent = await window.api.aiConfig.readContextFile(primaryLocation.path, projectPath)
+
+      const created = await window.api.aiConfig.createItem({
+        type: 'skill',
+        scope: 'project',
+        projectId,
+        slug: item.slug,
+        content: diskContent
+      })
+      createdItemId = created.id
+
+      const targetByProvider = new Map<CliProvider, string>()
+      for (const location of item.locations) {
+        if (!location.provider) continue
+        if (!targetByProvider.has(location.provider)) {
+          targetByProvider.set(location.provider, location.relativePath)
+        }
+      }
+      for (const [provider, targetPath] of targetByProvider.entries()) {
+        await window.api.aiConfig.setProjectSelection({
+          projectId,
+          itemId: created.id,
+          provider,
+          targetPath
+        })
+      }
+
+      toast.success(`Turned ${item.slug} into managed.`)
+      onChanged()
+    } catch (err) {
+      if (createdItemId) {
+        try {
+          await window.api.aiConfig.deleteItem(createdItemId)
+        } catch { /* ignore cleanup errors */ }
+      }
+      toast.error(err instanceof Error ? err.message : 'Failed to manage unmanaged skill')
+    } finally {
+      setManagingUnmanagedSlug(null)
+    }
+  }
+
   return (
     <div>
       <div className="space-y-1">
@@ -390,7 +732,17 @@ export function ItemSection({
             key={item.id}
             item={item} providers={providers} enabledProviders={enabledProviders}
             isLocal={isLocal} projectId={projectId} projectPath={projectPath}
+            onGoToGlobal={!isLocal && onOpenGlobalAiConfig ? () => onOpenGlobalAiConfig('skill') : undefined}
             onChanged={onChanged} onRemove={() => handleRemove(item.id, isLocal)}
+          />
+        ))}
+        {visibleUnmanagedItems.map((item) => (
+          <UnmanagedSkillItemRow
+            key={`unmanaged-${item.slug}`}
+            item={item}
+            projectPath={projectPath}
+            managingSlug={managingUnmanagedSlug}
+            onManage={handleManageUnmanaged}
           />
         ))}
       </div>

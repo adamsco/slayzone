@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, AlertCircle, Trash2, Sparkles } from 'lucide-react'
+import { Check, AlertCircle, Circle, Trash2, Sparkles } from 'lucide-react'
 import { cn } from '@slayzone/ui'
-import type { AiConfigItem, AiConfigItemType, CliProvider, ProjectSkillStatus, ProviderSyncStatus, UpdateAiConfigItemInput } from '../shared'
+import type { AiConfigItem, AiConfigItemType, CliProvider, ProjectSkillStatus, SyncHealth, UpdateAiConfigItemInput } from '../shared'
 import { PROVIDER_LABELS } from '../shared/provider-registry'
 import { GlobalItemPicker } from './GlobalItemPicker'
 import { ContextItemEditor } from './ContextItemEditor'
@@ -15,18 +15,25 @@ interface ProjectSkillsProps {
   onChanged?: () => void
 }
 
-function StatusBadge({ provider, status }: { provider: CliProvider; status: ProviderSyncStatus }) {
+function StatusBadge({ provider, syncHealth }: {
+  provider: CliProvider
+  syncHealth: SyncHealth
+}) {
+  const health = syncHealth
+  const isNotSynced = health === 'not_synced'
   return (
     <span
       className={cn(
         'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase',
-        status === 'synced' && 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
-        status === 'out_of_sync' && 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
-        status === 'not_synced' && 'bg-muted text-muted-foreground'
+        health === 'synced' && 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
+        health === 'stale' && 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+        health === 'unmanaged' && 'bg-muted text-muted-foreground',
+        isNotSynced && 'bg-muted text-muted-foreground'
       )}
     >
-      {status === 'synced' && <Check className="size-2.5" />}
-      {status === 'out_of_sync' && <AlertCircle className="size-2.5" />}
+      {health === 'synced' && <Check className="size-2.5" />}
+      {health === 'stale' && <AlertCircle className="size-2.5" />}
+      {health === 'unmanaged' && <Circle className="size-2.5" />}
       {PROVIDER_LABELS[provider]}
     </span>
   )
@@ -161,9 +168,9 @@ export function ProjectSkills({ projectId, projectPath, type, openPickerTrigger,
                 <p className="truncate font-mono text-sm">{item.slug}</p>
               </div>
               <div className="flex items-center gap-2">
-                {(Object.entries(providers) as Array<[CliProvider, { status: ProviderSyncStatus }]>).map(
-                  ([provider, { status }]) => (
-                    <StatusBadge key={provider} provider={provider} status={status} />
+                {(Object.entries(providers) as Array<[CliProvider, { syncHealth: SyncHealth }]>).map(
+                  ([provider, { syncHealth }]) => (
+                    <StatusBadge key={provider} provider={provider} syncHealth={syncHealth} />
                   )
                 )}
                 <button

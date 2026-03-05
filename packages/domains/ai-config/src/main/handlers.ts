@@ -20,7 +20,8 @@ import type {
   McpServerConfig,
   ProjectSkillStatus,
   ProviderFileContent,
-  ProviderSyncStatus,
+  SyncHealth,
+  SyncReason,
   RootInstructionsResult,
   SetAiConfigProjectSelectionInput,
   SyncAllInput,
@@ -49,6 +50,48 @@ const KNOWN_CONTEXT_FILES: Array<{ relative: string; name: string; category: Con
 
 function contentHash(content: string): string {
   return createHash('sha256').update(content).digest('hex')
+}
+
+function computeLinkedSyncState(filePath: string, expectedContent: string): {
+  syncHealth: SyncHealth
+  syncReason: SyncReason | null
+} {
+  if (!fs.existsSync(filePath)) {
+    return {
+      syncHealth: 'stale',
+      syncReason: 'missing_file'
+    }
+  }
+
+  const diskHash = contentHash(fs.readFileSync(filePath, 'utf-8'))
+  const expectedHash = contentHash(expectedContent)
+  if (diskHash === expectedHash) {
+    return {
+      syncHealth: 'synced',
+      syncReason: null
+    }
+  }
+
+  return {
+    syncHealth: 'stale',
+    syncReason: 'external_edit'
+  }
+}
+
+function computeUnlinkedSyncState(filePath: string): {
+  syncHealth: SyncHealth
+  syncReason: SyncReason
+} {
+  if (!fs.existsSync(filePath)) {
+    return {
+      syncHealth: 'not_synced',
+      syncReason: 'not_linked'
+    }
+  }
+  return {
+    syncHealth: 'unmanaged',
+    syncReason: 'not_linked'
+  }
 }
 
 function normalizeSlug(value: string): string {
@@ -119,12 +162,96 @@ function removeLegacySkillFileIfPresent(
   fs.unlinkSync(legacyFilePath)
 }
 
-function stripLeadingFrontmatter(content: string): string {
+interface ParsedFrontmatter {
+  frontmatter: Record<string, string>
+  body: string
+}
+
+interface CanonicalSkillMetadata {
+  frontmatter: Record<string, string>
+  explicitFrontmatter: boolean
+}
+
+interface CanonicalSkillDocument {
+  body: string
+  frontmatter: Record<string, string>
+  explicitFrontmatter: boolean
+}
+
+const SKILL_CANONICAL_METADATA_KEY = 'skillCanonical'
+
+function parseJsonObject(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // ignore parse errors and fallback to empty object
+  }
+  return {}
+}
+
+function parseYamlScalar(value: string): string {
+  const trimmed = value.trim()
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    const unquoted = trimmed.slice(1, -1)
+    return unquoted
+      .replace(/\\n/g, '\n')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\')
+  }
+  return trimmed
+}
+
+function parseLeadingFrontmatter(content: string): ParsedFrontmatter | null {
   const normalized = content.replace(/\r\n/g, '\n')
-  if (!normalized.startsWith('---\n')) return normalized
+  if (!normalized.startsWith('---\n')) return null
   const end = normalized.indexOf('\n---\n', 4)
-  if (end === -1) return normalized
-  return normalized.slice(end + '\n---\n'.length)
+  if (end === -1) return null
+
+  const block = normalized.slice(4, end)
+  const body = normalized.slice(end + '\n---\n'.length)
+  const frontmatter: Record<string, string> = {}
+  for (const line of block.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const match = trimmed.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/)
+    if (!match) continue
+    frontmatter[match[1]] = parseYamlScalar(match[2] ?? '')
+  }
+
+  return { frontmatter, body }
+}
+
+function readCanonicalSkillMetadata(metadataJson: string): CanonicalSkillMetadata | null {
+  const parsed = parseJsonObject(metadataJson)
+  const rawMeta = parsed[SKILL_CANONICAL_METADATA_KEY]
+  if (!rawMeta || typeof rawMeta !== 'object' || Array.isArray(rawMeta)) return null
+
+  const metaObj = rawMeta as Record<string, unknown>
+  const rawFrontmatter = metaObj.frontmatter
+  const frontmatter: Record<string, string> = {}
+  if (rawFrontmatter && typeof rawFrontmatter === 'object' && !Array.isArray(rawFrontmatter)) {
+    for (const [key, value] of Object.entries(rawFrontmatter as Record<string, unknown>)) {
+      if (typeof value === 'string') frontmatter[key] = value
+      else if (value !== undefined && value !== null) frontmatter[key] = String(value)
+    }
+  }
+
+  return {
+    frontmatter,
+    explicitFrontmatter: metaObj.explicitFrontmatter === true,
+  }
+}
+
+function writeCanonicalSkillMetadata(metadataJson: string, canonical: CanonicalSkillMetadata): string {
+  const parsed = parseJsonObject(metadataJson)
+  parsed[SKILL_CANONICAL_METADATA_KEY] = {
+    frontmatter: canonical.frontmatter,
+    explicitFrontmatter: canonical.explicitFrontmatter
+  }
+  return JSON.stringify(parsed)
 }
 
 function toTitleCaseFromSlug(slug: string): string {
@@ -137,22 +264,120 @@ function escapeYamlDoubleQuoted(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 }
 
-function getSyncedItemContent(provider: CliProvider, itemType: string, itemSlug: string, targetPath: string, itemContent: string): string {
-  if (itemType !== 'skill' || provider !== 'claude' || !targetPath.endsWith('/SKILL.md')) return itemContent
-
-  const body = stripLeadingFrontmatter(itemContent).replace(/^\n+/, '')
+function deriveSkillDescription(itemSlug: string, body: string): string {
   const firstContentLine = body.split('\n').find((line) => line.trim().length > 0)
   const headingText = firstContentLine?.replace(/^#+\s*/, '').trim() ?? ''
-  const description = headingText || toTitleCaseFromSlug(itemSlug)
-  const frontmatter = [
-    '---',
-    `name: ${itemSlug}`,
-    `description: "${escapeYamlDoubleQuoted(description)}"`,
-    '---',
-    ''
-  ].join('\n')
+  return headingText || toTitleCaseFromSlug(itemSlug)
+}
 
-  return body ? `${frontmatter}\n${body}` : `${frontmatter}\n`
+function normalizeCanonicalSkillForPersistence(
+  slug: string,
+  rawContent: string,
+  metadataJson: string,
+  previousSlug?: string
+): {
+  body: string
+  metadataJson: string
+} {
+  const normalizedContent = rawContent.replace(/\r\n/g, '\n')
+  const parsedFrontmatter = parseLeadingFrontmatter(normalizedContent)
+  const existingCanonical = readCanonicalSkillMetadata(metadataJson)
+
+  const body = (parsedFrontmatter?.body ?? normalizedContent).replace(/^\n+/, '')
+  const frontmatter = parsedFrontmatter
+    ? { ...parsedFrontmatter.frontmatter }
+    : { ...(existingCanonical?.frontmatter ?? {}) }
+
+  const previous = previousSlug ?? slug
+  if (!frontmatter.name || frontmatter.name === previous) {
+    frontmatter.name = slug
+  }
+  if (!frontmatter.description || frontmatter.description.trim().length === 0) {
+    frontmatter.description = deriveSkillDescription(slug, body)
+  }
+
+  const explicitFrontmatter = parsedFrontmatter
+    ? true
+    : (existingCanonical?.explicitFrontmatter ?? false)
+
+  return {
+    body,
+    metadataJson: writeCanonicalSkillMetadata(metadataJson, {
+      frontmatter,
+      explicitFrontmatter
+    })
+  }
+}
+
+function getCanonicalSkillDocument(itemSlug: string, itemContent: string, itemMetadataJson: string): CanonicalSkillDocument {
+  const normalizedContent = itemContent.replace(/\r\n/g, '\n')
+  const parsedFrontmatter = parseLeadingFrontmatter(normalizedContent)
+  const canonicalMeta = readCanonicalSkillMetadata(itemMetadataJson)
+  const body = (parsedFrontmatter?.body ?? normalizedContent).replace(/^\n+/, '')
+
+  const frontmatter = canonicalMeta
+    ? { ...canonicalMeta.frontmatter }
+    : { ...(parsedFrontmatter?.frontmatter ?? {}) }
+
+  if (!frontmatter.name || frontmatter.name.trim().length === 0) {
+    frontmatter.name = itemSlug
+  }
+  if (!frontmatter.description || frontmatter.description.trim().length === 0) {
+    frontmatter.description = deriveSkillDescription(itemSlug, body)
+  }
+
+  return {
+    body,
+    frontmatter,
+    explicitFrontmatter: canonicalMeta
+      ? canonicalMeta.explicitFrontmatter
+      : parsedFrontmatter !== null
+  }
+}
+
+function toYamlLine(key: string, value: string): string {
+  if (key === 'name' && /^[a-z0-9][a-z0-9._-]*$/i.test(value)) return `${key}: ${value}`
+  if (key === 'description') return `${key}: "${escapeYamlDoubleQuoted(value)}"`
+  if (/^[a-z0-9][a-z0-9._-]*$/i.test(value)) return `${key}: ${value}`
+  return `${key}: "${escapeYamlDoubleQuoted(value)}"`
+}
+
+function renderFrontmatter(frontmatter: Record<string, string>): string {
+  const lines: string[] = ['---']
+  if (frontmatter.name) lines.push(toYamlLine('name', frontmatter.name))
+  if (frontmatter.description) lines.push(toYamlLine('description', frontmatter.description))
+
+  for (const key of Object.keys(frontmatter).sort()) {
+    if (key === 'name' || key === 'description') continue
+    lines.push(toYamlLine(key, frontmatter[key] ?? ''))
+  }
+  lines.push('---', '')
+  return lines.join('\n')
+}
+
+function getSyncedItemContent(
+  provider: CliProvider,
+  itemType: string,
+  itemSlug: string,
+  targetPath: string,
+  itemContent: string,
+  itemMetadataJson = '{}'
+): string {
+  if (itemType !== 'skill') return itemContent.replace(/\r\n/g, '\n')
+
+  const canonical = getCanonicalSkillDocument(itemSlug, itemContent, itemMetadataJson)
+  if (provider !== 'claude' || !targetPath.endsWith('/SKILL.md')) return canonical.body
+
+  const frontmatter: Record<string, string> = canonical.explicitFrontmatter
+    ? { ...canonical.frontmatter, name: itemSlug }
+    : {
+        name: itemSlug,
+        description: canonical.frontmatter.description ?? deriveSkillDescription(itemSlug, canonical.body)
+      }
+  const renderedFrontmatter = renderFrontmatter(frontmatter)
+  const body = canonical.body
+
+  return body ? `${renderedFrontmatter}\n${body}` : `${renderedFrontmatter}\n`
 }
 
 function isPathAllowed(filePath: string, projectPath: string | null): boolean {
@@ -227,11 +452,17 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     }
     const projectId = input.scope === 'project' ? input.projectId! : null
     const slug = normalizeSlug(input.slug)
+    const rawContent = input.content ?? ''
+    const normalizedSkill = input.type === 'skill'
+      ? normalizeCanonicalSkillForPersistence(slug, rawContent, '{}')
+      : null
+    const persistedContent = normalizedSkill ? normalizedSkill.body : rawContent
+    const persistedMetadataJson = normalizedSkill ? normalizedSkill.metadataJson : '{}'
     try {
       db.prepare(`
         INSERT INTO ai_config_items (
           id, type, scope, project_id, name, slug, content, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', datetime('now'), datetime('now'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
       `).run(
         id,
         input.type,
@@ -239,7 +470,8 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
         projectId,
         slug,
         slug,
-        input.content ?? ''
+        persistedContent,
+        persistedMetadataJson
       )
     } catch (error) {
       if (isUniqueConstraintError(error)) {
@@ -254,13 +486,17 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
   ipcMain.handle('ai-config:update-item', (_event, input: UpdateAiConfigItemInput) => {
     const existing = db.prepare(
-      'SELECT id, type, scope, project_id FROM ai_config_items WHERE id = ?'
-    ).get(input.id) as Pick<AiConfigItem, 'id' | 'type' | 'scope' | 'project_id'> | undefined
+      'SELECT id, type, scope, project_id, slug, content, metadata_json FROM ai_config_items WHERE id = ?'
+    ).get(input.id) as Pick<AiConfigItem, 'id' | 'type' | 'scope' | 'project_id' | 'slug' | 'content' | 'metadata_json'> | undefined
     if (!existing) return null
 
     const fields: string[] = []
     const values: unknown[] = []
+    const nextType = input.type ?? existing.type
     const nextScope = input.scope ?? existing.scope
+    const nextSlug = input.slug !== undefined
+      ? normalizeSlug(input.slug)
+      : existing.slug
 
     if (input.type !== undefined) {
       fields.push('type = ?')
@@ -286,13 +522,26 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       values.push(input.projectId)
     }
     if (input.slug !== undefined) {
-      const slug = normalizeSlug(input.slug)
       fields.push('slug = ?')
-      values.push(slug)
+      values.push(nextSlug)
       fields.push('name = ?')
-      values.push(slug)
+      values.push(nextSlug)
     }
-    if (input.content !== undefined) {
+
+    let normalizedSkill: { body: string; metadataJson: string } | null = null
+    if (nextType === 'skill' && (input.content !== undefined || input.slug !== undefined || input.type !== undefined)) {
+      const rawContent = input.content !== undefined
+        ? input.content
+        : existing.content
+      normalizedSkill = normalizeCanonicalSkillForPersistence(nextSlug, rawContent, existing.metadata_json, existing.slug)
+    }
+
+    if (normalizedSkill) {
+      fields.push('content = ?')
+      values.push(normalizedSkill.body)
+      fields.push('metadata_json = ?')
+      values.push(normalizedSkill.metadataJson)
+    } else if (input.content !== undefined) {
       fields.push('content = ?')
       values.push(input.content)
     }
@@ -494,36 +743,47 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     // 1. Discovered known files
     for (const spec of KNOWN_CONTEXT_FILES) {
       const filePath = path.join(resolvedProject, spec.relative)
+      const exists = fs.existsSync(filePath)
       seenPaths.add(filePath)
       entries.push({
         path: filePath,
         relativePath: spec.relative,
-        exists: fs.existsSync(filePath),
+        exists,
         category: spec.category,
         linkedItemId: null,
-        syncStatus: 'local_only'
+        syncHealth: exists ? 'unmanaged' : 'not_synced',
+        syncReason: 'not_linked'
       })
     }
 
     // ~/.claude/CLAUDE.md
     const globalClaude = path.join(app.getPath('home'), '.claude', 'CLAUDE.md')
+    const globalClaudeExists = fs.existsSync(globalClaude)
     seenPaths.add(globalClaude)
     entries.push({
       path: globalClaude,
       relativePath: '~/.claude/CLAUDE.md',
-      exists: fs.existsSync(globalClaude),
+      exists: globalClaudeExists,
       category: 'claude',
       linkedItemId: null,
-      syncStatus: 'local_only'
+      syncHealth: globalClaudeExists ? 'unmanaged' : 'not_synced',
+      syncReason: 'not_linked'
     })
 
-    // 2. Scan skill directories for .md files
-    const scanDirs: Array<{ dir: string; relDir: string; category: 'skill'; provider?: CliProvider }> = [
-      { dir: path.join(resolvedProject, '.claude', 'skills'), relDir: '.claude/skills', category: 'skill', provider: 'claude' },
-      { dir: path.join(resolvedProject, '.agents', 'skills'), relDir: '.agents/skills', category: 'skill', provider: 'codex' },
-      // Backward compatibility with early local experiments.
-      { dir: path.join(resolvedProject, 'agents'), relDir: 'agents', category: 'skill' },
-    ]
+    // 2. Scan provider skill directories for markdown files.
+    const scanDirs: Array<{ dir: string; relDir: string; category: 'skill'; provider?: CliProvider }> = []
+    for (const [providerKey, mapping] of Object.entries(PROVIDER_PATHS)) {
+      if (!isConfigurableCliProvider(providerKey)) continue
+      if (!mapping.skillsDir) continue
+      scanDirs.push({
+        dir: path.join(resolvedProject, mapping.skillsDir),
+        relDir: mapping.skillsDir,
+        category: 'skill',
+        provider: providerKey as CliProvider
+      })
+    }
+    // Backward compatibility with early local experiments.
+    scanDirs.push({ dir: path.join(resolvedProject, 'agents'), relDir: 'agents', category: 'skill' })
     for (const { dir, relDir, category, provider: scanProvider } of scanDirs) {
       if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
         for (const filePath of collectMarkdownFilesRecursive(dir)) {
@@ -537,7 +797,8 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
             category,
             provider: scanProvider,
             linkedItemId: null,
-            syncStatus: 'local_only'
+            syncHealth: 'unmanaged',
+            syncReason: 'not_linked'
           })
         }
       }
@@ -545,18 +806,17 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
     // 3. Check project selections for linked global items
     const selections = db.prepare(`
-      SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug
+      SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug, i.metadata_json as item_metadata
       FROM ai_config_project_selections ps
       JOIN ai_config_items i ON i.id = ps.item_id
       WHERE ps.project_id = ?
-    `).all(projectId) as Array<AiConfigProjectSelection & { item_content: string; item_type: string; item_slug: string }>
+    `).all(projectId) as Array<AiConfigProjectSelection & { item_content: string; item_type: string; item_slug: string; item_metadata: string }>
 
     for (const sel of selections) {
       if (!isConfigurableCliProvider(sel.provider)) continue
       const provider = sel.provider as CliProvider
       const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, sel.item_type, sel.item_slug, sel.target_path)
-      const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content)
-      const expectedHash = contentHash(expectedContent)
+      const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
       const filePath = path.isAbsolute(effectiveTargetPath)
         ? effectiveTargetPath
         : path.join(resolvedProject, effectiveTargetPath)
@@ -564,19 +824,12 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       const existing = entries.find((e) => e.path === filePath)
       if (existing) {
         existing.linkedItemId = sel.item_id
-        if (fs.existsSync(filePath)) {
-          const fileContent = fs.readFileSync(filePath, 'utf-8')
-          existing.syncStatus = contentHash(fileContent) === expectedHash ? 'synced' : 'out_of_sync'
-        } else {
-          existing.syncStatus = 'out_of_sync'
-        }
+        const syncState = computeLinkedSyncState(filePath, expectedContent)
+        existing.syncHealth = syncState.syncHealth
+        existing.syncReason = syncState.syncReason
       } else {
         const exists = fs.existsSync(filePath)
-        let syncStatus: ContextTreeEntry['syncStatus'] = 'out_of_sync'
-        if (exists) {
-          const fileContent = fs.readFileSync(filePath, 'utf-8')
-          syncStatus = contentHash(fileContent) === expectedHash ? 'synced' : 'out_of_sync'
-        }
+        const syncState = computeLinkedSyncState(filePath, expectedContent)
         seenPaths.add(filePath)
         entries.push({
           path: filePath,
@@ -584,7 +837,8 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
           exists,
           category: 'custom',
           linkedItemId: sel.item_id,
-          syncStatus
+          syncHealth: syncState.syncHealth,
+          syncReason: syncState.syncReason
         })
       }
     }
@@ -601,8 +855,9 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
     // If manual path provided, write there (no provider-based logic)
     if (input.manualPath) {
+      const manualProvider = filterConfigurableCliProviders(input.providers)[0] ?? 'claude'
       const filePath = path.join(resolvedProject, input.manualPath)
-      const syncedContent = getSyncedItemContent('claude', item.type, item.slug, input.manualPath, item.content)
+      const syncedContent = getSyncedItemContent(manualProvider, item.type, item.slug, input.manualPath, item.content, item.metadata_json)
       const hash = contentHash(syncedContent)
       if (!isPathAllowed(filePath, input.projectPath)) throw new Error('Path not allowed')
       const dir = path.dirname(filePath)
@@ -611,15 +866,18 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
       db.prepare(`
         INSERT INTO ai_config_project_selections (id, project_id, item_id, provider, target_path, content_hash, selected_at)
-        VALUES (?, ?, ?, 'claude', ?, ?, datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(project_id, item_id, provider) DO UPDATE SET
           target_path = excluded.target_path, content_hash = excluded.content_hash, selected_at = datetime('now')
-      `).run(crypto.randomUUID(), input.projectId, input.itemId, input.manualPath, hash)
+      `).run(crypto.randomUUID(), input.projectId, input.itemId, manualProvider, input.manualPath, hash)
 
       entries.push({
         path: filePath, relativePath: input.manualPath, exists: true,
         category: 'skill',
-        linkedItemId: item.id, syncStatus: 'synced'
+        provider: manualProvider,
+        linkedItemId: item.id,
+        syncHealth: 'synced',
+        syncReason: null
       })
       return entries[0]
     }
@@ -630,7 +888,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       if (!relativePath) continue
 
       const filePath = path.join(resolvedProject, relativePath)
-      const syncedContent = getSyncedItemContent(provider, item.type, item.slug, relativePath, item.content)
+      const syncedContent = getSyncedItemContent(provider, item.type, item.slug, relativePath, item.content, item.metadata_json)
       const hash = contentHash(syncedContent)
       if (!isPathAllowed(filePath, input.projectPath)) continue
 
@@ -649,7 +907,9 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
         path: filePath, relativePath, exists: true,
         category: 'skill',
         provider,
-        linkedItemId: item.id, syncStatus: 'synced'
+        linkedItemId: item.id,
+        syncHealth: 'synced',
+        syncReason: null
       })
     }
 
@@ -659,25 +919,25 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
   ipcMain.handle('ai-config:sync-linked-file', (_event, projectId: string, projectPath: string, itemId: string, provider?: CliProvider) => {
     const rows = provider
       ? db.prepare(`
-        SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug
+        SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug, i.metadata_json as item_metadata
         FROM ai_config_project_selections ps
         JOIN ai_config_items i ON i.id = ps.item_id
         WHERE ps.project_id = ? AND ps.item_id = ? AND ps.provider = ?
       `).all(projectId, itemId, provider)
       : db.prepare(`
-        SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug
+        SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug, i.metadata_json as item_metadata
         FROM ai_config_project_selections ps
         JOIN ai_config_items i ON i.id = ps.item_id
         WHERE ps.project_id = ? AND ps.item_id = ?
       `).all(projectId, itemId)
 
-    const selections = rows as Array<AiConfigProjectSelection & { item_content: string; item_type: string; item_slug: string }>
+    const selections = rows as Array<AiConfigProjectSelection & { item_content: string; item_type: string; item_slug: string; item_metadata: string }>
 
     const resolvedProject = path.resolve(projectPath)
 
     if (selections.length === 0) {
       const localItem = db.prepare(`
-        SELECT id, project_id, scope, type, slug, content
+        SELECT id, project_id, scope, type, slug, content, metadata_json
         FROM ai_config_items
         WHERE id = ?
       `).get(itemId) as {
@@ -687,6 +947,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
         type: string
         slug: string
         content: string
+        metadata_json: string
       } | undefined
 
       const isProjectLocalItem = localItem
@@ -711,7 +972,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
         const relativePath = getSkillPath(providerId, localItem.slug)
         if (!relativePath) continue
 
-        const syncedContent = getSyncedItemContent(providerId, localItem.type, localItem.slug, relativePath, localItem.content)
+        const syncedContent = getSyncedItemContent(providerId, localItem.type, localItem.slug, relativePath, localItem.content, localItem.metadata_json)
         const filePath = path.join(resolvedProject, relativePath)
         if (!isPathAllowed(filePath, projectPath)) continue
 
@@ -736,7 +997,8 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
             category: 'skill',
             provider: providerId,
             linkedItemId: localItem.id,
-            syncStatus: 'synced'
+            syncHealth: 'synced',
+            syncReason: null
           }
         }
       }
@@ -756,7 +1018,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       if (!isConfigurableCliProvider(sel.provider)) continue
       const providerId = sel.provider as CliProvider
       const effectiveTargetPath = getCanonicalSelectionTargetPath(providerId, sel.item_type, sel.item_slug, sel.target_path)
-      const syncedContent = getSyncedItemContent(providerId, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content)
+      const syncedContent = getSyncedItemContent(providerId, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
       const filePath = path.isAbsolute(effectiveTargetPath)
         ? effectiveTargetPath
         : path.join(resolvedProject, effectiveTargetPath)
@@ -792,7 +1054,8 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
           exists: true,
           category: 'skill',
           linkedItemId: sel.item_id,
-          syncStatus: 'synced'
+          syncHealth: 'synced',
+          syncReason: null
         }
       }
     }
@@ -856,26 +1119,28 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
     const providers = getEnabledProviders(projectId)
     const resolvedProject = path.resolve(projectPath)
-    const providerStatus: Partial<Record<CliProvider, ProviderSyncStatus>> = {}
+    const providerHealth: Partial<Record<CliProvider, { health: SyncHealth; reason: SyncReason | null }>> = {}
 
     for (const provider of providers) {
       const rootPath = PROVIDER_PATHS[provider]?.rootInstructions
       if (!rootPath) continue
       const filePath = path.join(resolvedProject, rootPath)
       if (!item) {
-        providerStatus[provider] = fs.existsSync(filePath) ? 'out_of_sync' : 'not_synced'
+        if (fs.existsSync(filePath)) {
+          providerHealth[provider] = { health: 'unmanaged', reason: 'not_linked' }
+        } else {
+          providerHealth[provider] = { health: 'not_synced', reason: 'not_linked' }
+        }
         continue
       }
-      if (!fs.existsSync(filePath)) {
-        providerStatus[provider] = 'not_synced'
-        continue
+      const syncState = computeLinkedSyncState(filePath, item.content)
+      providerHealth[provider] = {
+        health: syncState.syncHealth,
+        reason: syncState.syncReason
       }
-      const diskHash = contentHash(fs.readFileSync(filePath, 'utf-8'))
-      const itemHash = contentHash(item.content)
-      providerStatus[provider] = diskHash === itemHash ? 'synced' : 'out_of_sync'
     }
 
-    return { content: item?.content ?? '', providerStatus }
+    return { content: item?.content ?? '', providerHealth }
   }
 
   ipcMain.handle('ai-config:get-root-instructions', (_event, projectId: string, projectPath: string) => {
@@ -946,7 +1211,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     const hash = contentHash(content)
     const providers = getEnabledProviders(projectId)
     const resolvedProject = path.resolve(projectPath)
-    const providerStatus: Partial<Record<CliProvider, ProviderSyncStatus>> = {}
+    const providerHealth: Partial<Record<CliProvider, { health: SyncHealth; reason: SyncReason | null }>> = {}
 
     for (const provider of providers) {
       const rootPath = PROVIDER_PATHS[provider]?.rootInstructions
@@ -965,10 +1230,10 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
           target_path = excluded.target_path, content_hash = excluded.content_hash, selected_at = datetime('now')
       `).run(crypto.randomUUID(), projectId, itemId, provider, rootPath, hash)
 
-      providerStatus[provider] = 'synced'
+      providerHealth[provider] = { health: 'synced', reason: null }
     }
 
-    const result: RootInstructionsResult = { content, providerStatus }
+    const result: RootInstructionsResult = { content, providerHealth }
     return result
   })
 
@@ -1081,20 +1346,29 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
         const sel = sels.find(s => s.provider === provider)
         if (sel) {
           const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, sel.item_type, sel.item_slug, sel.target_path)
-          const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content)
+          const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
           const filePath = path.isAbsolute(effectiveTargetPath)
             ? effectiveTargetPath
             : path.join(resolvedProject, effectiveTargetPath)
-          let status: ProviderSyncStatus = 'not_synced'
-          if (fs.existsSync(filePath)) {
-            const diskHash = contentHash(fs.readFileSync(filePath, 'utf-8'))
-            const itemHash = contentHash(expectedContent)
-            status = diskHash === itemHash ? 'synced' : 'out_of_sync'
+          const syncState = computeLinkedSyncState(filePath, expectedContent)
+          providerMap[provider] = {
+            path: effectiveTargetPath,
+            syncHealth: syncState.syncHealth,
+            syncReason: syncState.syncReason
           }
-          providerMap[provider] = { path: effectiveTargetPath, status }
         } else {
-          // No selection for this provider yet
-          providerMap[provider] = { path: '', status: 'not_synced' }
+          const defaultPath = getSkillPath(provider, item.slug) ?? ''
+          if (!defaultPath) {
+            providerMap[provider] = { path: '', syncHealth: 'not_synced', syncReason: 'provider_disabled' }
+            continue
+          }
+          const filePath = path.join(resolvedProject, defaultPath)
+          const unlinkedState = computeUnlinkedSyncState(filePath)
+          providerMap[provider] = {
+            path: defaultPath,
+            syncHealth: unlinkedState.syncHealth,
+            syncReason: unlinkedState.syncReason
+          }
         }
       }
 
@@ -1120,19 +1394,29 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       const sel = selections.find(s => s.provider === provider)
       if (sel) {
         const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, item.type, item.slug, sel.target_path)
-        const expectedContent = getSyncedItemContent(provider, item.type, item.slug, effectiveTargetPath, item.content)
+        const expectedContent = getSyncedItemContent(provider, item.type, item.slug, effectiveTargetPath, item.content, item.metadata_json)
         const filePath = path.isAbsolute(effectiveTargetPath)
           ? effectiveTargetPath
           : path.join(resolvedProject, effectiveTargetPath)
-        let status: ProviderSyncStatus = 'not_synced'
-        if (fs.existsSync(filePath)) {
-          const diskHash = contentHash(fs.readFileSync(filePath, 'utf-8'))
-          const itemHash = contentHash(expectedContent)
-          status = diskHash === itemHash ? 'synced' : 'out_of_sync'
+        const syncState = computeLinkedSyncState(filePath, expectedContent)
+        providerMap[provider] = {
+          path: effectiveTargetPath,
+          syncHealth: syncState.syncHealth,
+          syncReason: syncState.syncReason
         }
-        providerMap[provider] = { path: effectiveTargetPath, status }
       } else {
-        providerMap[provider] = { path: '', status: 'not_synced' }
+        const defaultPath = getSkillPath(provider, item.slug) ?? ''
+        if (!defaultPath) {
+          providerMap[provider] = { path: '', syncHealth: 'not_synced', syncReason: 'provider_disabled' }
+          continue
+        }
+        const filePath = path.join(resolvedProject, defaultPath)
+        const unlinkedState = computeUnlinkedSyncState(filePath)
+        providerMap[provider] = {
+          path: defaultPath,
+          syncHealth: unlinkedState.syncHealth,
+          syncReason: unlinkedState.syncReason
+        }
       }
     }
 
@@ -1159,7 +1443,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     const skillPath = getSkillPath(provider, item.slug)
     if (!skillPath) return item.content
 
-    return getSyncedItemContent(provider, item.type, item.slug, skillPath, item.content)
+    return getSyncedItemContent(provider, item.type, item.slug, skillPath, item.content, item.metadata_json)
   })
 
   ipcMain.handle('ai-config:pull-provider-skill', (_event, projectId: string, projectPath: string, provider: CliProvider, itemId: string): ProjectSkillStatus => {
@@ -1174,23 +1458,29 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     if (!fs.existsSync(filePath)) throw new Error('Skill file does not exist')
 
     const diskContent = fs.readFileSync(filePath, 'utf-8')
-    const strippedContent = stripLeadingFrontmatter(diskContent).replace(/^\n+/, '')
+    const normalized = normalizeCanonicalSkillForPersistence(
+      item.slug,
+      diskContent,
+      item.metadata_json,
+      item.slug
+    )
 
-    db.prepare("UPDATE ai_config_items SET content = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(strippedContent, itemId)
+    db.prepare("UPDATE ai_config_items SET content = ?, metadata_json = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(normalized.body, normalized.metadataJson, itemId)
 
-    // Update content_hash for ALL provider selections so status is consistent.
-    // After pulling, the new expected content for each provider is derived from strippedContent.
-    const selections = db.prepare(
-      'SELECT id, provider, target_path FROM ai_config_project_selections WHERE project_id = ? AND item_id = ?'
-    ).all(projectId, itemId) as Array<{ id: string; provider: string; target_path: string }>
-
-    for (const sel of selections) {
-      if (!isConfigurableCliProvider(sel.provider)) continue
-      const effectiveTargetPath = getCanonicalSelectionTargetPath(sel.provider as CliProvider, item.type, item.slug, sel.target_path)
-      const expectedContent = getSyncedItemContent(sel.provider as CliProvider, item.type, item.slug, effectiveTargetPath, strippedContent)
-      db.prepare('UPDATE ai_config_project_selections SET content_hash = ? WHERE id = ?')
-        .run(contentHash(expectedContent), sel.id)
+    // Update baseline only for the pulled provider.
+    // Other providers keep their baseline hashes so a subsequent sync-all can overwrite them
+    // without false external-edit conflicts.
+    const pulledSelection = db.prepare(
+      'SELECT id, target_path FROM ai_config_project_selections WHERE project_id = ? AND item_id = ? AND provider = ?'
+    ).get(projectId, itemId, provider) as { id: string; target_path: string } | undefined
+    if (pulledSelection) {
+      const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, item.type, item.slug, pulledSelection.target_path)
+      db.prepare(`
+        UPDATE ai_config_project_selections
+        SET target_path = ?, content_hash = ?, selected_at = datetime('now')
+        WHERE id = ?
+      `).run(effectiveTargetPath, contentHash(diskContent), pulledSelection.id)
     }
 
     return recomputeSingleSkillStatus(projectId, projectPath, itemId)
@@ -1256,7 +1546,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
     // Check skills
     const selections = db.prepare(`
-      SELECT ps.provider, ps.target_path, ps.content_hash, i.content as item_content, i.type as item_type, i.slug as item_slug
+      SELECT ps.provider, ps.target_path, ps.content_hash, i.content as item_content, i.type as item_type, i.slug as item_slug, i.metadata_json as item_metadata
       FROM ai_config_project_selections ps
       JOIN ai_config_items i ON i.id = ps.item_id
       WHERE ps.project_id = ? AND i.type = 'skill'
@@ -1267,6 +1557,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       item_content: string
       item_type: string
       item_slug: string
+      item_metadata: string
     }>
 
     for (const sel of selections) {
@@ -1274,7 +1565,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       if (!enabledSet.has(sel.provider as CliProvider)) continue
       const provider = sel.provider as CliProvider
       const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, sel.item_type, sel.item_slug, sel.target_path)
-      const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content)
+      const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
       const filePath = path.isAbsolute(effectiveTargetPath)
         ? effectiveTargetPath
         : path.join(resolvedProject, effectiveTargetPath)
@@ -1313,11 +1604,11 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
     // Get all selections for this project with item content
     const selections = (db.prepare(`
-      SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug
+      SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug, i.metadata_json as item_metadata
       FROM ai_config_project_selections ps
       JOIN ai_config_items i ON i.id = ps.item_id
       WHERE ps.project_id = ?
-    `).all(input.projectId) as Array<AiConfigProjectSelection & { item_content: string; item_type: string; item_slug: string }>)
+    `).all(input.projectId) as Array<AiConfigProjectSelection & { item_content: string; item_type: string; item_slug: string; item_metadata: string }>)
       .filter((sel) => isConfigurableCliProvider(sel.provider))
 
     const enabledSet = new Set(providers)
@@ -1339,7 +1630,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       if (!enabledSet.has(provider)) continue
 
       const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, sel.item_type, sel.item_slug, sel.target_path)
-      const syncedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content)
+      const syncedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
       const hash = contentHash(syncedContent)
       const filePath = path.isAbsolute(effectiveTargetPath)
         ? effectiveTargetPath
@@ -1387,10 +1678,10 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
     // Sync project-local items to all enabled provider paths that support the item type.
     const localItems = db.prepare(`
-      SELECT id, slug, content, type
+      SELECT id, slug, content, type, metadata_json
       FROM ai_config_items
       WHERE scope = 'project' AND project_id = ? AND type = 'skill'
-    `).all(input.projectId) as Array<{ id: string; slug: string; content: string; type: 'skill' }>
+    `).all(input.projectId) as Array<{ id: string; slug: string; content: string; type: 'skill'; metadata_json: string }>
 
     for (const item of localItems) {
       for (const provider of providers) {
@@ -1404,7 +1695,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
 
         const dir = path.dirname(filePath)
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-        const syncedContent = getSyncedItemContent(provider, item.type, item.slug, relativePath, item.content)
+        const syncedContent = getSyncedItemContent(provider, item.type, item.slug, relativePath, item.content, item.metadata_json)
         fs.writeFileSync(filePath, syncedContent, 'utf-8')
         removeLegacySkillFileIfPresent(provider, item.type, item.slug, relativePath, resolvedProject, input.projectPath)
         result.written.push({ path: relativePath, provider })
@@ -1512,17 +1803,17 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     const conflicts: SyncConflict[] = []
 
     const selections = db.prepare(`
-      SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug
+      SELECT ps.*, i.content as item_content, i.type as item_type, i.slug as item_slug, i.metadata_json as item_metadata
       FROM ai_config_project_selections ps
       JOIN ai_config_items i ON i.id = ps.item_id
       WHERE ps.project_id = ?
-    `).all(projectId) as Array<AiConfigProjectSelection & { item_content: string; item_type: string; item_slug: string }>
+    `).all(projectId) as Array<AiConfigProjectSelection & { item_content: string; item_type: string; item_slug: string; item_metadata: string }>
 
     for (const sel of selections) {
       if (!isConfigurableCliProvider(sel.provider)) continue
       const provider = sel.provider as CliProvider
       const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, sel.item_type, sel.item_slug, sel.target_path)
-      const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content)
+      const expectedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
       const filePath = path.isAbsolute(effectiveTargetPath)
         ? effectiveTargetPath
         : path.join(resolvedProject, effectiveTargetPath)
