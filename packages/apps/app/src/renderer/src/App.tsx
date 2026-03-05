@@ -1351,7 +1351,7 @@ function App(): React.JSX.Element {
                       className={
                         explodeMode
                           ? "rounded overflow-hidden border border-border min-h-0 relative"
-                          : `absolute inset-0 ${i !== activeTabIndex ? 'hidden' : ''}`
+                          : `absolute inset-0 ${i !== activeTabIndex ? 'invisible pointer-events-none' : 'z-10'}`
                       }
                     >
                         {tab.type === 'home' ? (

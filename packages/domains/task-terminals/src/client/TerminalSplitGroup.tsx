@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef } from 'react'
-import { Terminal } from '@slayzone/terminal'
+import { useState, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
+import { Terminal, type TerminalHandle } from '@slayzone/terminal'
 import type { CodeMode } from '@slayzone/terminal/shared'
 import type { TerminalTab } from '../shared/types'
 
@@ -25,17 +25,37 @@ interface PaneProps {
   onRetry?: () => void
 }
 
-interface TerminalSplitGroupProps {
-  panes: PaneProps[]
-  autoFocus?: boolean
+export interface TerminalSplitGroupHandle {
+  focus: (sessionId?: string) => void
 }
 
-export function TerminalSplitGroup({ panes, autoFocus }: TerminalSplitGroupProps) {
+interface TerminalSplitGroupProps {
+  panes: PaneProps[]
+  isActive?: boolean
+  onAttached?: (api: { focus: () => void }) => void
+}
+
+export const TerminalSplitGroup = forwardRef<TerminalSplitGroupHandle, TerminalSplitGroupProps>(function TerminalSplitGroup({ panes, isActive, onAttached }, ref) {
   const [sizes, setSizes] = useState<number[]>(() =>
     panes.map(() => 100 / panes.length)
   )
   const containerRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef<{ index: number; startX: number; startSizes: number[] } | null>(null)
+  const paneRefs = useRef<Record<string, React.RefObject<TerminalHandle | null>>>({})
+
+  // Ensure a ref exists for each pane
+  for (const pane of panes) {
+    if (!paneRefs.current[pane.sessionId]) {
+      paneRefs.current[pane.sessionId] = { current: null }
+    }
+  }
+
+  useImperativeHandle(ref, () => ({
+    focus: (sessionId?: string) => {
+      const id = sessionId ?? panes[0]?.sessionId
+      if (id) paneRefs.current[id]?.current?.focus()
+    }
+  }))
 
   // Reset sizes when pane count changes
   const prevCountRef = useRef(panes.length)
@@ -97,6 +117,7 @@ export function TerminalSplitGroup({ panes, autoFocus }: TerminalSplitGroupProps
     return (
       <div className="h-full" data-session-id={pane.sessionId}>
         <Terminal
+          ref={paneRefs.current[pane.sessionId]}
           key={pane.sessionId}
           sessionId={pane.sessionId}
           cwd={pane.cwd}
@@ -107,7 +128,8 @@ export function TerminalSplitGroup({ panes, autoFocus }: TerminalSplitGroupProps
           codeMode={pane.codeMode}
           providerFlags={pane.providerFlags}
           executionContext={pane.executionContext}
-          autoFocus={autoFocus}
+          isActive={isActive}
+          onAttached={onAttached}
           onConversationCreated={pane.onConversationCreated}
           onSessionInvalid={pane.onSessionInvalid}
           onReady={pane.onReady}
@@ -124,6 +146,7 @@ export function TerminalSplitGroup({ panes, autoFocus }: TerminalSplitGroupProps
         <div key={pane.sessionId} className="flex" style={{ width: `${sizes[i]}%` }} data-session-id={pane.sessionId}>
           <div className="flex-1 min-w-0">
             <Terminal
+              ref={paneRefs.current[pane.sessionId]}
               key={pane.sessionId}
               sessionId={pane.sessionId}
               cwd={pane.cwd}
@@ -134,7 +157,8 @@ export function TerminalSplitGroup({ panes, autoFocus }: TerminalSplitGroupProps
               codeMode={pane.codeMode}
               providerFlags={pane.providerFlags}
               executionContext={pane.executionContext}
-              autoFocus={autoFocus && i === 0}
+              isActive={isActive}
+              onAttached={onAttached}
               onConversationCreated={pane.onConversationCreated}
               onSessionInvalid={pane.onSessionInvalid}
               onReady={pane.onReady}
@@ -152,4 +176,4 @@ export function TerminalSplitGroup({ panes, autoFocus }: TerminalSplitGroupProps
       ))}
     </div>
   )
-}
+})

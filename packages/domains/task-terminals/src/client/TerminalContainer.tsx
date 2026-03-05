@@ -3,7 +3,7 @@ import { usePty } from '@slayzone/terminal'
 import type { TerminalMode, CodeMode } from '@slayzone/terminal/shared'
 import { useTaskTerminals } from './useTaskTerminals'
 import { TerminalTabBar } from './TerminalTabBar'
-import { TerminalSplitGroup } from './TerminalSplitGroup'
+import { TerminalSplitGroup, type TerminalSplitGroupHandle } from './TerminalSplitGroup'
 
 export interface TerminalContainerHandle {
   closeActiveGroup: () => Promise<boolean>
@@ -72,6 +72,8 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
   } = useTaskTerminals(taskId, defaultMode)
 
   const { subscribePrompt } = usePty()
+  const splitGroupRef = useRef<TerminalSplitGroupHandle | null>(null)
+  const pendingFocusRef = useRef(isActive)
   const terminalApiRef = useRef<{
     sendInput: (text: string) => Promise<void>
     write: (data: string) => Promise<boolean>
@@ -109,14 +111,14 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
       // Cmd+T: New group
       if (e.metaKey && e.key === 't' && !e.shiftKey) {
         e.preventDefault()
-        createTab().then(tab => focusGroupTerminal(`${taskId}:${tab.id}`))
+        pendingFocusRef.current = true
+        createTab()
       }
       // Cmd+D: Split current group
       if (e.metaKey && e.key === 'd' && !e.shiftKey && activeGroup) {
         e.preventDefault()
-        // Split the last pane in the active group
         const lastPane = activeGroup.tabs[activeGroup.tabs.length - 1]
-        if (lastPane) splitTab(lastPane.id).then(tab => { if (tab) focusGroupTerminal(`${taskId}:${tab.id}`) })
+        if (lastPane) { pendingFocusRef.current = true; splitTab(lastPane.id) }
       }
     }
 
@@ -134,7 +136,7 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
     const group = groups.find(g => g.id === groupId)
     if (!group) return
     const lastPane = group.tabs[group.tabs.length - 1]
-    if (lastPane) splitTab(lastPane.id)
+    if (lastPane) { pendingFocusRef.current = true; splitTab(lastPane.id) }
   }, [groups, splitTab])
 
   // Close an entire group (all its panes)
@@ -146,54 +148,48 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
     }
   }, [groups, closeTab])
 
-  // Focus the xterm textarea for a given session ID.
-  // If the element isn't in the DOM yet (new terminal initializing), wait via MutationObserver.
-  const focusGroupTerminal = useCallback((sessionId: string) => {
-    const selector = `[data-session-id="${sessionId}"] .xterm-helper-textarea`
-    const tryNow = () => {
-      const el = document.querySelector<HTMLElement>(selector)
-      if (el) { el.focus(); return true }
-      return false
-    }
-    if (tryNow()) return
-    // Element not yet in DOM — wait for it
-    const observer = new MutationObserver(() => {
-      if (tryNow()) observer.disconnect()
-    })
-    observer.observe(document.body, { childList: true, subtree: true })
-    setTimeout(() => observer.disconnect(), 5000)
-  }, [])
-
   const tryApplyFocusRequest = useCallback(() => {
     if (focusRequestId <= 0 || focusRequestId <= lastHandledFocusRequestRef.current) return
-    if (!isActive || !mainSessionId || !terminalApiRef.current) return
+    if (!isActive || !terminalApiRef.current) return
 
     if (mainGroupId && activeGroupId !== mainGroupId) {
+      pendingFocusRef.current = true
       setActiveGroupId(mainGroupId)
       return
     }
 
-    requestAnimationFrame(() => {
-      terminalApiRef.current?.focus()
-      focusGroupTerminal(mainSessionId)
-    })
-
+    splitGroupRef.current?.focus()
     lastHandledFocusRequestRef.current = focusRequestId
     onFocusRequestHandled?.(focusRequestId)
   }, [
     focusRequestId,
     isActive,
-    mainSessionId,
     mainGroupId,
     activeGroupId,
     setActiveGroupId,
-    focusGroupTerminal,
     onFocusRequestHandled
   ])
 
   useEffect(() => {
     tryApplyFocusRequest()
   }, [tryApplyFocusRequest])
+
+  // Focus terminal when task becomes active
+  useEffect(() => {
+    if (!isActive) return
+    if (splitGroupRef.current) {
+      splitGroupRef.current.focus()
+    } else {
+      pendingFocusRef.current = true
+    }
+  }, [isActive])
+
+  const handlePaneAttached = useCallback((api: { focus: () => void }) => {
+    if (pendingFocusRef.current) {
+      api.focus()
+      pendingFocusRef.current = false
+    }
+  }, [])
 
   // Handle terminal ready - pass up to parent (main tab's API)
   const handleTerminalReady = useCallback((api: {
@@ -214,10 +210,10 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
     const adjacentGroup = groups[groupIndex > 0 ? groupIndex - 1 : 1]
     await closeGroup(groupId)
     if (adjacentGroup) {
+      pendingFocusRef.current = true
       setActiveGroupId(adjacentGroup.id)
-      focusGroupTerminal(`${taskId}:${adjacentGroup.tabs[0].id}`)
     }
-  }, [groups, closeGroup, setActiveGroupId, taskId, focusGroupTerminal])
+  }, [groups, closeGroup, setActiveGroupId])
 
   useImperativeHandle(ref, () => ({
     closeActiveGroup: async (): Promise<boolean> => {
@@ -236,7 +232,9 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
           const paneIndex = group.tabs.findIndex(t => t.id === tabId)
           const adjacentTab = group.tabs[paneIndex > 0 ? paneIndex - 1 : 1]
           await closeTab(tabId)
-          if (adjacentTab) focusGroupTerminal(`${taskId}:${adjacentTab.id}`)
+          if (adjacentTab) {
+            splitGroupRef.current?.focus(`${taskId}:${adjacentTab.id}`)
+          }
         } else {
           // Last pane in group: close group and focus adjacent group
           await closeGroupAndFocusAdjacent(group.id)
@@ -250,7 +248,7 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
         return true
       }
     }
-  }), [taskId, groups, closeTab, closeGroupAndFocusAdjacent, focusGroupTerminal, activeGroupId])
+  }), [taskId, groups, closeTab, closeGroupAndFocusAdjacent, activeGroupId])
 
   // Build pane props for the active group
   const paneProps = useMemo(() => {
@@ -286,8 +284,8 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
       <TerminalTabBar
         groups={groups}
         activeGroupId={activeGroupId}
-        onGroupSelect={setActiveGroupId}
-        onGroupCreate={() => createTab().then(tab => focusGroupTerminal(`${taskId}:${tab.id}`))}
+        onGroupSelect={(groupId) => { pendingFocusRef.current = true; setActiveGroupId(groupId) }}
+        onGroupCreate={() => { pendingFocusRef.current = true; createTab() }}
         onGroupClose={closeGroup}
         onGroupSplit={handleSplitGroup}
         onPaneClose={closeTab}
@@ -297,9 +295,11 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
       />
       <div className="flex-1 min-h-0">
         <TerminalSplitGroup
+          ref={splitGroupRef}
           key={activeGroupId}
           panes={paneProps}
-          autoFocus={isActive}
+          isActive={isActive}
+          onAttached={handlePaneAttached}
         />
       </div>
     </div>

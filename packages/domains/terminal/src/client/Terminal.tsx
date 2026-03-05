@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -85,7 +85,8 @@ interface TerminalProps {
   codeMode?: CodeMode | null
   providerFlags?: string | null
   executionContext?: import('@slayzone/terminal/shared').ExecutionContext | null
-  autoFocus?: boolean
+  isActive?: boolean
+  onAttached?: (api: { focus: () => void }) => void
   onConversationCreated?: (conversationId: string) => void
   onSessionInvalid?: () => void
   onReady?: (api: {
@@ -105,7 +106,11 @@ function stripAnsi(str: string): string {
     .replace(/\x1b[()][AB012]/g, '')
 }
 
-export function Terminal({
+export interface TerminalHandle {
+  focus: () => void
+}
+
+export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal({
   sessionId,
   cwd,
   mode = 'claude-code',
@@ -115,15 +120,20 @@ export function Terminal({
   codeMode,
   providerFlags,
   executionContext,
-  autoFocus,
+  isActive = true,
+  onAttached,
   onConversationCreated,
   onSessionInvalid,
   onReady,
   onFirstInput,
   onRetry
-}: TerminalProps) {
+}, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<XTerm | null>(null)
+
+  useImperativeHandle(ref, () => ({
+    focus: () => terminalRef.current?.focus()
+  }))
   const fitAddonRef = useRef<FitAddon | null>(null)
   const serializeAddonRef = useRef<SerializeAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
@@ -149,8 +159,10 @@ export function Terminal({
   onSessionInvalidRef.current = onSessionInvalid
   const onReadyRef = useRef(onReady)
   onReadyRef.current = onReady
-  const autoFocusRef = useRef(autoFocus)
-  autoFocusRef.current = autoFocus
+  const isActiveRef = useRef(isActive)
+  isActiveRef.current = isActive
+  const onAttachedRef = useRef(onAttached)
+  onAttachedRef.current = onAttached
   const onFirstInputRef = useRef(onFirstInput)
   onFirstInputRef.current = onFirstInput
   const hasCalledFirstInputRef = useRef(false)
@@ -226,7 +238,7 @@ export function Terminal({
         } else {
           // Reattach existing terminal (container already has dimensions)
           containerRef.current.appendChild(cached.element)
-          if (autoFocusRef.current) cached.terminal.focus()
+          onAttachedRef.current?.({ focus: () => cached.terminal.focus() })
           cached.terminal.options.theme = getTerminalTheme(theme)
           cached.terminal.options.minimumContrastRatio = theme === 'light' ? 4.5 : 1
           terminalRef.current = cached.terminal
@@ -318,7 +330,7 @@ export function Terminal({
       searchAddonRef.current = searchAddon
 
       terminal.open(containerRef.current)
-      if (autoFocusRef.current) terminal.focus()
+      onAttachedRef.current?.({ focus: () => terminal.focus() })
       terminal.clear() // Ensure terminal starts completely fresh
       // Simple fit - container is guaranteed to have dimensions from waitForDimensions
       fitAddon.fit()
@@ -480,7 +492,7 @@ export function Terminal({
     const unsubData = subscribe(sessionId, (data, seq) => {
       const cutoff = clearedSeqRef.current
       if (cutoff !== null && seq <= cutoff) return
-      if (terminalRef.current) {
+      if (terminalRef.current && isActiveRef.current) {
         terminalRef.current.write(data)
         lastRenderedSeqRef.current = seq
       }
@@ -515,6 +527,23 @@ export function Terminal({
       unsubAttention()
     }
   }, [sessionId, subscribe, subscribeExit, subscribeSessionInvalid, subscribeAttention, getCrashOutput, cleanupTask])
+
+  // Replay missed PTY data when task becomes active
+  useEffect(() => {
+    if (!isActive || !terminalRef.current) return
+    const replay = async () => {
+      const missed = await window.api.pty.getBufferSince(sessionId, lastRenderedSeqRef.current)
+      if (!missed || missed.chunks.length === 0) return
+      for (const chunk of missed.chunks) {
+        const cutoff = clearedSeqRef.current
+        if (cutoff !== null && chunk.seq <= cutoff) continue
+        terminalRef.current?.write(chunk.data)
+        lastRenderedSeqRef.current = chunk.seq
+      }
+    }
+    replay()
+  }, [isActive, sessionId])
+
 
   // Subscribe to PTY state changes for loading indicator
   useEffect(() => {
@@ -826,4 +855,4 @@ export function Terminal({
       </div>
     </div>
   )
-}
+})
