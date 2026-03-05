@@ -22,6 +22,8 @@ import type {
   ProviderFileContent,
   SyncHealth,
   SyncReason,
+  SkillValidationIssue,
+  SkillValidationState,
   RootInstructionsResult,
   SetAiConfigProjectSelectionInput,
   SyncAllInput,
@@ -165,6 +167,7 @@ function removeLegacySkillFileIfPresent(
 interface ParsedFrontmatter {
   frontmatter: Record<string, string>
   body: string
+  issues: SkillValidationIssue[]
 }
 
 interface CanonicalSkillMetadata {
@@ -179,6 +182,7 @@ interface CanonicalSkillDocument {
 }
 
 const SKILL_CANONICAL_METADATA_KEY = 'skillCanonical'
+const SKILL_VALIDATION_METADATA_KEY = 'skillValidation'
 
 function parseJsonObject(raw: string): Record<string, unknown> {
   try {
@@ -207,21 +211,57 @@ function parseYamlScalar(value: string): string {
 function parseLeadingFrontmatter(content: string): ParsedFrontmatter | null {
   const normalized = content.replace(/\r\n/g, '\n')
   if (!normalized.startsWith('---\n')) return null
-  const end = normalized.indexOf('\n---\n', 4)
-  if (end === -1) return null
 
-  const block = normalized.slice(4, end)
-  const body = normalized.slice(end + '\n---\n'.length)
   const frontmatter: Record<string, string> = {}
-  for (const line of block.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const match = trimmed.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/)
-    if (!match) continue
-    frontmatter[match[1]] = parseYamlScalar(match[2] ?? '')
+  const issues: SkillValidationIssue[] = []
+  const lines = normalized.split('\n')
+  let closingLine = -1
+  for (let i = 1; i < lines.length; i += 1) {
+    if (lines[i] === '---') {
+      closingLine = i
+      break
+    }
   }
 
-  return { frontmatter, body }
+  if (closingLine === -1) {
+    issues.push({
+      code: 'frontmatter_unclosed',
+      severity: 'error',
+      message: 'Frontmatter starts with "---" but has no closing delimiter.',
+      line: 1
+    })
+    return { frontmatter, body: normalized, issues }
+  }
+
+  for (let i = 1; i < closingLine; i += 1) {
+    const line = lines[i]
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const match = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/)
+    if (!match) {
+      issues.push({
+        code: 'frontmatter_invalid_line',
+        severity: 'error',
+        message: `Invalid frontmatter line: "${trimmed}". Expected "key: value".`,
+        line: i + 1
+      })
+      continue
+    }
+    const key = match[1]
+    if (frontmatter[key] !== undefined) {
+      issues.push({
+        code: 'frontmatter_duplicate_key',
+        severity: 'error',
+        message: `Duplicate frontmatter key "${key}".`,
+        line: i + 1
+      })
+      continue
+    }
+    frontmatter[key] = parseYamlScalar(match[2] ?? '')
+  }
+
+  const body = lines.slice(closingLine + 1).join('\n')
+  return { frontmatter, body, issues }
 }
 
 function readCanonicalSkillMetadata(metadataJson: string): CanonicalSkillMetadata | null {
@@ -254,6 +294,47 @@ function writeCanonicalSkillMetadata(metadataJson: string, canonical: CanonicalS
   return JSON.stringify(parsed)
 }
 
+function readSkillValidationMetadata(metadataJson: string): SkillValidationState | null {
+  const parsed = parseJsonObject(metadataJson)
+  const raw = parsed[SKILL_VALIDATION_METADATA_KEY]
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+
+  const obj = raw as Record<string, unknown>
+  const status =
+    obj.status === 'valid' || obj.status === 'warning' || obj.status === 'invalid'
+      ? obj.status
+      : null
+  const rawIssues = Array.isArray(obj.issues) ? obj.issues : []
+  const issues: SkillValidationIssue[] = []
+  for (const rawIssue of rawIssues) {
+    if (!rawIssue || typeof rawIssue !== 'object' || Array.isArray(rawIssue)) continue
+    const issue = rawIssue as Record<string, unknown>
+    const severity = issue.severity
+    if (severity !== 'error' && severity !== 'warning') continue
+    const code = typeof issue.code === 'string' ? issue.code : 'unknown'
+    const message = typeof issue.message === 'string' ? issue.message : 'Validation issue'
+    const line = typeof issue.line === 'number' ? issue.line : null
+    issues.push({ code, severity, message, line })
+  }
+
+  if (status) {
+    return { status, issues }
+  }
+
+  const hasErrors = issues.some((issue) => issue.severity === 'error')
+  const hasWarnings = issues.some((issue) => issue.severity === 'warning')
+  return {
+    status: hasErrors ? 'invalid' : hasWarnings ? 'warning' : 'valid',
+    issues
+  }
+}
+
+function writeSkillValidationMetadata(metadataJson: string, validation: SkillValidationState): string {
+  const parsed = parseJsonObject(metadataJson)
+  parsed[SKILL_VALIDATION_METADATA_KEY] = validation
+  return JSON.stringify(parsed)
+}
+
 function toTitleCaseFromSlug(slug: string): string {
   const words = slug.replace(/[-_]+/g, ' ').trim().split(/\s+/).filter(Boolean)
   if (words.length === 0) return 'Skill'
@@ -268,6 +349,57 @@ function deriveSkillDescription(itemSlug: string, body: string): string {
   const firstContentLine = body.split('\n').find((line) => line.trim().length > 0)
   const headingText = firstContentLine?.replace(/^#+\s*/, '').trim() ?? ''
   return headingText || toTitleCaseFromSlug(itemSlug)
+}
+
+function validateSkillFrontmatter(
+  slug: string,
+  parsedFrontmatter: ParsedFrontmatter | null,
+  options?: { allowMissing?: boolean }
+): SkillValidationState {
+  if (!parsedFrontmatter) {
+    if (options?.allowMissing) return { status: 'valid', issues: [] }
+    return {
+      status: 'invalid',
+      issues: [{
+        code: 'frontmatter_missing',
+        severity: 'error',
+        message: `Skill "${slug}" is missing frontmatter. Add a leading "---" block with at least name/description.`,
+        line: 1
+      }]
+    }
+  }
+
+  const issues: SkillValidationIssue[] = [...parsedFrontmatter.issues]
+  const parsedName = parsedFrontmatter.frontmatter.name?.trim() ?? ''
+  if (parsedName && parsedName !== slug) {
+    issues.push({
+      code: 'frontmatter_name_mismatch',
+      severity: 'warning',
+      message: `Frontmatter name "${parsedName}" does not match skill slug "${slug}".`,
+      line: null
+    })
+  }
+
+  const hasErrors = issues.some((issue) => issue.severity === 'error')
+  const hasWarnings = issues.some((issue) => issue.severity === 'warning')
+  return {
+    status: hasErrors ? 'invalid' : hasWarnings ? 'warning' : 'valid',
+    issues
+  }
+}
+
+function ensureSkillValidationForSync(itemSlug: string, itemContent: string, itemMetadataJson: string): void {
+  const canonical = readCanonicalSkillMetadata(itemMetadataJson)
+  const parsed = parseLeadingFrontmatter(itemContent.replace(/\r\n/g, '\n'))
+  const validation = readSkillValidationMetadata(itemMetadataJson) ?? validateSkillFrontmatter(itemSlug, parsed, {
+    allowMissing: canonical?.explicitFrontmatter === true
+  })
+  if (validation?.status !== 'invalid') return
+
+  const firstError = validation.issues.find((issue) => issue.severity === 'error')
+  const lineHint = firstError?.line ? ` (line ${firstError.line})` : ''
+  const message = firstError?.message ?? 'Frontmatter is invalid.'
+  throw new Error(`Cannot sync skill "${itemSlug}" because frontmatter is invalid${lineHint}: ${message}`)
 }
 
 function normalizeCanonicalSkillForPersistence(
@@ -299,13 +431,17 @@ function normalizeCanonicalSkillForPersistence(
   const explicitFrontmatter = parsedFrontmatter
     ? true
     : (existingCanonical?.explicitFrontmatter ?? false)
+  const validation = validateSkillFrontmatter(slug, parsedFrontmatter, {
+    allowMissing: existingCanonical?.explicitFrontmatter === true
+  })
+  const metadataWithCanonical = writeCanonicalSkillMetadata(metadataJson, {
+    frontmatter,
+    explicitFrontmatter
+  })
 
   return {
     body,
-    metadataJson: writeCanonicalSkillMetadata(metadataJson, {
-      frontmatter,
-      explicitFrontmatter
-    })
+    metadataJson: writeSkillValidationMetadata(metadataWithCanonical, validation)
   }
 }
 
@@ -849,6 +985,9 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
   ipcMain.handle('ai-config:load-global-item', (_event, input: LoadGlobalItemInput) => {
     const item = db.prepare('SELECT * FROM ai_config_items WHERE id = ?').get(input.itemId) as AiConfigItem | undefined
     if (!item) throw new Error('Item not found')
+    if (item.type === 'skill') {
+      ensureSkillValidationForSync(item.slug, item.content, item.metadata_json)
+    }
 
     const resolvedProject = path.resolve(input.projectPath)
     const entries: ContextTreeEntry[] = []
@@ -955,6 +1094,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
         && localItem.project_id === projectId
         && localItem.type === 'skill'
       if (!isProjectLocalItem) throw new Error('Selection not found')
+      ensureSkillValidationForSync(localItem.slug, localItem.content, localItem.metadata_json)
 
       const providersToSync = provider
         ? filterConfigurableCliProviders([provider])
@@ -1017,6 +1157,9 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     for (const sel of selections) {
       if (!isConfigurableCliProvider(sel.provider)) continue
       const providerId = sel.provider as CliProvider
+      if (sel.item_type === 'skill') {
+        ensureSkillValidationForSync(sel.item_slug, sel.item_content, sel.item_metadata)
+      }
       const effectiveTargetPath = getCanonicalSelectionTargetPath(providerId, sel.item_type, sel.item_slug, sel.target_path)
       const syncedContent = getSyncedItemContent(providerId, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
       const filePath = path.isAbsolute(effectiveTargetPath)
@@ -1628,6 +1771,9 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     for (const sel of selections) {
       const provider = sel.provider as CliProvider
       if (!enabledSet.has(provider)) continue
+      if (sel.item_type === 'skill') {
+        ensureSkillValidationForSync(sel.item_slug, sel.item_content, sel.item_metadata)
+      }
 
       const effectiveTargetPath = getCanonicalSelectionTargetPath(provider, sel.item_type, sel.item_slug, sel.target_path)
       const syncedContent = getSyncedItemContent(provider, sel.item_type, sel.item_slug, effectiveTargetPath, sel.item_content, sel.item_metadata)
@@ -1684,6 +1830,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     `).all(input.projectId) as Array<{ id: string; slug: string; content: string; type: 'skill'; metadata_json: string }>
 
     for (const item of localItems) {
+      ensureSkillValidationForSync(item.slug, item.content, item.metadata_json)
       for (const provider of providers) {
         const relativePath = getSkillPath(provider, item.slug)
         if (!relativePath) continue

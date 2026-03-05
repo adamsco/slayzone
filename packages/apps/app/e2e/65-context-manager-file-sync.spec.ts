@@ -52,6 +52,11 @@ function readFileSafe(filePath: string): string {
   try { return fs.readFileSync(filePath, 'utf-8') } catch { return '' }
 }
 
+function skillDocument(slug: string, body: string): string {
+  const normalizedBody = body.endsWith('\n') ? body : `${body}\n`
+  return `---\nname: ${slug}\ndescription: ${slug}\n---\n\n${normalizedBody}`
+}
+
 async function setInstructionsContent(mainWindow: Page, projectId: string, content: string): Promise<void> {
   await mainWindow.evaluate(({ id, projectPath, next }) => {
     return window.api.aiConfig.saveInstructionsContent(id, projectPath, next)
@@ -109,7 +114,7 @@ test.describe('Context manager file sync', () => {
       } else {
         await window.api.aiConfig.createItem({ type: 'skill', scope: 'global', slug, content })
       }
-    }, { slug: skillSlug, content: skillContentV1 })
+    }, { slug: skillSlug, content: skillDocument(skillSlug, skillContentV1) })
 
     // Link global skill to project
     await mainWindow.evaluate(async ({ projectId: pid, projectPath, slug }) => {
@@ -669,7 +674,7 @@ test.describe('Context manager file sync', () => {
         id: projectId,
         projectPath: TEST_PROJECT_PATH,
         slug: frontmatterMismatchSkillSlug,
-        initialContent: frontmatterMismatchSkillInitialContent,
+        initialContent: skillDocument(frontmatterMismatchSkillSlug, frontmatterMismatchSkillInitialContent),
         updatedContent: frontmatterMismatchSkillDbContent
       })
 
@@ -712,7 +717,12 @@ test.describe('Context manager file sync', () => {
           itemId: item.id,
           providers: ['codex']
         })
-      }, { id: projectId, projectPath: TEST_PROJECT_PATH, slug: codexOnlySkillSlug, content: codexOnlySkillContent })
+      }, {
+        id: projectId,
+        projectPath: TEST_PROJECT_PATH,
+        slug: codexOnlySkillSlug,
+        content: skillDocument(codexOnlySkillSlug, codexOnlySkillContent)
+      })
 
       await expect.poll(() => readFileSafe(codexOnlySkillPath())).toBe(codexOnlySkillContent)
 
@@ -743,7 +753,12 @@ test.describe('Context manager file sync', () => {
           itemId: item.id,
           providers: ['codex']
         })
-      }, { id: projectId, projectPath: TEST_PROJECT_PATH, slug: codexOnlyWithUnmanagedClaudeSlug, content: codexOnlyWithUnmanagedClaudeContent })
+      }, {
+        id: projectId,
+        projectPath: TEST_PROJECT_PATH,
+        slug: codexOnlyWithUnmanagedClaudeSlug,
+        content: skillDocument(codexOnlyWithUnmanagedClaudeSlug, codexOnlyWithUnmanagedClaudeContent)
+      })
 
       await expect.poll(() => readFileSafe(codexOnlyWithUnmanagedClaudeCodexPath())).toBe(codexOnlyWithUnmanagedClaudeContent)
       fs.mkdirSync(path.dirname(codexOnlyWithUnmanagedClaudeClaudePath()), { recursive: true })

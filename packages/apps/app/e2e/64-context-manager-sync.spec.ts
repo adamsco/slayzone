@@ -14,11 +14,22 @@ const skillSlug = 'e2e-context-sync-skill'
 const skillContentV1 = '# E2E context skill v1\n'
 const skillContentV2 = '# E2E context skill v2\n'
 const localSkillSlug = 'e2e-local-project-skill'
-const localSkillContent = '# E2E local project skill\n'
+const localSkillBody = '# E2E local project skill\n'
+const localSkillContent = `---
+name: ${localSkillSlug}
+description: E2E local project skill
+---
+
+${localSkillBody}`
 const claudeSkillPath = () => path.join(TEST_PROJECT_PATH, '.claude', 'skills', skillSlug, 'SKILL.md')
 const codexSkillPath = () => path.join(TEST_PROJECT_PATH, '.agents', 'skills', skillSlug, 'SKILL.md')
 const localClaudeSkillPath = () => path.join(TEST_PROJECT_PATH, '.claude', 'skills', localSkillSlug, 'SKILL.md')
 const localCodexSkillPath = () => path.join(TEST_PROJECT_PATH, '.agents', 'skills', localSkillSlug, 'SKILL.md')
+
+function skillDocument(slug: string, body: string): string {
+  const normalizedBody = body.endsWith('\n') ? body : `${body}\n`
+  return `---\nname: ${slug}\ndescription: ${slug}\n---\n\n${normalizedBody}`
+}
 
 async function upsertGlobalSkill(mainWindow: Page, content: string): Promise<void> {
   const skillExists = await mainWindow.evaluate(async (slug) => {
@@ -41,7 +52,7 @@ async function upsertGlobalSkill(mainWindow: Page, content: string): Promise<voi
     await dialog.getByTestId('context-item-editor-slug').blur()
   }
 
-  await dialog.getByTestId('context-item-editor-content').fill(content)
+  await dialog.getByTestId('context-item-editor-content').fill(skillDocument(skillSlug, content))
   await dialog.getByTestId('context-item-editor-content').blur()
 
   await expect.poll(async () => {
@@ -215,6 +226,10 @@ test.describe('Context manager sync flow', () => {
   })
 
   test('project-local skill can be synced to filesystem', async ({ mainWindow }) => {
+    await mainWindow.evaluate(({ id }) => {
+      return window.api.aiConfig.setProjectProviders(id, ['claude', 'codex'])
+    }, { id: projectId })
+
     const itemId = await mainWindow.evaluate(async ({ id, slug, content }) => {
       const existing = await window.api.aiConfig.listItems({ scope: 'project', projectId: id, type: 'skill' })
       const match = existing.find((item) => item.slug === slug)
@@ -233,15 +248,15 @@ test.describe('Context manager sync flow', () => {
     }, { id: projectId, slug: localSkillSlug, content: localSkillContent })
 
     await mainWindow.evaluate(async ({ id, itemId, projectPath }) => {
-      await window.api.aiConfig.syncLinkedFile(id, projectPath, itemId, 'claude').catch(() => {})
-      await window.api.aiConfig.syncLinkedFile(id, projectPath, itemId, 'codex').catch(() => {})
+      await window.api.aiConfig.syncLinkedFile(id, projectPath, itemId, 'claude')
+      await window.api.aiConfig.syncLinkedFile(id, projectPath, itemId, 'codex')
     }, { id: projectId, itemId, projectPath: TEST_PROJECT_PATH })
 
-    await expect.poll(() => fs.existsSync(localClaudeSkillPath())).toBe(true)
+    await expect.poll(() => fs.existsSync(localClaudeSkillPath()), { timeout: 15_000 }).toBe(true)
     await expect.poll(() => {
       try {
         const content = fs.readFileSync(localClaudeSkillPath(), 'utf-8')
-        return content.includes(`name: ${localSkillSlug}`) && content.includes(localSkillContent.trim())
+        return content.includes(`name: ${localSkillSlug}`) && content.includes(localSkillBody.trim())
       } catch {
         return false
       }
@@ -253,7 +268,7 @@ test.describe('Context manager sync flow', () => {
         } catch {
           return ''
         }
-      }).toBe(localSkillContent)
+      }).toBe(localSkillBody)
     }
   })
 
