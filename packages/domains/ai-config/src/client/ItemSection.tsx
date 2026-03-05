@@ -15,7 +15,7 @@ import type { GlobalContextManagerSection } from './ContextManagerSettings'
 import { PROVIDER_PATHS } from '../shared/provider-registry'
 import { AddItemPicker } from './AddItemPicker'
 import { StatusBadge, ProviderFileCard } from './SyncComponents'
-import { aggregateProviderSyncHealth } from './sync-health'
+import { aggregateProviderSyncHealth, hasPendingProviderSync } from './sync-view-model'
 
 // ============================================================
 // Types & Helpers
@@ -258,7 +258,7 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
   const sk = useSkillItem({ item, providers, enabledProviders, isLocal, projectId, projectPath, onChanged })
   const [expanded, setExpanded] = useState(false)
   const status = aggregateProviderSyncHealth(providers)
-  const hasPendingProviderSync = sk.providerRows.some((row) => row.syncHealth !== 'synced')
+  const hasPendingSync = hasPendingProviderSync(sk.providerRows.map((row) => row.syncHealth))
 
   const handleToggleExpanded = () => setExpanded((prev) => !prev)
 
@@ -370,7 +370,7 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
                   <span className="inline-flex size-2 rounded-full bg-amber-500" />
                 )}
               </div>
-              {sk.providerRows.length > 1 && (hasPendingProviderSync || sk.syncingAll) && (
+              {sk.providerRows.length > 1 && (hasPendingSync || sk.syncingAll) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button

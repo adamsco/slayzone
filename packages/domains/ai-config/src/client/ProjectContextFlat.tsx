@@ -19,7 +19,7 @@ import { ItemSection, type UnmanagedSkillRow } from './ItemSection'
 import { McpFlatSection } from './McpFlatSection'
 import { ProjectInstructions } from './ProjectInstructions'
 import { ProviderChips } from './ProviderChips'
-import { contextEntryToSyncHealth } from './sync-health'
+import { contextEntryToSyncHealth, countSyncHealths } from './sync-view-model'
 
 interface ProjectContextFlatProps {
   projectId: string
@@ -46,11 +46,17 @@ interface ContextData {
 interface SectionCounts { total: number; synced: number; stale: number; unmanaged: number }
 
 function computeSkillCounts(tree: ContextTreeEntry[]): SectionCounts {
-  const skills = tree.filter(e => e.category === 'skill')
-  const synced = skills.filter((entry) => contextEntryToSyncHealth(entry) === 'synced').length
-  const stale = skills.filter((entry) => contextEntryToSyncHealth(entry) === 'stale').length
-  const unmanaged = skills.filter((entry) => contextEntryToSyncHealth(entry) === 'unmanaged').length
-  return { total: synced + stale + unmanaged, synced, stale, unmanaged }
+  const counts = countSyncHealths(
+    tree
+      .filter((entry) => entry.category === 'skill')
+      .map((entry) => contextEntryToSyncHealth(entry))
+  )
+  return {
+    total: counts.synced + counts.stale + counts.unmanaged,
+    synced: counts.synced,
+    stale: counts.stale,
+    unmanaged: counts.unmanaged
+  }
 }
 
 function skillSlugFromContextPath(relativePath: string): string | null {
@@ -108,19 +114,16 @@ function computeUnmanagedSkillRows(tree: ContextTreeEntry[]): UnmanagedSkillRow[
 
 function computeInstructionCounts(instructions: ContextData['instructions']): SectionCounts {
   const providerHealth = instructions.providerHealth ?? {}
-  const providers = new Set<CliProvider>(Object.keys(providerHealth) as CliProvider[])
-  let synced = 0
-  let stale = 0
-  let unmanaged = 0
-
-  for (const provider of providers) {
-    const health = providerHealth[provider]?.health
-    if (health === 'synced') synced += 1
-    else if (health === 'stale') stale += 1
-    else if (health === 'unmanaged') unmanaged += 1
+  const counts = countSyncHealths(
+    (Object.keys(providerHealth) as CliProvider[])
+      .map((provider) => providerHealth[provider]?.health ?? 'not_synced')
+  )
+  return {
+    total: counts.total,
+    synced: counts.synced,
+    stale: counts.stale,
+    unmanaged: counts.unmanaged
   }
-
-  return { total: providers.size, synced, stale, unmanaged }
 }
 
 function computeMcpCounts(configs: McpConfigFileResult[]): SectionCounts {

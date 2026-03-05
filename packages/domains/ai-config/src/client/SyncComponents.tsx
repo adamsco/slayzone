@@ -1,6 +1,7 @@
 import { Check, AlertCircle, ChevronDown, Loader2 } from 'lucide-react'
 import { Button, DiffView, Tooltip, TooltipContent, TooltipTrigger, cn } from '@slayzone/ui'
 import type { SyncHealth } from '../shared'
+import { canShowProviderPull, canShowProviderPush, toSyncBadgeLabel } from './sync-view-model'
 
 // ============================================================
 // StatusBadge
@@ -10,24 +11,24 @@ export function StatusBadge({ syncHealth }: { syncHealth: SyncHealth }) {
   const health = syncHealth
   if (health === 'synced') return (
     <span className="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-2 py-0.5 text-xs text-green-700 dark:text-green-300">
-      <Check className="size-3" /> Synced
+      <Check className="size-3" /> {toSyncBadgeLabel(health)}
     </span>
   )
   if (health === 'stale') return (
     <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-300">
-      <AlertCircle className="size-3" /> Stale
+      <AlertCircle className="size-3" /> {toSyncBadgeLabel(health)}
     </span>
   )
   if (health === 'unmanaged') {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-        Unmanaged
+        {toSyncBadgeLabel(health)}
       </span>
     )
   }
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-      Not synced
+      {toSyncBadgeLabel(health)}
     </span>
   )
 }
@@ -63,13 +64,14 @@ export function ProviderFileCard({
   onToggleExpand, onPush, onPull
 }: ProviderFileCardProps) {
   const health = syncHealth
-  const isStale = health === 'stale'
-  const showPush = canPush && (isPushing || health !== 'synced')
+  const isStale = canShowProviderPull(health)
+  const showPush = canShowProviderPush({ syncHealth: health, canPush, isPushing })
   const suffix = testIdSuffix ? `-${testIdSuffix}` : ''
 
   return (
     <div data-testid={`${testIdPrefix}-provider-card-${provider}${suffix}`} className="rounded-lg border bg-surface-1">
       <div
+        data-testid={`${testIdPrefix}-provider-row-${provider}${suffix}`}
         className={cn(
           'flex items-center gap-3 px-3 py-2.5',
           isStale && 'cursor-pointer hover:bg-muted/30'
@@ -77,7 +79,14 @@ export function ProviderFileCard({
         onClick={isStale ? onToggleExpand : undefined}
       >
         {isStale && (
-          <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', !isExpanded && '-rotate-90')} />
+          <button
+            type="button"
+            data-testid={`${testIdPrefix}-toggle-${provider}${suffix}`}
+            className="inline-flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+            onClick={(e) => { e.stopPropagation(); onToggleExpand() }}
+          >
+            <ChevronDown className={cn('size-4 transition-transform', !isExpanded && '-rotate-90')} />
+          </button>
         )}
         <span className="flex-1 font-mono text-sm truncate">{path}</span>
         <StatusBadge syncHealth={syncHealth} />
@@ -119,16 +128,18 @@ export function ProviderFileCard({
 
       {isStale && isExpanded && (
         disk === undefined || expected === undefined ? (
-          <div className="flex items-center justify-center border-t py-6">
+          <div data-testid={`${testIdPrefix}-diff-${provider}${suffix}`} className="flex items-center justify-center border-t py-6">
             <Loader2 className="size-4 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <DiffView
-            left={disk} right={expected}
-            leftLabel={`${path} (on disk)`}
-            rightLabel={rightLabel}
-            className="border-t border-x-0 border-b-0 rounded-none"
-          />
+          <div data-testid={`${testIdPrefix}-diff-${provider}${suffix}`}>
+            <DiffView
+              left={disk} right={expected}
+              leftLabel={`${path} (on disk)`}
+              rightLabel={rightLabel}
+              className="border-t border-x-0 border-b-0 rounded-none"
+            />
+          </div>
         )
       )}
     </div>

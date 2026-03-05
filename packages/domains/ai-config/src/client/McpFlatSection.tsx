@@ -5,6 +5,7 @@ import type { CliProvider, McpConfigFileResult, McpServerConfig, McpTarget, Sync
 import { CURATED_MCP_SERVERS, type CuratedMcpServer } from '../shared/mcp-registry'
 import { ProviderFileCard, StatusBadge } from './SyncComponents'
 import type { GlobalContextManagerSection } from './ContextManagerSettings'
+import { hasPendingProviderSync } from './sync-view-model'
 
 const MCP_CONFIG_PATHS: Partial<Record<McpTarget, string>> = {
   claude: '.mcp.json',
@@ -367,7 +368,11 @@ export function McpFlatSection({ projectPath, enabledProviders, onOpenGlobalAiCo
                 const isExpanded = expandedKey === server.key
                 const syncHealth = getServerSyncHealth(server)
                 const coverage = getSyncCoverage(server)
-                const hasPendingProviderSync = coverage.total > 0 && coverage.linked < coverage.total
+                const hasPendingProviderSyncForServer = coverage.total > 0 && hasPendingProviderSync(
+                  mcpProviders
+                    .filter((provider) => writableProviders.has(provider))
+                    .map((provider) => getProviderSyncHealth(server, provider))
+                )
                 const draftConfig = getDraftConfig(server)
                 const displayProviders = [...mcpProviders].sort((a, b) => MCP_PROVIDER_ORDER.indexOf(a) - MCP_PROVIDER_ORDER.indexOf(b))
                 const disabledDetectedProviders = server.providers
@@ -454,7 +459,7 @@ export function McpFlatSection({ projectPath, enabledProviders, onOpenGlobalAiCo
                                 <span className="inline-flex size-2 rounded-full bg-amber-500" />
                               )}
                             </div>
-                            {hasPendingProviderSync && (
+                            {hasPendingProviderSyncForServer && (
                               <Button
                                 size="sm"
                                 className="h-7 px-2 text-[11px]"

@@ -4,6 +4,7 @@ import { Button, Textarea, Tooltip, TooltipContent, TooltipTrigger } from '@slay
 import type { CliProvider, SyncHealth, SyncReason } from '../shared'
 import { PROVIDER_PATHS } from '../shared/provider-registry'
 import { ProviderFileCard } from './SyncComponents'
+import { hasPendingProviderSync } from './sync-view-model'
 
 interface ProjectInstructionsProps {
   projectId?: string | null
@@ -35,7 +36,9 @@ export function ProjectInstructions({
 
   const isProject = !!projectId && !!projectPath
   const providers = Object.keys(providerHealth ?? {}) as CliProvider[]
-  const hasPendingProviderSync = providers.some((provider) => (providerHealth[provider]?.health ?? 'not_synced') !== 'synced')
+  const hasPendingSync = hasPendingProviderSync(
+    providers.map((provider) => providerHealth[provider]?.health ?? 'not_synced')
+  )
 
   const load = useCallback(async () => {
     if (isProject) {
@@ -215,7 +218,7 @@ export function ProjectInstructions({
             })}
           </div>
 
-          {providers.length > 1 && (hasPendingProviderSync || syncingAll) && (
+          {providers.length > 1 && (hasPendingSync || syncingAll) && (
             <div className="flex items-center justify-end">
               <Tooltip>
                 <TooltipTrigger asChild>

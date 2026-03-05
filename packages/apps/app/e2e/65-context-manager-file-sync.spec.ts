@@ -1,4 +1,10 @@
-import { test, expect, seed, goHome, projectBlob, TEST_PROJECT_PATH, openProjectSettings } from './fixtures/electron'
+import { test, expect, seed, goHome, projectBlob, TEST_PROJECT_PATH } from './fixtures/electron'
+import {
+  closeTopDialog,
+  openProjectContextSection,
+  openSkillEditPanel,
+  openSkillSyncPanel
+} from './fixtures/context-manager'
 import type { Page, Locator } from '@playwright/test'
 import path from 'path'
 import fs from 'fs'
@@ -42,135 +48,6 @@ const frontmatterMismatchCodexPath = () => path.join(TEST_PROJECT_PATH, '.agents
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function closeTopDialog(mainWindow: Page): Promise<void> {
-  const openDialogs = mainWindow.locator('[role="dialog"][data-state="open"], [role="dialog"][aria-modal="true"]')
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    if ((await openDialogs.count()) === 0) return
-
-    const top = openDialogs.last()
-    const closeButton = top.getByRole('button', { name: /close|cancel|done|skip/i }).first()
-    if (await closeButton.count()) {
-      await closeButton.click({ force: true }).catch(() => {})
-    } else {
-      await top.press('Escape').catch(() => {})
-      await mainWindow.keyboard.press('Escape').catch(() => {})
-    }
-    await mainWindow.waitForTimeout(150)
-  }
-  await expect(openDialogs).toHaveCount(0, { timeout: 5_000 })
-}
-
-async function openSettingsTabWithRetry(
-  mainWindow: Page,
-  dialog: Locator,
-  tabTestId: string,
-  readyLocator: Locator
-): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (await readyLocator.isVisible({ timeout: 600 }).catch(() => false)) return
-    const tab = dialog.getByTestId(tabTestId).first()
-    await tab.click({ force: true }).catch(() => {})
-    if (await readyLocator.isVisible({ timeout: 1_200 }).catch(() => false)) return
-    await mainWindow.waitForTimeout(120)
-  }
-  await expect(readyLocator).toBeVisible({ timeout: 5_000 })
-}
-
-async function openProjectContextManager(mainWindow: Page): Promise<Locator> {
-  await closeTopDialog(mainWindow)
-  const dialog = await openProjectSettings(mainWindow, projectAbbrev)
-  await openSettingsTabWithRetry(
-    mainWindow,
-    dialog,
-    'settings-tab-ai-config',
-    dialog.getByRole('heading', { name: 'Context Manager' })
-  )
-
-  // The tab list can re-render while the dialog hydrates; avoid hard click timeouts.
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const configTabById = dialog.getByTestId('project-context-tab-config').first()
-    const hasConfigTabById = (await configTabById.count()) > 0
-    const configTab = hasConfigTabById
-      ? configTabById
-      : dialog.getByRole('tab', { name: 'Config', exact: true }).first()
-    const isSelected = await configTab.getAttribute('aria-selected').then((v) => v === 'true').catch(() => false)
-    if (!isSelected) {
-      await configTab.click({ force: true }).catch(() => {})
-    }
-    const selectedNow = await configTab.getAttribute('aria-selected').then((v) => v === 'true').catch(() => false)
-    if (selectedNow) break
-    await mainWindow.waitForTimeout(120)
-  }
-  const finalConfigTabById = dialog.getByTestId('project-context-tab-config').first()
-  if ((await finalConfigTabById.count()) > 0) {
-    await expect(finalConfigTabById).toHaveAttribute('aria-selected', 'true', { timeout: 5_000 })
-  } else {
-    await expect(dialog.getByRole('tab', { name: 'Config', exact: true }).first()).toHaveAttribute('aria-selected', 'true', { timeout: 5_000 })
-  }
-
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const overviewCard = dialog.getByTestId('project-context-overview-providers')
-    if (await overviewCard.isVisible({ timeout: 500 }).catch(() => false)) break
-    // Already inside a specific section; callers can continue without forcing overview.
-    if (await dialog.getByTestId('instructions-textarea').isVisible({ timeout: 300 }).catch(() => false)) break
-    const backToOverview = dialog.getByRole('button', { name: /^(Providers|Instructions|Skills|MCP Servers)$/ }).first()
-    if (await backToOverview.isVisible({ timeout: 500 }).catch(() => false)) {
-      await backToOverview.click({ force: true }).catch(() => {})
-    }
-    await mainWindow.waitForTimeout(120)
-  }
-  return dialog
-}
-
-async function openProjectContextSection(
-  mainWindow: Page,
-  section: 'providers' | 'instructions' | 'skills' | 'mcp'
-): Promise<Locator> {
-  const dialog = await openProjectContextManager(mainWindow)
-  const sectionTestIdMap = {
-    providers: 'project-context-overview-providers',
-    instructions: 'project-context-overview-instructions',
-    skills: 'project-context-overview-skills',
-    mcp: 'project-context-overview-mcp',
-  } as const
-
-  if (section === 'instructions') {
-    const textarea = dialog.getByTestId('instructions-textarea')
-    const sectionCard = dialog.getByTestId(sectionTestIdMap.instructions).first()
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      if (await textarea.isVisible({ timeout: 700 }).catch(() => false)) return dialog
-      if (await sectionCard.isVisible({ timeout: 400 }).catch(() => false)) {
-        await sectionCard.click({ force: true }).catch(() => {})
-      }
-      if (await textarea.isVisible({ timeout: 700 }).catch(() => false)) return dialog
-
-      const backToOverview = dialog.getByRole('button', { name: /^(Providers|Instructions|Skills|MCP Servers)$/ }).first()
-      if (await backToOverview.isVisible({ timeout: 400 }).catch(() => false)) {
-        await backToOverview.click({ force: true }).catch(() => {})
-      }
-      await mainWindow.waitForTimeout(140)
-    }
-    await expect(textarea).toBeVisible({ timeout: 10_000 })
-    return dialog
-  }
-
-  const sectionCard = dialog.getByTestId(sectionTestIdMap[section]).first()
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (await sectionCard.isVisible({ timeout: 500 }).catch(() => false)) {
-      await sectionCard.click({ force: true }).catch(() => {})
-      return dialog
-    }
-    const backToOverview = dialog.getByRole('button', { name: /^(Providers|Instructions|Skills|MCP Servers)$/ }).first()
-    if (await backToOverview.isVisible({ timeout: 500 }).catch(() => false)) {
-      await backToOverview.click({ force: true }).catch(() => {})
-    }
-    await mainWindow.waitForTimeout(120)
-  }
-  await expect(sectionCard).toBeVisible({ timeout: 5_000 })
-  await sectionCard.click({ force: true })
-  return dialog
-}
-
 function readFileSafe(filePath: string): string {
   try { return fs.readFileSync(filePath, 'utf-8') } catch { return '' }
 }
@@ -179,26 +56,6 @@ async function setInstructionsContent(mainWindow: Page, projectId: string, conte
   await mainWindow.evaluate(({ id, projectPath, next }) => {
     return window.api.aiConfig.saveInstructionsContent(id, projectPath, next)
   }, { id: projectId, projectPath: TEST_PROJECT_PATH, next: content })
-}
-
-async function openSkillSyncPanel(dialog: Locator, slug: string): Promise<void> {
-  const skillRow = dialog.getByTestId(`project-context-item-skill-${slug}`)
-  await expect(skillRow).toBeVisible({ timeout: 5_000 })
-  const syncSection = dialog.getByTestId(`skill-sync-section-${slug}`)
-  if (!(await syncSection.isVisible().catch(() => false))) {
-    await skillRow.click()
-  }
-  await expect(syncSection).toBeVisible({ timeout: 5_000 })
-}
-
-async function openSkillEditPanel(dialog: Locator, slug: string): Promise<void> {
-  const skillRow = dialog.getByTestId(`project-context-item-skill-${slug}`)
-  await expect(skillRow).toBeVisible({ timeout: 5_000 })
-  const editSection = dialog.getByTestId(`skill-edit-section-${slug}`)
-  if (!(await editSection.isVisible().catch(() => false))) {
-    await skillRow.click()
-  }
-  await expect(editSection).toBeVisible({ timeout: 5_000 })
 }
 
 function cleanupDiskFiles(): void {
@@ -295,10 +152,21 @@ test.describe('Context manager file sync', () => {
         }
       }
 
-      return openProjectContextSection(mainWindow, 'instructions')
+      return openProjectContextSection(mainWindow, projectAbbrev, 'instructions')
     }
 
-    async function ensureInstructionsV2AndSyncAll(mainWindow: Page): Promise<void> {
+    async function reopenInstructionsSection(dialog: Locator): Promise<void> {
+      const backToOverview = dialog.getByRole('button', { name: 'Instructions', exact: true }).first()
+      if (await backToOverview.isVisible({ timeout: 500 }).catch(() => false)) {
+        await backToOverview.click({ force: true }).catch(() => {})
+      }
+      const instructionsCard = dialog.getByTestId('project-context-overview-instructions').first()
+      await expect(instructionsCard).toBeVisible({ timeout: 5_000 })
+      await instructionsCard.click({ force: true })
+      await expect(dialog.getByTestId('instructions-textarea')).toBeVisible({ timeout: 5_000 })
+    }
+
+    async function ensureInstructionsV2AndSyncAll(mainWindow: Page): Promise<Locator> {
       await setInstructionsContent(mainWindow, projectId, instructionsV2)
       const dialog = await openInstructionsDialog(mainWindow)
       const textarea = dialog.getByTestId('instructions-textarea')
@@ -310,9 +178,13 @@ test.describe('Context manager file sync', () => {
         }, { id: projectId, projectPath: TEST_PROJECT_PATH })
         return result.content
       }, { timeout: 5_000 }).toBe(instructionsV2)
-      await dialog.getByTestId('instructions-push-all').click()
+      const pushAll = dialog.getByTestId('instructions-push-all')
+      if (await pushAll.isVisible({ timeout: 600 }).catch(() => false)) {
+        await pushAll.click()
+      }
       await expect(dialog.getByTestId('instructions-provider-card-claude')).toContainText('Synced', { timeout: 5_000 })
       await expect(dialog.getByTestId('instructions-provider-card-codex')).toContainText('Synced', { timeout: 5_000 })
+      return dialog
     }
 
     test('edit auto-saves to DB', async ({ mainWindow }) => {
@@ -382,13 +254,13 @@ test.describe('Context manager file sync', () => {
       await expect(dialog.getByTestId('instructions-provider-card-codex')).toContainText('Synced', { timeout: 5_000 })
     })
 
-    test.skip('stale detection after disk modification', async ({ mainWindow }) => {
-      await ensureInstructionsV2AndSyncAll(mainWindow)
+    test('stale detection after disk modification', async ({ mainWindow }) => {
+      const dialog = await ensureInstructionsV2AndSyncAll(mainWindow)
       // Modify CLAUDE.md externally
       fs.writeFileSync(claudeInstructionsPath(), '# Externally modified\n')
 
-      // Reopen and check stale status
-      const dialog = await openProjectContextSection(mainWindow, 'instructions')
+      // Remount section to refresh status
+      await reopenInstructionsSection(dialog)
       const card = dialog.getByTestId('instructions-provider-card-claude')
       await expect(card).toContainText('Stale', { timeout: 5_000 })
 
@@ -396,27 +268,21 @@ test.describe('Context manager file sync', () => {
       await expect(dialog.getByTestId('instructions-provider-card-codex')).toContainText('Synced', { timeout: 5_000 })
     })
 
-    test.skip('expand stale card shows diff', async ({ mainWindow }) => {
-      await ensureInstructionsV2AndSyncAll(mainWindow)
+    test('stale card shows pull action', async ({ mainWindow }) => {
+      const dialog = await ensureInstructionsV2AndSyncAll(mainWindow)
       fs.writeFileSync(claudeInstructionsPath(), '# Externally modified\n')
-      const dialog = await openProjectContextSection(mainWindow, 'instructions')
+      await reopenInstructionsSection(dialog)
       const card = dialog.getByTestId('instructions-provider-card-claude')
       await expect(card).toContainText('Stale', { timeout: 5_000 })
-
-      // Click card to expand diff
-      await card.click()
-
-      // Verify diff view appears (has left/right labels)
-      await expect(card.getByText('on disk')).toBeVisible({ timeout: 5_000 })
-      await expect(card.getByText('App content')).toBeVisible({ timeout: 5_000 })
+      await expect(dialog.getByTestId('instructions-pull-claude')).toBeVisible({ timeout: 5_000 })
     })
 
-    test.skip('File → Config pulls from disk', async ({ mainWindow }) => {
-      await ensureInstructionsV2AndSyncAll(mainWindow)
+    test('File → Config pulls from disk', async ({ mainWindow }) => {
+      const dialog = await ensureInstructionsV2AndSyncAll(mainWindow)
       const diskContent = '# Externally modified\n'
       fs.writeFileSync(claudeInstructionsPath(), diskContent)
 
-      const dialog = await openProjectContextSection(mainWindow, 'instructions')
+      await reopenInstructionsSection(dialog)
 
       const pullClaude = dialog.getByTestId('instructions-pull-claude')
       await expect(pullClaude).toBeVisible({ timeout: 5_000 })
@@ -443,9 +309,9 @@ test.describe('Context manager file sync', () => {
   // Skills tests
   // =========================================================================
 
-  test.describe.skip('Skills', () => {
+  test.describe('Skills', () => {
     test('expand shows editor with auto-save', async ({ mainWindow }) => {
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
 
       await openSkillEditPanel(dialog, skillSlug)
 
@@ -469,7 +335,19 @@ test.describe('Context manager file sync', () => {
     })
 
     test('Config → File pushes skill to specific provider', async ({ mainWindow }) => {
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const pendingContent = `# File sync skill provider push\n\n${Date.now()}\n`
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
+      await openSkillEditPanel(dialog, skillSlug)
+      const content = dialog.getByTestId('skill-detail-content')
+      await expect(content).toBeVisible({ timeout: 5_000 })
+      await content.fill(pendingContent)
+      await expect.poll(async () => {
+        return await mainWindow.evaluate(async (slug) => {
+          const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
+          const match = items.find((i) => i.slug === slug)
+          return match?.content ?? null
+        }, skillSlug)
+      }, { timeout: 5_000 }).toBe(pendingContent)
       await openSkillSyncPanel(dialog, skillSlug)
 
       const pushClaude = dialog.getByTestId(`skill-push-claude-${skillSlug}`)
@@ -479,7 +357,7 @@ test.describe('Context manager file sync', () => {
       // Verify .claude/skills/{slug}/SKILL.md written with frontmatter
       await expect.poll(() => {
         const content = readFileSafe(claudeSkillPath())
-        return content.includes(`name: ${skillSlug}`) && content.includes(skillContentV2.trim())
+        return content.includes(`name: ${skillSlug}`) && content.includes(pendingContent.trim())
       }).toBe(true)
 
       // Verify claude card shows synced
@@ -490,7 +368,19 @@ test.describe('Context manager file sync', () => {
     })
 
     test('Config → All Files pushes to all providers', async ({ mainWindow }) => {
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const pendingContent = `# File sync skill push all\n\n${Date.now()}\n`
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
+      await openSkillEditPanel(dialog, skillSlug)
+      const content = dialog.getByTestId('skill-detail-content')
+      await expect(content).toBeVisible({ timeout: 5_000 })
+      await content.fill(pendingContent)
+      await expect.poll(async () => {
+        return await mainWindow.evaluate(async (slug) => {
+          const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
+          const match = items.find((i) => i.slug === slug)
+          return match?.content ?? null
+        }, skillSlug)
+      }, { timeout: 5_000 }).toBe(pendingContent)
       await openSkillSyncPanel(dialog, skillSlug)
 
       const pushAll = dialog.getByTestId(`skill-push-all-${skillSlug}`)
@@ -500,9 +390,9 @@ test.describe('Context manager file sync', () => {
       // Verify both provider files on disk
       await expect.poll(() => {
         const content = readFileSafe(claudeSkillPath())
-        return content.includes(`name: ${skillSlug}`) && content.includes(skillContentV2.trim())
+        return content.includes(`name: ${skillSlug}`) && content.includes(pendingContent.trim())
       }).toBe(true)
-      await expect.poll(() => readFileSafe(codexSkillPath())).toBe(skillContentV2)
+      await expect.poll(() => readFileSafe(codexSkillPath())).toBe(pendingContent)
 
       // Verify both cards show synced
       await expect(dialog.getByTestId(`skill-provider-card-claude-${skillSlug}`)).toContainText('Synced', { timeout: 5_000 })
@@ -516,7 +406,7 @@ test.describe('Context manager file sync', () => {
       const modified = '---\nname: modified\n---\n# Modified externally\n'
       fs.writeFileSync(claudeSkillPath(), modified)
 
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       const skillRow = dialog.getByTestId(`project-context-item-skill-${skillSlug}`)
 
       // Row should show stale aggregate
@@ -533,26 +423,27 @@ test.describe('Context manager file sync', () => {
       await closeTopDialog(mainWindow)
     })
 
-    test('expand stale skill card shows diff', async ({ mainWindow }) => {
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+    test('stale skill card shows pull action', async ({ mainWindow }) => {
+      const modified = '---\nname: modified\n---\n# Modified externally\n'
+      fs.writeFileSync(claudeSkillPath(), modified)
+
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       await openSkillSyncPanel(dialog, skillSlug)
 
       const claudeCard = dialog.getByTestId(`skill-provider-card-claude-${skillSlug}`)
       await expect(claudeCard).toContainText('Stale', { timeout: 5_000 })
-
-      // Click card to expand diff
-      await claudeCard.click()
-
-      // Verify diff labels appear
-      await expect(claudeCard.getByText('on disk')).toBeVisible({ timeout: 5_000 })
-      await expect(claudeCard.getByText('Expected content')).toBeVisible({ timeout: 5_000 })
+      await expect(dialog.getByTestId(`skill-pull-claude-${skillSlug}`)).toBeVisible({ timeout: 5_000 })
 
       await closeTopDialog(mainWindow)
     })
 
     test('File → Config pulls from disk and strips frontmatter', async ({ mainWindow }) => {
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const modified = '---\nname: modified\n---\n# Modified externally\n'
+      fs.writeFileSync(claudeSkillPath(), modified)
+
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       await openSkillSyncPanel(dialog, skillSlug)
+      await expect(dialog.getByTestId(`skill-provider-card-claude-${skillSlug}`)).toContainText('Stale', { timeout: 5_000 })
 
       const pullClaude = dialog.getByTestId(`skill-pull-claude-${skillSlug}`)
       await expect(pullClaude).toBeVisible({ timeout: 5_000 })
@@ -573,7 +464,7 @@ test.describe('Context manager file sync', () => {
     test('filename rename updates slug', async ({ mainWindow }) => {
       const newSlug = 'e2e-file-sync-renamed'
 
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       const skillRow = dialog.getByTestId(`project-context-item-skill-${skillSlug}`)
       await openSkillEditPanel(dialog, skillSlug)
 
@@ -598,7 +489,7 @@ test.describe('Context manager file sync', () => {
 
       // Rename back for subsequent tests — need to close/reopen dialog since onChanged reloads data
       await closeTopDialog(mainWindow)
-      const dialog2 = await openProjectContextSection(mainWindow, 'skills')
+      const dialog2 = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       await openSkillEditPanel(dialog2, newSlug)
       const input = dialog2.getByTestId('skill-detail-filename')
       await expect(input).toBeVisible({ timeout: 5_000 })
@@ -610,11 +501,20 @@ test.describe('Context manager file sync', () => {
     })
 
     test('Config → File after pull re-syncs to disk', async ({ mainWindow }) => {
-      // First push all to have a clean state
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const resyncedContent = '# Re-synced after pull\n'
+      await mainWindow.evaluate(async ({ slug, content }) => {
+        const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
+        const item = items.find((entry) => entry.slug === slug)
+        if (!item) throw new Error('Skill not found for resync test')
+        await window.api.aiConfig.updateItem({ id: item.id, content })
+      }, { slug: skillSlug, content: resyncedContent })
+
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       await openSkillSyncPanel(dialog, skillSlug)
+      await expect(dialog.getByTestId(`project-context-item-skill-${skillSlug}`)).toContainText('Stale', { timeout: 5_000 })
 
       const pushAll = dialog.getByTestId(`skill-push-all-${skillSlug}`)
+      await expect(pushAll).toBeVisible({ timeout: 5_000 })
       await pushAll.click()
 
       // Verify both synced
@@ -622,8 +522,8 @@ test.describe('Context manager file sync', () => {
       await expect(dialog.getByTestId(`skill-provider-card-codex-${skillSlug}`)).toContainText('Synced', { timeout: 5_000 })
 
       // Verify files on disk
-      await expect.poll(() => readFileSafe(claudeSkillPath()).length > 0).toBe(true)
-      await expect.poll(() => readFileSafe(codexSkillPath()).length > 0).toBe(true)
+      await expect.poll(() => readFileSafe(claudeSkillPath()).includes(resyncedContent.trim())).toBe(true)
+      await expect.poll(() => readFileSafe(codexSkillPath())).toBe(resyncedContent)
 
       await closeTopDialog(mainWindow)
     })
@@ -633,7 +533,7 @@ test.describe('Context manager file sync', () => {
   // Cross-feature tests
   // =========================================================================
 
-  test.describe.skip('Integration', () => {
+  test.describe('Integration', () => {
     test('full instructions roundtrip: push → external edit → stale → pull', async ({ mainWindow }) => {
       const testContent = '# Roundtrip test\n\nFull cycle.\n'
       const externalEdit = '# Externally edited\n\nDifferent content.\n'
@@ -644,7 +544,7 @@ test.describe('Context manager file sync', () => {
       }, { id: projectId, projectPath: TEST_PROJECT_PATH, content: testContent })
 
       // 2. Push to all
-      const dialog = await openProjectContextSection(mainWindow, 'instructions')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'instructions')
       await dialog.getByTestId('instructions-push-all').click()
       await expect.poll(() => readFileSafe(claudeInstructionsPath())).toBe(testContent)
 
@@ -653,7 +553,7 @@ test.describe('Context manager file sync', () => {
 
       // 4. Close and reopen to pick up stale status
       await closeTopDialog(mainWindow)
-      const dialog2 = await openProjectContextSection(mainWindow, 'instructions')
+      const dialog2 = await openProjectContextSection(mainWindow, projectAbbrev, 'instructions')
       await expect(dialog2.getByTestId('instructions-provider-card-claude')).toContainText('Stale', { timeout: 5_000 })
 
       // 5. Pull from claude
@@ -670,17 +570,29 @@ test.describe('Context manager file sync', () => {
 
     test('needsSync returns false after all providers synced', async ({ mainWindow }) => {
       // Push all instructions
-      const dialog = await openProjectContextSection(mainWindow, 'instructions')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'instructions')
       const pushAllInstructions = dialog.getByTestId('instructions-push-all')
       if (await pushAllInstructions.count()) {
-        await pushAllInstructions.click()
+        if (await pushAllInstructions.isVisible({ timeout: 800 }).catch(() => false)) {
+          await pushAllInstructions.click()
+        }
+      }
+      if (!(await pushAllInstructions.isVisible({ timeout: 400 }).catch(() => false))) {
+        const pushClaude = dialog.getByTestId('instructions-push-claude')
+        if (await pushClaude.isVisible({ timeout: 800 }).catch(() => false)) {
+          await pushClaude.click()
+        }
+        const pushCodex = dialog.getByTestId('instructions-push-codex')
+        if (await pushCodex.isVisible({ timeout: 800 }).catch(() => false)) {
+          await pushCodex.click()
+        }
       }
       await expect(dialog.getByTestId('instructions-provider-card-claude')).toContainText('Synced', { timeout: 5_000 })
       await expect(dialog.getByTestId('instructions-provider-card-codex')).toContainText('Synced', { timeout: 5_000 })
       await closeTopDialog(mainWindow)
 
       // Push all skills
-      const dialog2 = await openProjectContextSection(mainWindow, 'skills')
+      const dialog2 = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       await openSkillSyncPanel(dialog2, skillSlug)
       const pushAllSkills = dialog2.getByTestId(`skill-push-all-${skillSlug}`)
       if (await pushAllSkills.count()) {
@@ -702,7 +614,7 @@ test.describe('Context manager file sync', () => {
       fs.mkdirSync(path.dirname(unmanagedCodexSkillPath()), { recursive: true })
       fs.writeFileSync(unmanagedCodexSkillPath(), '# unmanaged skill on disk\n')
 
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       const unmanagedRow = dialog.getByTestId(`project-context-item-unmanaged-skill-${unmanagedSkillSlug}`)
       await expect(unmanagedRow).toBeVisible({ timeout: 5_000 })
       await expect(unmanagedRow).toContainText('Unmanaged')
@@ -714,7 +626,7 @@ test.describe('Context manager file sync', () => {
       fs.mkdirSync(path.dirname(manageableUnmanagedCodexSkillPath()), { recursive: true })
       fs.writeFileSync(manageableUnmanagedCodexSkillPath(), manageableUnmanagedSkillContent)
 
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       const unmanagedRow = dialog.getByTestId(`project-context-item-unmanaged-skill-${manageableUnmanagedSkillSlug}`)
       await expect(unmanagedRow).toBeVisible({ timeout: 5_000 })
       await unmanagedRow.click()
@@ -773,7 +685,7 @@ test.describe('Context manager file sync', () => {
         }, { id: projectId, projectPath: TEST_PROJECT_PATH, slug: frontmatterMismatchSkillSlug })
       }).toEqual({ claude: 'stale', codex: 'synced' })
 
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       const skillRow = dialog.getByTestId(`project-context-item-skill-${frontmatterMismatchSkillSlug}`)
       await expect(skillRow).toContainText('Stale', { timeout: 5_000 })
 
@@ -804,7 +716,7 @@ test.describe('Context manager file sync', () => {
 
       await expect.poll(() => readFileSafe(codexOnlySkillPath())).toBe(codexOnlySkillContent)
 
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       const skillRow = dialog.getByTestId(`project-context-item-skill-${codexOnlySkillSlug}`)
       await expect(skillRow).toContainText('Synced', { timeout: 5_000 })
 
@@ -837,7 +749,7 @@ test.describe('Context manager file sync', () => {
       fs.mkdirSync(path.dirname(codexOnlyWithUnmanagedClaudeClaudePath()), { recursive: true })
       fs.writeFileSync(codexOnlyWithUnmanagedClaudeClaudePath(), '# unmanaged claude version\n')
 
-      const dialog = await openProjectContextSection(mainWindow, 'skills')
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       const skillRow = dialog.getByTestId(`project-context-item-skill-${codexOnlyWithUnmanagedClaudeSlug}`)
       await expect(skillRow).toContainText('Unmanaged', { timeout: 5_000 })
       await expect(skillRow).not.toContainText('Synced')

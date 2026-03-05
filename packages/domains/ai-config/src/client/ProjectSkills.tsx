@@ -5,6 +5,7 @@ import type { AiConfigItem, AiConfigItemType, CliProvider, ProjectSkillStatus, S
 import { PROVIDER_LABELS } from '../shared/provider-registry'
 import { GlobalItemPicker } from './GlobalItemPicker'
 import { ContextItemEditor } from './ContextItemEditor'
+import { toSyncBadgeLabel } from './sync-view-model'
 
 interface ProjectSkillsProps {
   projectId: string
@@ -34,7 +35,7 @@ function StatusBadge({ provider, syncHealth }: {
       {health === 'synced' && <Check className="size-2.5" />}
       {health === 'stale' && <AlertCircle className="size-2.5" />}
       {health === 'unmanaged' && <Circle className="size-2.5" />}
-      {PROVIDER_LABELS[provider]}
+      {`${PROVIDER_LABELS[provider]} ${toSyncBadgeLabel(health)}`}
     </span>
   )
 }

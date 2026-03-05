@@ -1,5 +1,10 @@
-import { test, expect, seed, clickSettings, goHome, projectBlob, TEST_PROJECT_PATH } from './fixtures/electron'
-import type { Page, Locator } from '@playwright/test'
+import { test, expect, seed, goHome, projectBlob, TEST_PROJECT_PATH } from './fixtures/electron'
+import {
+  closeTopDialog,
+  openGlobalContextManager,
+  openProjectContextSection,
+  openSkillSyncPanel
+} from './fixtures/context-manager'
 import path from 'path'
 import fs from 'fs'
 
@@ -10,130 +15,10 @@ const skillContentV1 = '# E2E context skill v1\n'
 const skillContentV2 = '# E2E context skill v2\n'
 const localSkillSlug = 'e2e-local-project-skill'
 const localSkillContent = '# E2E local project skill\n'
-const globalSettingsDialog = (mainWindow: Page): Locator =>
-  mainWindow.getByRole('dialog').filter({ has: mainWindow.getByRole('heading', { name: /^Settings$/ }) }).last()
-const projectSettingsDialog = (mainWindow: Page): Locator =>
-  mainWindow.getByRole('dialog').filter({ has: mainWindow.getByRole('heading', { name: 'Project Settings' }) }).last()
 const claudeSkillPath = () => path.join(TEST_PROJECT_PATH, '.claude', 'skills', skillSlug, 'SKILL.md')
 const codexSkillPath = () => path.join(TEST_PROJECT_PATH, '.agents', 'skills', skillSlug, 'SKILL.md')
 const localClaudeSkillPath = () => path.join(TEST_PROJECT_PATH, '.claude', 'skills', localSkillSlug, 'SKILL.md')
 const localCodexSkillPath = () => path.join(TEST_PROJECT_PATH, '.agents', 'skills', localSkillSlug, 'SKILL.md')
-async function closeTopDialog(mainWindow: Page): Promise<void> {
-  const openDialogs = mainWindow.locator('[role="dialog"][data-state="open"], [role="dialog"][aria-modal="true"]')
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    if ((await openDialogs.count()) === 0) return
-
-    const top = openDialogs.last()
-    const closeButton = top.getByRole('button', { name: /close|cancel|done|skip/i }).first()
-    if (await closeButton.count()) {
-      await closeButton.click({ force: true }).catch(() => {})
-    } else {
-      await top.press('Escape').catch(() => {})
-      await mainWindow.keyboard.press('Escape').catch(() => {})
-    }
-    await mainWindow.waitForTimeout(150)
-  }
-  await expect(openDialogs).toHaveCount(0, { timeout: 5_000 })
-}
-
-async function openSettingsTabWithRetry(
-  mainWindow: Page,
-  dialog: Locator,
-  tabTestId: string,
-  readyLocator: Locator
-): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (await readyLocator.isVisible({ timeout: 600 }).catch(() => false)) return
-    const tab = dialog.getByTestId(tabTestId).first()
-    await tab.click({ force: true }).catch(() => {})
-    if (await readyLocator.isVisible({ timeout: 1_200 }).catch(() => false)) return
-    await mainWindow.waitForTimeout(120)
-  }
-  await expect(readyLocator).toBeVisible({ timeout: 5_000 })
-}
-
-async function openGlobalContextManager(mainWindow: Page): Promise<Locator> {
-  await closeTopDialog(mainWindow)
-  await goHome(mainWindow)
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await clickSettings(mainWindow)
-    const dialog = globalSettingsDialog(mainWindow)
-    if (await dialog.isVisible({ timeout: 1_500 }).catch(() => false)) break
-    await mainWindow.keyboard.press('Meta+,').catch(() => {})
-    if (await dialog.isVisible({ timeout: 1_500 }).catch(() => false)) break
-    await mainWindow.waitForTimeout(120)
-  }
-
-  const dialog = globalSettingsDialog(mainWindow)
-  await expect(dialog).toBeVisible({ timeout: 5_000 })
-  await openSettingsTabWithRetry(
-    mainWindow,
-    dialog,
-    'settings-tab-ai-config',
-    dialog.getByRole('heading', { name: 'Context Manager' })
-  )
-  const backToOverview = dialog.getByRole('button', { name: 'Overview' })
-  if (await backToOverview.count()) {
-    await backToOverview.click()
-  }
-  await expect(dialog.getByTestId('context-overview-providers')).toBeVisible({ timeout: 5_000 })
-  return dialog
-}
-
-async function openProjectContextManager(mainWindow: Page): Promise<Locator> {
-  await closeTopDialog(mainWindow)
-  await goHome(mainWindow)
-
-  const dialog = projectSettingsDialog(mainWindow)
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    if (await dialog.isVisible({ timeout: 500 }).catch(() => false)) break
-
-    await goHome(mainWindow)
-    const blob = projectBlob(mainWindow, projectAbbrev)
-    await expect(blob).toBeVisible({ timeout: 5_000 })
-    await blob.scrollIntoViewIfNeeded().catch(() => {})
-    await blob.click({ button: 'right', force: true }).catch(async () => {
-      await blob.click({ force: true }).catch(() => {})
-      await blob.focus().catch(() => {})
-      await mainWindow.keyboard.press('Shift+F10').catch(() => {})
-    })
-
-    const settingsItem = mainWindow.getByRole('menuitem', { name: 'Settings' })
-    if (await settingsItem.isVisible({ timeout: 1_200 }).catch(() => false)) {
-      await settingsItem.click({ force: true }).catch(() => {})
-    }
-  }
-
-  await expect(dialog.getByRole('heading', { name: 'Project Settings' })).toBeVisible({ timeout: 5_000 })
-  await openSettingsTabWithRetry(
-    mainWindow,
-    dialog,
-    'settings-tab-ai-config',
-    dialog.getByRole('heading', { name: 'Context Manager' })
-  )
-  await dialog.getByRole('tab', { name: 'Config', exact: true }).click()
-  const backToOverview = dialog.getByRole('button', { name: 'Overview' })
-  if (await backToOverview.count()) {
-    await backToOverview.click()
-  }
-  await expect(dialog.getByTestId('project-context-overview-providers')).toBeVisible({ timeout: 5_000 })
-  return dialog
-}
-
-async function openProjectContextSection(
-  mainWindow: Page,
-  section: 'providers' | 'instructions' | 'skills' | 'mcp'
-): Promise<Locator> {
-  const dialog = await openProjectContextManager(mainWindow)
-  const sectionTestIdMap = {
-    providers: 'project-context-overview-providers',
-    instructions: 'project-context-overview-instructions',
-    skills: 'project-context-overview-skills',
-    mcp: 'project-context-overview-mcp',
-  } as const
-  await dialog.getByTestId(sectionTestIdMap[section]).click()
-  return dialog
-}
 
 async function upsertGlobalSkill(mainWindow: Page, content: string): Promise<void> {
   const skillExists = await mainWindow.evaluate(async (slug) => {
@@ -188,7 +73,7 @@ test.describe('Context manager sync flow', () => {
     await expect(projectBlob(mainWindow, projectAbbrev)).toBeVisible({ timeout: 5_000 })
   })
 
-  test.skip('creates a global skill file from the Files panel', async ({ mainWindow }) => {
+  test('creates a global skill file from the Files panel', async ({ mainWindow }) => {
     const slug = `e2e-global-file-${Date.now()}`
     const dialog = await openGlobalContextManager(mainWindow)
     await dialog.getByTestId('context-overview-files').click()
@@ -225,12 +110,12 @@ test.describe('Context manager sync flow', () => {
     await closeTopDialog(mainWindow)
   })
 
-  test.skip('project MCP section shows provider columns when MCP entries exist', async ({ mainWindow }) => {
+  test('project MCP section shows provider columns when MCP entries exist', async ({ mainWindow }) => {
     await mainWindow.evaluate(({ id }) => {
       return window.api.aiConfig.setProjectProviders(id, ['claude', 'codex'])
     }, { id: projectId })
 
-    const projectDialog = await openProjectContextSection(mainWindow, 'mcp')
+    const projectDialog = await openProjectContextSection(mainWindow, projectAbbrev, 'mcp')
 
     await expect(projectDialog.getByTestId('project-context-mcp-provider-claude')).toHaveCount(0)
     await expect(projectDialog.getByTestId('project-context-mcp-provider-codex')).toHaveCount(0)
@@ -240,6 +125,9 @@ test.describe('Context manager sync flow', () => {
     await expect(addMcpDialog).toBeVisible({ timeout: 5_000 })
     await addMcpDialog.getByRole('button', { name: 'Filesystem' }).click()
 
+    const serverRow = projectDialog.locator('[data-testid^="project-context-item-mcp-"]').first()
+    await expect(serverRow).toBeVisible({ timeout: 5_000 })
+    await serverRow.click()
     await expect(projectDialog.getByTestId('project-context-mcp-provider-claude')).toBeVisible({ timeout: 5_000 })
     const codexColumn = projectDialog.getByTestId('project-context-mcp-provider-codex')
     if (await codexColumn.count()) {
@@ -249,10 +137,10 @@ test.describe('Context manager sync flow', () => {
     await closeTopDialog(mainWindow)
   })
 
-  test.skip('global skill can be linked to project and re-synced after global edits', async ({ mainWindow }) => {
+  test('global skill can be linked to project and re-synced after global edits', async ({ mainWindow }) => {
     await upsertGlobalSkill(mainWindow, skillContentV1)
 
-    const projectDialog = await openProjectContextSection(mainWindow, 'skills')
+    const projectDialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
 
     await projectDialog.getByTestId('project-context-add-skill').click()
     const addDialog = mainWindow.getByRole('dialog').filter({ hasText: 'Add Skill' }).last()
@@ -281,13 +169,23 @@ test.describe('Context manager sync flow', () => {
     await closeTopDialog(mainWindow)
     await upsertGlobalSkill(mainWindow, skillContentV2)
 
-    const resyncDialog = await openProjectContextSection(mainWindow, 'skills')
+    const resyncDialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
     const skillRow = resyncDialog.getByTestId(`project-context-item-skill-${skillSlug}`)
     await expect(skillRow).toContainText('Stale', { timeout: 5_000 })
-
-    await closeTopDialog(mainWindow)
-    const overviewDialog = await openProjectContextManager(mainWindow)
-    await overviewDialog.getByTestId('project-context-sync-all').click()
+    await openSkillSyncPanel(resyncDialog, skillSlug)
+    const pushAll = resyncDialog.getByTestId(`skill-push-all-${skillSlug}`)
+    if (await pushAll.isVisible({ timeout: 800 }).catch(() => false)) {
+      await pushAll.click()
+    } else {
+      const pushClaude = resyncDialog.getByTestId(`skill-push-claude-${skillSlug}`)
+      if (await pushClaude.isVisible({ timeout: 800 }).catch(() => false)) {
+        await pushClaude.click()
+      }
+      const pushCodex = resyncDialog.getByTestId(`skill-push-codex-${skillSlug}`)
+      if (await pushCodex.isVisible({ timeout: 800 }).catch(() => false)) {
+        await pushCodex.click()
+      }
+    }
 
     await expect.poll(() => {
       try {

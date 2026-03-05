@@ -3,7 +3,7 @@ import { File, FilePlus, Link, Unlink, RefreshCw, Save, Check, AlertCircle, Circ
 import { Button, ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger, Dialog, DialogContent, DialogHeader, DialogTitle, Input, Label, Textarea, FileTree, fileTreeIndent, cn } from '@slayzone/ui'
 import type { CliProvider, ContextTreeEntry } from '../shared'
 import { GlobalItemPicker } from './GlobalItemPicker'
-import { contextEntryToSyncHealth } from './sync-health'
+import { contextEntryToSyncHealth } from './sync-view-model'
 
 function SyncBadge({ entry }: { entry: ContextTreeEntry }) {
   const health = entry.syncHealth
