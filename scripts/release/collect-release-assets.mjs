@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 
 const INCLUDED_SUFFIXES = [
@@ -21,13 +22,18 @@ const INCLUDED_SUFFIXES = [
 const EXCLUDED_BASENAMES = new Set(['builder-debug.yml', 'builder-effective-config.yaml'])
 const EXCLUDED_SUFFIXES = ['.blockmap']
 
-// On Windows, electron-builder outputs both installer .exe files and internal
-// helper binaries (winpty-agent.exe, etc.) that appear across arch subdirs.
-// Only include .exe files that look like installers (contain "setup" or "Setup").
-function isInstallerExe(baseName) {
+// electron-builder outputs internal helper binaries alongside installers.
+// Exclude known non-installer exe patterns rather than guessing installer names.
+const EXCLUDED_EXE_PATTERNS = ['winpty-agent.exe']
+
+function isExcludedExe(baseName) {
   const lower = baseName.toLowerCase()
-  if (!lower.endsWith('.exe')) return true // not an exe, defer to other checks
-  return lower.includes('setup')
+  if (!lower.endsWith('.exe')) return false
+  return EXCLUDED_EXE_PATTERNS.some((pattern) => lower === pattern)
+}
+
+function fileHash(filePath) {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex')
 }
 
 function parseArgs(argv) {
@@ -81,7 +87,7 @@ function isIncluded(filePath) {
     return false
   }
 
-  return isInstallerExe(baseName)
+  return !isExcludedExe(baseName)
 }
 
 function main() {
@@ -107,14 +113,12 @@ function main() {
     const destination = path.join(outputDir, baseName)
 
     if (existsSync(destination)) {
-      // Windows builds with --x64 --arm64 produce arch-specific installers
-      // but identical update manifests (app-update.yml). Skip exact duplicates.
-      const existingSize = statSync(destination).size
-      const newSize = statSync(filePath).size
-      if (existingSize === newSize) {
+      // Multi-arch builds (e.g. Windows --x64 --arm64) produce identical
+      // update manifests per arch. Skip if content hash matches.
+      if (fileHash(destination) === fileHash(filePath)) {
         continue
       }
-      throw new Error(`Duplicate output filename detected with different content: ${baseName}`)
+      throw new Error(`Duplicate output filename with different content: ${baseName}`)
     }
 
     cpSync(filePath, destination)

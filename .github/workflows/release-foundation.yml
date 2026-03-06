@@ -310,9 +310,9 @@ jobs:
           while IFS= read -r -d '' file; do
             name=$(basename "$file")
             if [ -f "$ASSETS_DIR/$name" ]; then
-              existing_size=$(stat -c%s "$ASSETS_DIR/$name")
-              new_size=$(stat -c%s "$file")
-              if [ "$existing_size" = "$new_size" ]; then
+              existing_hash=$(sha256sum "$ASSETS_DIR/$name" | cut -d' ' -f1)
+              new_hash=$(sha256sum "$file" | cut -d' ' -f1)
+              if [ "$existing_hash" = "$new_hash" ]; then
                 echo "Skipping identical duplicate: $name"
                 continue
               fi
