@@ -118,9 +118,10 @@ test.describe('Provider config roundtrip', () => {
   })
 
   test('default flags setting is used for new tasks', async ({ mainWindow }) => {
-    const s = seed(mainWindow)
-    // Set a custom default
-    await s.setSetting('default_claude_flags', '--test-default-flag')
+    // Set a custom default via terminal_modes table
+    await mainWindow.evaluate(
+      () => window.api.terminalModes.update('claude-code', { defaultFlags: '--test-default-flag' })
+    )
 
     const task = await mainWindow.evaluate(
       (pid) => window.api.db.createTask({ projectId: pid, title: 'Default flags task' }),
@@ -129,6 +130,8 @@ test.describe('Provider config roundtrip', () => {
     expect(task?.claude_flags).toBe('--test-default-flag')
 
     // Restore default
-    await s.setSetting('default_claude_flags', '--allow-dangerously-skip-permissions')
+    await mainWindow.evaluate(
+      () => window.api.terminalModes.update('claude-code', { defaultFlags: '--allow-dangerously-skip-permissions' })
+    )
   })
 })

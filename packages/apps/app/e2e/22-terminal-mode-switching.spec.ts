@@ -39,25 +39,6 @@ test.describe('Terminal mode switching', () => {
     await mainWindow.keyboard.press('Escape')
   })
 
-  test('switch to Terminal mode', async ({ mainWindow }) => {
-    await switchTerminalMode(mainWindow, 'terminal')
-
-    // Select now shows Terminal
-    await expect(modeTrigger(mainWindow)).toHaveText(/Terminal/)
-  })
-
-  test('terminal mode hides Sync name and Flags', async ({ mainWindow }) => {
-    await openTerminalMenu(mainWindow)
-    await expect(mainWindow.getByRole('menuitem', { name: 'Sync name' })).not.toBeVisible()
-    await mainWindow.keyboard.press('Escape')
-    await expect(mainWindow.locator('input[placeholder="Flags"]')).not.toBeVisible()
-  })
-
-  test('mode persists in DB', async ({ mainWindow }) => {
-    const task = await mainWindow.evaluate((id) => window.api.db.getTask(id), taskId)
-    expect(task?.terminal_mode).toBe('terminal')
-  })
-
   test('switch to Codex mode', async ({ mainWindow }) => {
     await switchTerminalMode(mainWindow, 'codex')
 
@@ -105,9 +86,9 @@ test.describe('Terminal mode switching', () => {
         opencodeConversationId: 'fake-opencode-def',
       }), taskId)
 
-    // Switch to terminal and back
-    await switchTerminalMode(mainWindow, 'terminal')
-    await expect(modeTrigger(mainWindow)).toHaveText(/Terminal/)
+    // Switch to codex and back
+    await switchTerminalMode(mainWindow, 'codex')
+    await expect(modeTrigger(mainWindow)).toHaveText(/Codex/)
 
     // Verify ALL conversation IDs cleared
     const task = await mainWindow.evaluate((id) => window.api.db.getTask(id), taskId)
@@ -166,7 +147,7 @@ test.describe('Terminal mode switching', () => {
       title: 'Mode switch temporary auto-delete',
       status: 'in_progress',
       isTemporary: true,
-      terminalMode: 'terminal',
+      terminalMode: 'claude-code',
     })
     await s.refreshData()
 

@@ -49,7 +49,7 @@ function makeTask(id: string, projectId: string, title: string): Task {
     order: 0,
     due_date: null,
     archived_at: null,
-    terminal_mode: 'terminal',
+    terminal_mode: 'claude-code',
     provider_config: {},
     terminal_shell: null,
     claude_session_id: null,

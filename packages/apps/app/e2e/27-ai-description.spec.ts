@@ -10,10 +10,7 @@ test.describe('AI description generation', () => {
     // Mock the AI IPC handler to avoid calling real CLI
     await electronApp.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('ai:generate-description')
-      ipcMain.handle('ai:generate-description', async (_event, title: string, mode: string) => {
-        if (mode === 'terminal') {
-          return { success: false, error: 'AI not available in terminal mode' }
-        }
+      ipcMain.handle('ai:generate-description', async (_event, title: string, _mode: string) => {
         // Simulate a short delay like a real API call
         await new Promise(r => setTimeout(r, 300))
         return { success: true, description: `Mock description for: ${title}` }
@@ -98,19 +95,8 @@ test.describe('AI description generation', () => {
     await expect(generateBtn(mainWindow).locator('.lucide-sparkles')).toBeVisible()
   })
 
-  test('button hidden in terminal mode', async ({ mainWindow }) => {
-    await switchTerminalMode(mainWindow, 'terminal')
-
-    await expect(generateBtn(mainWindow)).not.toBeVisible()
-  })
-
-  test('button visible again in codex mode', async ({ mainWindow }) => {
-    await switchTerminalMode(mainWindow, 'codex')
-
-    await expect(generateBtn(mainWindow)).toBeVisible()
-  })
-
   test('generate works in codex mode too', async ({ mainWindow }) => {
+    await switchTerminalMode(mainWindow, 'codex')
     // Clear existing description first
     await mainWindow.evaluate((id) =>
       window.api.db.updateTask({ id, description: null }), taskId)
