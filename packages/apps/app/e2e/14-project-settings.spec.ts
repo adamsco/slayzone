@@ -64,6 +64,15 @@ const GITHUB_REPOSITORY_ISSUES_REMOTE_AHEAD = [
   }
 ]
 
+const GITHUB_STATUS_OPTIONS = [
+  { id: 'gh-status-inbox', name: 'Inbox', color: 'gray' },
+  { id: 'gh-status-backlog', name: 'Backlog', color: 'slate' },
+  { id: 'gh-status-todo', name: 'To Do', color: 'blue' },
+  { id: 'gh-status-in-progress', name: 'In Progress', color: 'yellow' },
+  { id: 'gh-status-review', name: 'Review', color: 'purple' },
+  { id: 'gh-status-done', name: 'Done', color: 'green' }
+]
+
 test.describe('Project settings & context menu', () => {
   let projectAbbrev: string
   let projectId: string
@@ -105,6 +114,14 @@ test.describe('Project settings & context menu', () => {
         syncMode: 'one_way'
       }),
       { pid: projectId, cid: GITHUB_REPO_CONNECTION_ID }
+    )
+    await mainWindow.evaluate(
+      ({ pid, statuses }) => window.api.integrations.applyStatusSync({
+        projectId: pid,
+        provider: 'github',
+        statuses
+      }),
+      { pid: projectId, statuses: GITHUB_STATUS_OPTIONS }
     )
     const githubConnections = await mainWindow.evaluate(
       () => window.api.integrations.listConnections('github')

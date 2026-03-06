@@ -6,6 +6,29 @@ test.describe('Task detail actions', () => {
   const openTaskFromBoard = async (mainWindow: import('@playwright/test').Page, title: string) => {
     await goHome(mainWindow)
     await clickProject(mainWindow, projectAbbrev)
+
+    // Previous specs can leave dialogs/overlays open in long serial runs.
+    const openDialogs = mainWindow.locator('[role="dialog"][data-state="open"], [role="dialog"][aria-modal="true"]')
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if ((await openDialogs.count()) === 0) break
+      const topDialog = openDialogs.last()
+      const closeButton = topDialog.getByRole('button', { name: /close|cancel|done|skip/i }).first()
+      if (await closeButton.isVisible({ timeout: 150 }).catch(() => false)) {
+        await closeButton.click({ force: true }).catch(() => {})
+      } else {
+        await topDialog.press('Escape').catch(() => {})
+        await mainWindow.keyboard.press('Escape').catch(() => {})
+      }
+      await mainWindow.waitForTimeout(100)
+    }
+
+    const openAlertOverlay = mainWindow.locator('[data-slot="alert-dialog-overlay"][data-state="open"]')
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (!(await openAlertOverlay.isVisible({ timeout: 100 }).catch(() => false))) break
+      await mainWindow.keyboard.press('Escape').catch(() => {})
+      await mainWindow.waitForTimeout(100)
+    }
+
     const card = mainWindow.locator('p').filter({ hasText: title }).first()
     await expect(card).toBeVisible({ timeout: 10_000 })
     await card.click()

@@ -110,19 +110,45 @@ async function isProjectSectionVisible(dialog: Locator, section: ProjectSection)
   return dialog.getByRole('button', { name: /claude|codex|cursor|gemini|opencode/i }).first().isVisible({ timeout: 300 }).catch(() => false)
 }
 
-export async function openGlobalContextManager(mainWindow: Page): Promise<Locator> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function openGlobalContextManager(mainWindow: Page, electronApp?: any): Promise<Locator> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sendOpenSettingsShortcut = async (electronApp: any): Promise<void> => {
+    await electronApp.evaluate(
+      ({ BrowserWindow }: { BrowserWindow: typeof Electron.CrossProcessExports.BrowserWindow }, ch: string) => {
+        BrowserWindow.getAllWindows()
+          .find((w) => !w.isDestroyed() && !w.webContents.getURL().startsWith('data:'))
+          ?.webContents.send(ch)
+      },
+      'app:open-settings'
+    )
+  }
+
   const dialog = globalSettingsDialog(mainWindow)
 
-  for (let reopenAttempt = 0; reopenAttempt < 2; reopenAttempt += 1) {
+  for (let reopenAttempt = 0; reopenAttempt < 3; reopenAttempt += 1) {
     await closeTopDialog(mainWindow)
     await goHome(mainWindow)
 
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
       await mainWindow.bringToFront().catch(() => {})
       if (await dialog.isVisible({ timeout: 500 }).catch(() => false)) break
 
+      // In long serial runs, stale Radix overlays can survive and block pointer events.
+      const blockingOverlay = mainWindow.locator(
+        '[data-slot="alert-dialog-overlay"][data-state="open"], [data-slot="dialog-overlay"][data-state="open"]'
+      ).first()
+      if (await blockingOverlay.isVisible({ timeout: 120 }).catch(() => false)) {
+        await mainWindow.keyboard.press('Escape').catch(() => {})
+      }
+
       await clickSettings(mainWindow)
       if (await dialog.isVisible({ timeout: 1_500 }).catch(() => false)) break
+
+      if (electronApp) {
+        await sendOpenSettingsShortcut(electronApp).catch(() => {})
+        if (await dialog.isVisible({ timeout: 1_500 }).catch(() => false)) break
+      }
 
       await mainWindow.keyboard.press('Meta+,').catch(() => {})
       if (await dialog.isVisible({ timeout: 1_500 }).catch(() => false)) break
@@ -130,6 +156,12 @@ export async function openGlobalContextManager(mainWindow: Page): Promise<Locato
       const sidebarSettingsButton = mainWindow.getByRole('button', { name: 'Settings', exact: true }).first()
       if (await sidebarSettingsButton.isVisible({ timeout: 600 }).catch(() => false)) {
         await sidebarSettingsButton.click({ force: true }).catch(() => {})
+        if (await dialog.isVisible({ timeout: 1_500 }).catch(() => false)) break
+      }
+
+      const settingsByAria = mainWindow.locator('button[aria-label="Settings"]').first()
+      if (await settingsByAria.isVisible({ timeout: 600 }).catch(() => false)) {
+        await settingsByAria.click({ force: true }).catch(() => {})
         if (await dialog.isVisible({ timeout: 1_500 }).catch(() => false)) break
       }
 

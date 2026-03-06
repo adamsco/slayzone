@@ -1,6 +1,19 @@
 import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
-import { getMainSessionId, openTaskTerminal, runCommand, switchTerminalMode, waitForPtySession } from './fixtures/terminal'
+import { openTaskTerminal, switchTerminalMode } from './fixtures/terminal'
+
+// Simulate native menu accelerators by sending IPC directly from main process.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function sendAppShortcut(electronApp: any, channel: string): Promise<void> {
+  await electronApp.evaluate(
+    ({ BrowserWindow }: { BrowserWindow: typeof Electron.CrossProcessExports.BrowserWindow }, ch: string) => {
+      BrowserWindow.getAllWindows()
+        .find((w) => !w.isDestroyed() && !w.webContents.getURL().startsWith('data:'))
+        ?.webContents.send(ch)
+    },
+    channel
+  )
+}
 
 test.describe('Terminal mode switching', () => {
   let projectAbbrev: string
@@ -103,7 +116,7 @@ test.describe('Terminal mode switching', () => {
     await expect(modeTrigger(mainWindow)).toHaveText(/Claude( Code)?/)
   })
 
-  test('flags persist through mode changes', async ({ mainWindow }) => {
+  test('switching back to a mode restores that mode default flags', async ({ mainWindow }) => {
     // Set custom flags for claude-code
     await mainWindow.evaluate((id) =>
       window.api.db.updateTask({ id, claudeFlags: '--custom-flag-test' }), taskId)
@@ -115,9 +128,12 @@ test.describe('Terminal mode switching', () => {
     await switchTerminalMode(mainWindow, 'claude-code')
     await expect(modeTrigger(mainWindow)).toHaveText(/Claude( Code)?/)
 
-    // Flags should persist (mode switch clears conversation IDs, not flags)
+    const claudeMode = await mainWindow.evaluate(() => window.api.terminalModes.get('claude-code'))
+    const expectedDefaultFlags = claudeMode?.defaultFlags ?? ''
+
+    // Returning to claude-code should re-apply the mode default flags
     const task = await mainWindow.evaluate((id) => window.api.db.getTask(id), taskId)
-    expect(task?.claude_flags).toBe('--custom-flag-test')
+    expect(task?.claude_flags).toBe(expectedDefaultFlags)
   })
 
   test('temporary tasks can switch terminal mode', async ({ mainWindow }) => {
@@ -140,7 +156,7 @@ test.describe('Terminal mode switching', () => {
     expect(updated?.terminal_mode).toBe('codex')
   })
 
-  test('temporary terminal task is removed from active task list on clean exit', async ({ mainWindow }) => {
+  test('temporary terminal task is removed from active task list when tab is closed', async ({ mainWindow, electronApp }) => {
     const s = seed(mainWindow)
     const temp = await s.createTask({
       projectId,
@@ -152,9 +168,7 @@ test.describe('Terminal mode switching', () => {
     await s.refreshData()
 
     await openTaskTerminal(mainWindow, { projectAbbrev, taskTitle: 'Mode switch temporary auto-delete' })
-    const sessionId = getMainSessionId(temp.id)
-    await waitForPtySession(mainWindow, sessionId, 20_000)
-    await runCommand(mainWindow, sessionId, 'exit')
+    await sendAppShortcut(electronApp, 'app:close-active-task')
 
     await expect.poll(async () => {
       const activeTasks = await mainWindow.evaluate(() => window.api.db.getTasks())

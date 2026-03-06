@@ -31,13 +31,14 @@ function skillDocument(slug: string, body: string): string {
   return `---\nname: ${slug}\ndescription: ${slug}\n---\n\n${normalizedBody}`
 }
 
-async function upsertGlobalSkill(mainWindow: Page, content: string): Promise<void> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function upsertGlobalSkill(mainWindow: Page, content: string, electronApp?: any): Promise<void> {
   const skillExists = await mainWindow.evaluate(async (slug) => {
     const skills = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
     return skills.some((item) => item.slug === slug)
   }, skillSlug)
 
-  const dialog = await openGlobalContextManager(mainWindow)
+  const dialog = await openGlobalContextManager(mainWindow, electronApp)
   await dialog.getByTestId('context-overview-skills').click()
   await expect(dialog.getByTestId('context-new-skill')).toBeVisible({ timeout: 5_000 })
 
@@ -84,9 +85,9 @@ test.describe('Context manager sync flow', () => {
     await expect(projectBlob(mainWindow, projectAbbrev)).toBeVisible({ timeout: 5_000 })
   })
 
-  test('creates a global skill file from the Files panel', async ({ mainWindow }) => {
+  test('creates a global skill file from the Files panel', async ({ mainWindow, electronApp }) => {
     const slug = `e2e-global-file-${Date.now()}`
-    const dialog = await openGlobalContextManager(mainWindow)
+    const dialog = await openGlobalContextManager(mainWindow, electronApp)
     await dialog.getByTestId('context-overview-files').click()
 
     const addButton = dialog.locator('[data-testid^="global-files-add-skill-"]').first()
@@ -148,8 +149,8 @@ test.describe('Context manager sync flow', () => {
     await closeTopDialog(mainWindow)
   })
 
-  test('global skill can be linked to project and re-synced after global edits', async ({ mainWindow }) => {
-    await upsertGlobalSkill(mainWindow, skillContentV1)
+  test('global skill can be linked to project and re-synced after global edits', async ({ mainWindow, electronApp }) => {
+    await upsertGlobalSkill(mainWindow, skillContentV1, electronApp)
 
     const projectDialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
 
@@ -178,7 +179,7 @@ test.describe('Context manager sync flow', () => {
     }
 
     await closeTopDialog(mainWindow)
-    await upsertGlobalSkill(mainWindow, skillContentV2)
+    await upsertGlobalSkill(mainWindow, skillContentV2, electronApp)
 
     const resyncDialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
     const skillRow = resyncDialog.getByTestId(`project-context-item-skill-${skillSlug}`)
