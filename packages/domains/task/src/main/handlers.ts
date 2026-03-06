@@ -1,7 +1,6 @@
 import type { IpcMain } from 'electron'
 import type { Database } from 'better-sqlite3'
 import type { CreateTaskInput, UpdateTaskInput, Task, ProviderConfig } from '@slayzone/task/shared'
-import { PROVIDER_DEFAULTS } from '@slayzone/task/shared'
 import type { ColumnConfig } from '@slayzone/projects/shared'
 import { getDefaultStatus, isKnownStatus, isTerminalStatus, parseColumnsConfig } from '@slayzone/projects/shared'
 import path from 'path'
@@ -289,7 +288,7 @@ export function updateTask(db: Database, data: UpdateTaskInput): Task | null {
     ]
     const hasLegacyUpdate = legacyMappings.some(m => m.hasConvId || m.hasFlags)
 
-    if (data.providerConfig !== undefined || hasLegacyUpdate) {
+    if (data.providerConfig !== undefined || hasLegacyUpdate || data.terminalMode !== undefined) {
       // Read current provider_config
       const currentRow = db.prepare('SELECT provider_config FROM tasks WHERE id = ?').get(data.id) as { provider_config: string } | undefined
       const current: ProviderConfig = (safeJsonParse(currentRow?.provider_config) as ProviderConfig) ?? {}
@@ -307,6 +306,15 @@ export function updateTask(db: Database, data: UpdateTaskInput): Task | null {
           merged[m.mode] = { ...merged[m.mode] }
           if (m.hasConvId) merged[m.mode].conversationId = m.convId
           if (m.hasFlags) merged[m.mode].flags = m.flags
+        }
+      }
+
+      // Seed default flags when switching terminal mode
+      if (data.terminalMode !== undefined) {
+        const modeRow = db.prepare('SELECT default_flags FROM terminal_modes WHERE id = ?')
+          .get(data.terminalMode) as { default_flags: string | null } | undefined
+        if (modeRow) {
+          merged[data.terminalMode] = { ...merged[data.terminalMode], flags: modeRow.default_flags ?? '' }
         }
       }
 
@@ -418,16 +426,15 @@ export function registerTaskHandlers(ipcMain: IpcMain, db: Database): void {
           .get() as { value: string } | undefined)?.value
       ?? 'claude-code'
 
-    // Build provider_config from defaults + overrides
+    // Build provider_config from terminal_modes defaults + overrides
     const providerConfig: ProviderConfig = {}
     const legacyOverrides: Record<string, string | undefined> = {
       'claude-code': data.claudeFlags, 'codex': data.codexFlags,
       'cursor-agent': data.cursorFlags, 'gemini': data.geminiFlags, 'opencode': data.opencodeFlags,
     }
-    for (const [mode, def] of Object.entries(PROVIDER_DEFAULTS)) {
-      const dbDefault = (db.prepare('SELECT value FROM settings WHERE key = ?')
-        .get(def.settingsKey) as { value: string } | undefined)?.value ?? def.fallback
-      providerConfig[mode] = { flags: legacyOverrides[mode] ?? dbDefault }
+    const allModes = db.prepare('SELECT id, default_flags FROM terminal_modes WHERE enabled = 1').all() as Array<{ id: string; default_flags: string | null }>
+    for (const row of allModes) {
+      providerConfig[row.id] = { flags: legacyOverrides[row.id] ?? row.default_flags ?? '' }
     }
 
     const ccsDefaultProfile = (db.prepare('SELECT value FROM settings WHERE key = ?')

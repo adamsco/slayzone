@@ -7,10 +7,6 @@ export function registerAiHandlers(ipcMain: IpcMain): void {
   ipcMain.handle(
     'ai:generate-description',
     async (_, title: string, mode: TerminalMode): Promise<{ success: boolean; description?: string; error?: string }> => {
-      if (mode === 'terminal') {
-        return { success: false, error: 'AI not available in terminal mode' }
-      }
-
       const prompt = `Generate a concise task description (2-3 sentences) for: "${title}". Focus on what needs to be done, not how. Output only the description.`
 
       try {

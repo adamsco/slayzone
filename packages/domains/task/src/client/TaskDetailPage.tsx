@@ -4,7 +4,7 @@ import { DndContext, PointerSensor, useSensors, useSensor, closestCenter, type D
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { Task, PanelVisibility } from '@slayzone/task/shared'
-import { BUILTIN_PANEL_IDS, getProviderConversationId, getProviderFlags, setProviderConversationId, setProviderFlags, clearAllConversationIds, PROVIDER_DEFAULTS } from '@slayzone/task/shared'
+import { BUILTIN_PANEL_IDS, getProviderConversationId, getProviderFlags, setProviderConversationId, setProviderFlags, clearAllConversationIds } from '@slayzone/task/shared'
 import type { BrowserTabsState } from '@slayzone/task-browser/shared'
 import type { Tag } from '@slayzone/tags/shared'
 import type { Project } from '@slayzone/projects/shared'
@@ -641,7 +641,7 @@ export function TaskDetailPage({
 
   // Doctor: validate CLI binary and dependencies
   const handleDoctor = useCallback(async () => {
-    if (!task || task.terminal_mode === 'terminal') return
+    if (!task) return
     setDoctorLoading(true)
     setDoctorResults(null)
     setDoctorDialogOpen(true)
@@ -858,7 +858,7 @@ export function TaskDetailPage({
 
   const handleFlagsSave = useCallback(
     async (nextValue: string) => {
-      if (!task || task.terminal_mode === 'terminal') return
+      if (!task) return
       const currentValue = getProviderFlagsForMode(task)
       if (currentValue === nextValue) return
 
@@ -883,12 +883,11 @@ export function TaskDetailPage({
 
   const handleSetDefaultFlags = useCallback(async () => {
     if (!task || task.terminal_mode === 'terminal') return
-    const def = PROVIDER_DEFAULTS[task.terminal_mode]
-    if (!def) return
-    const defaultFlags = (await window.api.settings.get(def.settingsKey)) ?? def.fallback
+    const modeInfo = modes.find(m => m.id === task.terminal_mode)
+    const defaultFlags = modeInfo?.defaultFlags ?? ''
     setFlagsInputValue(defaultFlags)
     await handleFlagsSave(defaultFlags)
-  }, [task, handleFlagsSave])
+  }, [task, modes, handleFlagsSave])
 
   useEffect(() => {
     if (!task) return
@@ -1625,8 +1624,6 @@ export function TaskDetailPage({
                                   </>
                                 )
                               })()}
-                              <SelectSeparator />
-                              <SelectItem value="terminal">Terminal</SelectItem>
                             </SelectContent>
                           </Select>
                             </TooltipTrigger>
@@ -1675,7 +1672,7 @@ export function TaskDetailPage({
                             </Tooltip>
                           )}
 
-                          {task.terminal_mode !== 'terminal' && task.terminal_mode !== 'ccs' && (
+                          {task.terminal_mode !== 'ccs' && (
                             isEditingFlags ? (
                               <Input
                                 ref={flagsInputRef}
@@ -1782,14 +1779,10 @@ export function TaskDetailPage({
                               <DropdownMenuItem onClick={handleResetTerminal}>
                                 Reset terminal
                               </DropdownMenuItem>
-                              {task.terminal_mode !== 'terminal' && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem onClick={() => void handleDoctor()}>
-                                    Doctor
-                                  </DropdownMenuItem>
-                                </>
-                              )}
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => void handleDoctor()}>
+                                Doctor
+                              </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
@@ -1964,8 +1957,7 @@ export function TaskDetailPage({
               className="rounded-md border border-input bg-transparent p-3"
               testId="task-description-editor"
             />
-            {task.terminal_mode !== 'terminal' && (
-              <IconButton
+            <IconButton
                 data-testid="generate-description-button"
                 type="button"
                 variant="ghost"
@@ -1980,7 +1972,6 @@ export function TaskDetailPage({
                   <Sparkles className="size-3" />
                 )}
               </IconButton>
-            )}
           </div>
 
           {/* Sub-tasks (only for top-level tasks) */}
@@ -2130,11 +2121,10 @@ export function TaskDetailPage({
             <DialogTitle className="flex items-center gap-2">
               <Stethoscope className="size-4 text-muted-foreground" />
               Environment check
-              {task && PROVIDER_DEFAULTS[task.terminal_mode] && (
-                <span className="text-muted-foreground font-normal text-sm">
-                  — {PROVIDER_DEFAULTS[task.terminal_mode].label}
-                </span>
-              )}
+              {task && (() => {
+                const modeLabel = modes.find(m => m.id === task.terminal_mode)?.label
+                return modeLabel ? <span className="text-muted-foreground font-normal text-sm">— {modeLabel}</span> : null
+              })()}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-2 py-1">
