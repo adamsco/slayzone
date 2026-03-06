@@ -1158,7 +1158,7 @@ function App(): React.JSX.Element {
     setProjects((prev) => [...prev, project])
     setSelectedProjectId(project.id)
     setCreateProjectOpen(false)
-    if (import.meta.env.DEV && (context.startMode === 'github' || context.startMode === 'linear')) {
+    if (context.startMode === 'github' || context.startMode === 'linear') {
       openProjectSettings(project, {
         initialTab: 'integrations',
         integrationOnboardingProvider: context.startMode
