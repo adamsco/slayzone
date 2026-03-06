@@ -1,5 +1,42 @@
 [
   {
+    "version": "0.2.5",
+    "date": "2026-03-06",
+    "tagline": "Providers unleashed",
+    "items": [
+      {
+        "category": "feature",
+        "title": "Custom AI providers",
+        "description": "Add any AI CLI as a terminal mode with custom commands, flags, and settings."
+      },
+{
+        "category": "feature",
+        "title": "Getting started checklist",
+        "description": "New onboarding checklist guides you through initial setup step by step."
+      },
+      {
+        "category": "feature",
+        "title": "Worktrees management panel",
+        "description": "Create, switch, and delete git worktrees from a dedicated panel in the kanban view."
+      },
+{
+        "category": "improvement",
+        "title": "Terminal focus on tab switch",
+        "description": "Switching task tabs now auto-focuses the terminal — no extra click needed."
+      },
+      {
+        "category": "fix",
+        "title": "Unknown terminal modes handled",
+        "description": "Tasks with unrecognized terminal modes no longer crash the UI."
+      },
+      {
+        "category": "fix",
+        "title": "Terminal reinit on save",
+        "description": "Saving a conversation ID no longer restarts the terminal session."
+      }
+    ]
+  },
+  {
     "version": "0.2.4",
     "date": "2026-03-03",
     "tagline": "Fine-tuned panels",

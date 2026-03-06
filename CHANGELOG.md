@@ -1,6 +1,84 @@
 # Changelog
 
 
+## v0.2.5
+
+[compare changes](https://github.com/debuglebowski/SlayZone/compare/v0.2.4...v0.2.5)
+
+### 🚀 Enhancements
+
+- **terminal:** Make CCS its own terminal mode instead of global wrapper ([8092f10](https://github.com/debuglebowski/SlayZone/commit/8092f10))
+- **onboarding:** Add getting started checklist popover ([519e826](https://github.com/debuglebowski/SlayZone/commit/519e826))
+- **worktrees:** Add worktrees management sub-panel to kanban git panel ([be13b3d](https://github.com/debuglebowski/SlayZone/commit/be13b3d))
+- **integrations:** Add project-scoped setup and GitHub sync workflows ([59a0a4e](https://github.com/debuglebowski/SlayZone/commit/59a0a4e))
+- **ui:** Brighter border on modals ([bbdcbd0](https://github.com/debuglebowski/SlayZone/commit/bbdcbd0))
+- **ai-config:** Make context manager sync state explicit and manual ([af40784](https://github.com/debuglebowski/SlayZone/commit/af40784))
+- **terminal:** Implement custom AI providers and modular settings UI ([e049fd4](https://github.com/debuglebowski/SlayZone/commit/e049fd4))
+- **integrations:** Refine project sync UX and move working notes ([edb7fa9](https://github.com/debuglebowski/SlayZone/commit/edb7fa9))
+- **terminal:** Focus terminal on tab switch ([5a3bde2](https://github.com/debuglebowski/SlayZone/commit/5a3bde2))
+- **ai-config:** Add skill validation and global section deep-linking ([f107cbb](https://github.com/debuglebowski/SlayZone/commit/f107cbb))
+- **terminal:** Imperative ref focus arch + visibility-hidden tabs + isActive gating ([b236943](https://github.com/debuglebowski/SlayZone/commit/b236943))
+- **terminal:** Unified template commands, detection engine dropdown, remove codeMode ([651d765](https://github.com/debuglebowski/SlayZone/commit/651d765))
+- **integrations:** Github/linear integration setup ([f68c584](https://github.com/debuglebowski/SlayZone/commit/f68c584))
+- **task:** Task type changes + handler updates ([3d63f5d](https://github.com/debuglebowski/SlayZone/commit/3d63f5d))
+- **integrations:** Add status-sync module ([0adbebb](https://github.com/debuglebowski/SlayZone/commit/0adbebb))
+- **sidebar:** Add attention badges on project blobs ([ae45fc8](https://github.com/debuglebowski/SlayZone/commit/ae45fc8))
+
+### 🩹 Fixes
+
+- **task-terminals:** Focus terminal after creating a task ([653aa6f](https://github.com/debuglebowski/SlayZone/commit/653aa6f))
+- **leaderboard:** Harden github oauth redirect flow ([2758ff3](https://github.com/debuglebowski/SlayZone/commit/2758ff3))
+- **ai-config:** Enforce frontmatter validation status semantics ([996d4ee](https://github.com/debuglebowski/SlayZone/commit/996d4ee))
+- **ai-config:** Require explicit frontmatter for skill sync ([c1d8202](https://github.com/debuglebowski/SlayZone/commit/c1d8202))
+- **e2e:** Stabilize flaky settings and terminal mode flows ([1bc04f6](https://github.com/debuglebowski/SlayZone/commit/1bc04f6))
+- **ai-config:** Correct skill frontmatter validation and repair stale metadata ([642d2e5](https://github.com/debuglebowski/SlayZone/commit/642d2e5))
+- **file-editor:** Handle missing subdirectories in readDir ([ad043c6](https://github.com/debuglebowski/SlayZone/commit/ad043c6))
+- **tutorial:** Update settings sidebar tabs to match current UI ([1488bc8](https://github.com/debuglebowski/SlayZone/commit/1488bc8))
+- **task-terminals:** Handle unknown terminal modes gracefully ([1882d2a](https://github.com/debuglebowski/SlayZone/commit/1882d2a))
+- **ci:** Gate publish releases on convex deploy ([38c4554](https://github.com/debuglebowski/SlayZone/commit/38c4554))
+- **terminal:** Add missing enabled placeholder in terminalModes:create INSERT ([e84340c](https://github.com/debuglebowski/SlayZone/commit/e84340c))
+- **worktrees:** Conflict view + worktrees tab fixes ([e15737a](https://github.com/debuglebowski/SlayZone/commit/e15737a))
+- **task:** Revert terminal_mode to non-nullable, remove unused vars ([8f03673](https://github.com/debuglebowski/SlayZone/commit/8f03673))
+- **tabs:** Use transparent border on inactive tabs to prevent layout shift ([10de737](https://github.com/debuglebowski/SlayZone/commit/10de737))
+- **task:** Stop terminal reinit when conversation ID is saved back ([34320bb](https://github.com/debuglebowski/SlayZone/commit/34320bb))
+- **release:** Harden prod transition before release ([dada5da](https://github.com/debuglebowski/SlayZone/commit/dada5da))
+- **app:** Remove dev guard from integration onboarding flow ([bf19278](https://github.com/debuglebowski/SlayZone/commit/bf19278))
+
+### 💅 Refactors
+
+- **onboarding:** Centralize checklist state ([87194e4](https://github.com/debuglebowski/SlayZone/commit/87194e4))
+- **ai-config:** Unify context sync view model and e2e helpers ([fd05813](https://github.com/debuglebowski/SlayZone/commit/fd05813))
+- **terminal:** Remove terminal from BuiltinTerminalMode, clean up utils ([330c03f](https://github.com/debuglebowski/SlayZone/commit/330c03f))
+
+### 📖 Documentation
+
+- Distribution rollout notes ([845228a](https://github.com/debuglebowski/SlayZone/commit/845228a))
+
+### 🏡 Chore
+
+- **terminal:** Rename CCS display to "CCS - Claude Code", reorder in selector ([c391e62](https://github.com/debuglebowski/SlayZone/commit/c391e62))
+- **agent-config:** Sync assistant skill metadata ([cc1830c](https://github.com/debuglebowski/SlayZone/commit/cc1830c))
+- **app:** Migrations, mcp-server, preload updates ([ec11103](https://github.com/debuglebowski/SlayZone/commit/ec11103))
+- **diagnostics:** Remove unused code ([92aa242](https://github.com/debuglebowski/SlayZone/commit/92aa242))
+
+### ✅ Tests
+
+- **e2e:** Stabilize execution context settings flow ([f72a44c](https://github.com/debuglebowski/SlayZone/commit/f72a44c))
+- **e2e:** Await async PTY buffer in readFullBuffer ([8f27350](https://github.com/debuglebowski/SlayZone/commit/8f27350))
+- **integrations:** Update connection and provider-clearing coverage ([22a6061](https://github.com/debuglebowski/SlayZone/commit/22a6061))
+- **e2e:** Stabilize core navigation and keyboard panel flows ([fcab339](https://github.com/debuglebowski/SlayZone/commit/fcab339))
+- **e2e:** Stabilize git browser editor and worktree flows ([fa531b7](https://github.com/debuglebowski/SlayZone/commit/fa531b7))
+- **e2e:** Stabilize terminal session and cli coverage ([b77b4fe](https://github.com/debuglebowski/SlayZone/commit/b77b4fe))
+- **task:** Add testid to region selector overlay ([618306f](https://github.com/debuglebowski/SlayZone/commit/618306f))
+- Update e2e specs + attention tasks test ([140b33e](https://github.com/debuglebowski/SlayZone/commit/140b33e))
+- **app:** Stabilize e2e flakes in settings and terminal flows ([cc1faf5](https://github.com/debuglebowski/SlayZone/commit/cc1faf5))
+- **app:** Document skip and fixme rationale in e2e specs ([85ec458](https://github.com/debuglebowski/SlayZone/commit/85ec458))
+- **app:** Re-enable and stabilize projects and branch-switch e2e ([547786d](https://github.com/debuglebowski/SlayZone/commit/547786d))
+
+### ❤️ Contributors
+
+- Debuglebowski
+
 ## v0.2.4
 
 [compare changes](https://github.com/debuglebowski/SlayZone/compare/v0.2.3...v0.2.4)
