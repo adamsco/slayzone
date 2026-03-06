@@ -351,16 +351,16 @@ jobs:
         channel: ${{ fromJSON(needs.resolve.outputs.channels_json) }}
 
     steps:
+      - uses: actions/checkout@v4
+        if: needs.resolve.outputs.mode == 'publish'
+        with:
+          ref: ${{ needs.resolve.outputs.source_ref }}
+
       - name: Download release bundle
         uses: actions/download-artifact@v4
         with:
           name: release-bundle
           path: release-bundle
-
-      - uses: actions/checkout@v4
-        if: needs.resolve.outputs.mode == 'publish'
-        with:
-          ref: ${{ needs.resolve.outputs.source_ref }}
 
       - name: Resolve channel target
         id: channel
