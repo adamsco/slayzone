@@ -386,13 +386,18 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
         }
       }
 
-      // Handle terminal input - pass through to PTY
+      // Handle terminal input - pass through to PTY.
+      // Filter out OSC sequences (\x1b]...\x07 or \x1b]...\x1b\\) that xterm.js
+      // generates as responses to color queries. These would inject stale escape
+      // bytes into the process stdin, breaking interactive prompts (e.g. gh CLI).
+      // User keystrokes and paste data never contain OSC sequences.
       terminal.onData((data) => {
         if (!hasCalledFirstInputRef.current) {
           hasCalledFirstInputRef.current = true
           onFirstInputRef.current?.()
         }
-        window.api.pty.write(sessionId, data)
+        const filtered = data.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+        if (filtered) window.api.pty.write(sessionId, filtered)
       })
 
       // Handle resize

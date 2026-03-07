@@ -1,4 +1,5 @@
 import * as pty from 'node-pty'
+import { writeSync } from 'fs'
 import { execFile } from 'child_process'
 import { app, BrowserWindow, Notification, nativeTheme } from 'electron'
 import { homedir, platform, userInfo } from 'os'
@@ -222,8 +223,25 @@ function interceptSyncQueries(session: PtySession, data: string): string {
     return ''
   })
 
+  // Strip any remaining OSC queries (e.g. OSC 4 palette) to prevent xterm.js
+  // from responding — its responses travel main→IPC→renderer→IPC→main→pty,
+  // arriving far too late and injecting stale OSC bytes into the process stdin.
+  input = input.replace(/\x1b\]\d+;[^\x07\x1b]*\?(?:\x07|\x1b\\)/g, '')
+
+  // Write responses synchronously via writeSync(fd) — NOT pty.write() which is
+  // async (fs.write + callback queue). Real terminal emulators respond with a
+  // synchronous write() syscall in the same read loop iteration. Using node-pty's
+  // async write causes responses to arrive in a later event loop tick, after the
+  // querying program may have already timed out and moved on (e.g. gh CLI's
+  // lipgloss queries OSC 11, times out, starts survey prompt, then our late
+  // response arrives as unexpected \x1b] bytes in stdin).
   if (response) {
-    session.pty.write(response)
+    try {
+      writeSync((session.pty as unknown as { fd: number }).fd, response)
+    } catch {
+      // Fallback to async write if fd access fails
+      session.pty.write(response)
+    }
   }
 
   // Check for a trailing incomplete OSC or CSI sequence that may complete in the next chunk.
