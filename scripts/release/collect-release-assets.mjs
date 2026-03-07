@@ -24,7 +24,7 @@ const EXCLUDED_SUFFIXES = ['.blockmap']
 
 // electron-builder outputs internal helper binaries alongside installers.
 // Exclude known non-installer exe patterns rather than guessing installer names.
-const EXCLUDED_EXE_PATTERNS = ['winpty-agent.exe']
+const EXCLUDED_EXE_PATTERNS = ['winpty-agent.exe', 'openconsole.exe']
 
 function isExcludedExe(baseName) {
   const lower = baseName.toLowerCase()
