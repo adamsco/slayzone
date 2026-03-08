@@ -97,7 +97,7 @@ export function GeneralTabContent({
       if (targetPath) {
         const [status, commits] = await Promise.all([
           window.api.git.getStatusSummary(targetPath),
-          window.api.git.getRecentCommits(targetPath, 20)
+          window.api.git.getRecentCommits(targetPath, 40)
         ])
         setStatusSummary(status)
         setRecentCommits(commits)

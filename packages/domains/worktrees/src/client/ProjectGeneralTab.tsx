@@ -35,7 +35,7 @@ export function ProjectGeneralTab({ projectPath, visible, onSwitchToDiff }: Proj
       const [branch, status, commits] = await Promise.all([
         window.api.git.getCurrentBranch(projectPath),
         window.api.git.getStatusSummary(projectPath),
-        window.api.git.getRecentCommits(projectPath, 20)
+        window.api.git.getRecentCommits(projectPath, 40)
       ])
       setCurrentBranch(branch)
       setStatusSummary(status)
