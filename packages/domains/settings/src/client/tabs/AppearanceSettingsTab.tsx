@@ -48,8 +48,8 @@ export function AppearanceSettingsTab({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="dark">Dark</SelectItem>
-              <SelectItem value="light">Light (Experimental)</SelectItem>
-              <SelectItem value="system">System (Experimental)</SelectItem>
+              <SelectItem value="light">Light (Beta)</SelectItem>
+              <SelectItem value="system">System (Beta)</SelectItem>
             </SelectContent>
           </Select>
         </div>
