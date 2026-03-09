@@ -197,13 +197,17 @@ test.describe('Project settings & context menu', () => {
   ) => {
     const settingsHeading = mainWindow.getByRole('heading', { name: 'Project Settings' })
     if (await settingsHeading.isVisible().catch(() => false)) {
-      // Click the dialog overlay to dismiss (more reliable than Escape which
-      // can be swallowed by focused sub-elements like dropdowns)
-      const overlay = mainWindow.locator('[data-radix-dialog-overlay]')
-      if (await overlay.isVisible({ timeout: 500 }).catch(() => false)) {
-        await overlay.click({ position: { x: 5, y: 5 }, force: true })
-      } else {
-        await mainWindow.keyboard.press('Escape')
+      // Dismiss dialog — may need multiple attempts because Escape can be
+      // swallowed by focused sub-elements (dropdowns, popovers, etc.)
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (!await settingsHeading.isVisible().catch(() => false)) break
+        const overlay = mainWindow.locator('[data-radix-dialog-overlay]')
+        if (await overlay.isVisible({ timeout: 300 }).catch(() => false)) {
+          await overlay.click({ position: { x: 5, y: 5 }, force: true })
+        } else {
+          await mainWindow.keyboard.press('Escape')
+        }
+        await mainWindow.waitForTimeout(200)
       }
       await expect(settingsHeading).not.toBeVisible({ timeout: 3_000 })
     }
