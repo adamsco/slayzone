@@ -519,7 +519,7 @@ export async function openProjectSettings(page: Page, abbrev: string): Promise<L
 
   // Clean up any stray modal/dialog left by prior specs.
   const openDialogs = page.locator('[role="dialog"][data-state="open"], [role="dialog"][aria-modal="true"]')
-  for (let attempt = 0; attempt < 6; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     if ((await openDialogs.count()) === 0) break
     const top = openDialogs.last()
     const closeButton = top.getByRole('button', { name: /close|cancel|done|skip/i }).first()
@@ -529,11 +529,11 @@ export async function openProjectSettings(page: Page, abbrev: string): Promise<L
       await top.press('Escape').catch(() => {})
       await page.keyboard.press('Escape').catch(() => {})
     }
-    await page.waitForTimeout(120)
+    await page.waitForTimeout(100)
   }
 
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    if (await dialog.isVisible({ timeout: 500 }).catch(() => false)) break
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (await dialog.isVisible({ timeout: 300 }).catch(() => false)) break
 
     await goHome(page)
     await clickProject(page, abbrev)
@@ -541,48 +541,20 @@ export async function openProjectSettings(page: Page, abbrev: string): Promise<L
     await expect(blob).toBeVisible({ timeout: 5_000 })
     await blob.scrollIntoViewIfNeeded().catch(() => {})
 
-    let clickedFromContextMenu = false
-    for (let menuAttempt = 0; menuAttempt < 3; menuAttempt += 1) {
-      await blob.click({ button: 'right', force: true }).catch(async () => {
-        await blob.focus().catch(() => {})
-        await page.keyboard.press('Shift+F10').catch(() => {})
-      })
+    // Right-click → Settings via evaluate (fast, avoids Playwright actionability overhead)
+    await blob.evaluate((node) => {
+      node.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, button: 2, buttons: 2,
+      }))
+    }).catch(() => {})
 
-      const settingsItem = page.getByRole('menuitem', { name: 'Settings' }).first()
-      if (await settingsItem.isVisible({ timeout: 1_000 }).catch(() => false)) {
-        await settingsItem.click({ force: true }).catch(() => {})
-        clickedFromContextMenu = true
-        break
-      }
-
-      // Pointer events can be flaky on first interaction in long ordered runs.
-      // Fire a DOM contextmenu event directly as a fallback before retrying.
-      await blob.evaluate((node) => {
-        node.dispatchEvent(new MouseEvent('contextmenu', {
-          bubbles: true,
-          cancelable: true,
-          button: 2,
-          buttons: 2,
-        }))
-      }).catch(() => {})
-
-      if (await settingsItem.isVisible({ timeout: 600 }).catch(() => false)) {
-        await settingsItem.click({ force: true }).catch(() => {})
-        clickedFromContextMenu = true
-        break
-      }
-      await page.waitForTimeout(120)
+    const settingsItem = page.getByRole('menuitem', { name: 'Settings' }).first()
+    if (await settingsItem.isVisible({ timeout: 1_000 }).catch(() => false)) {
+      await settingsItem.click({ force: true }).catch(() => {})
     }
 
-    if (await dialog.isVisible({ timeout: 1_000 }).catch(() => false)) break
-
-    if (!clickedFromContextMenu) {
-      // Fallback to app accelerator if context menu path is unavailable.
-      await page.keyboard.press('Meta+Shift+,').catch(() => {})
-    }
-
-    if (await dialog.isVisible({ timeout: 1_000 }).catch(() => false)) break
-    await page.waitForTimeout(200 + attempt * 60)
+    if (await dialog.isVisible({ timeout: 1_500 }).catch(() => false)) break
+    await page.waitForTimeout(150)
   }
 
   await expect(dialog).toBeVisible({ timeout: 5_000 })

@@ -41,7 +41,8 @@ async function openSettingsTabWithRetry(
   for (let attempt = 0; attempt < 5; attempt += 1) {
     if (await readyLocator.isVisible({ timeout: 600 }).catch(() => false)) return
     const tab = dialog.getByTestId(tabTestId).first()
-    await tab.click({ force: true }).catch(() => {})
+    // Use dispatchEvent — Radix Dialog interprets force-click as outside-click and closes
+    await tab.dispatchEvent('click').catch(() => {})
     if (await readyLocator.isVisible({ timeout: 1_200 }).catch(() => false)) return
     await mainWindow.waitForTimeout(120)
   }
@@ -212,32 +213,32 @@ export async function openProjectContextSection(
     mcp: 'project-context-overview-mcp'
   }
 
-  for (let reopenAttempt = 0; reopenAttempt < 3; reopenAttempt += 1) {
+  for (let reopenAttempt = 0; reopenAttempt < 2; reopenAttempt += 1) {
     const dialog = await openProjectContextManager(mainWindow, projectAbbrev)
     if (await isProjectSectionVisible(dialog, section)) return dialog
 
     const sectionCard = dialog.getByTestId(sectionTestIdMap[section]).first()
-    for (let attempt = 0; attempt < 10; attempt += 1) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
       if (await isProjectSectionVisible(dialog, section)) return dialog
 
       if (await sectionCard.isVisible({ timeout: 400 }).catch(() => false)) {
-        await sectionCard.click({ force: true }).catch(() => {})
+        await sectionCard.dispatchEvent('click').catch(() => {})
         if (await isProjectSectionVisible(dialog, section)) return dialog
       }
 
       const backToOverview = dialog.getByRole('button', { name: /^(Providers|Instructions|Skills|MCP Servers)$/ }).first()
       if (await backToOverview.isVisible({ timeout: 400 }).catch(() => false)) {
-        await backToOverview.click({ force: true }).catch(() => {})
+        await backToOverview.dispatchEvent('click').catch(() => {})
       }
 
-      await mainWindow.waitForTimeout(140)
+      await mainWindow.waitForTimeout(100)
     }
     await closeTopDialog(mainWindow).catch(() => {})
   }
 
   const dialog = await openProjectContextManager(mainWindow, projectAbbrev)
   await expect(dialog.getByTestId(sectionTestIdMap[section]).first()).toBeVisible({ timeout: 5_000 })
-  await dialog.getByTestId(sectionTestIdMap[section]).first().click({ force: true })
+  await dialog.getByTestId(sectionTestIdMap[section]).first().dispatchEvent('click')
   return dialog
 }
 
