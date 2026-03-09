@@ -33,7 +33,7 @@ function expect(actual: unknown) {
 
 test('migrates legacy blocked panels to inferred handoff protocol and host scope', () => {
   const config: PanelConfig = {
-    builtinEnabled: { 'web:legacy': true },
+    viewEnabled: { task: { 'web:legacy': true } },
     webPanels: [
       {
         id: 'web:legacy',
@@ -53,7 +53,7 @@ test('migrates legacy blocked panels to inferred handoff protocol and host scope
 
 test('does not re-add deleted predefined panels', () => {
   const config: PanelConfig = {
-    builtinEnabled: {},
+    viewEnabled: {},
     webPanels: [],
     deletedPredefined: ['web:figma'],
   }

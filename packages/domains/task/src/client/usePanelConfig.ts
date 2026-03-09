@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import type { PanelConfig, WebPanelDefinition } from '../shared/types'
-import { DEFAULT_PANEL_CONFIG } from '../shared/types'
+import type { PanelConfig, PanelView, WebPanelDefinition } from '../shared/types'
+import { DEFAULT_PANEL_CONFIG, isPanelEnabled } from '../shared/types'
 import { mergePredefinedWebPanels } from '../shared/panel-config'
 
 const SETTINGS_KEY = 'panel_config'
@@ -21,7 +21,7 @@ export function usePanelConfig(): {
   config: PanelConfig
   updateConfig: (next: PanelConfig) => Promise<void>
   enabledWebPanels: WebPanelDefinition[]
-  isBuiltinEnabled: (id: string) => boolean
+  isBuiltinEnabled: (id: string, view: PanelView) => boolean
 } {
   const [config, setConfig] = useState<PanelConfig>(DEFAULT_PANEL_CONFIG)
 
@@ -40,12 +40,12 @@ export function usePanelConfig(): {
   }, [])
 
   const enabledWebPanels = useMemo(
-    () => config.webPanels.filter(wp => config.builtinEnabled[wp.id] !== false),
+    () => config.webPanels.filter(wp => isPanelEnabled(config, wp.id, 'task')),
     [config]
   )
 
   const isBuiltinEnabled = useCallback(
-    (id: string) => config.builtinEnabled[id] !== false,
+    (id: string, view: PanelView) => isPanelEnabled(config, id, view),
     [config]
   )
 

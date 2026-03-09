@@ -79,11 +79,19 @@ export interface WebPanelDefinition {
   handoffHostScope?: string
 }
 
+// Which view a panel belongs to
+export type PanelView = 'home' | 'task'
+
 // Global panel config (stored in settings table as JSON)
 export interface PanelConfig {
-  builtinEnabled: Record<string, boolean>
+  viewEnabled: Partial<Record<PanelView, Record<string, boolean>>>
   webPanels: WebPanelDefinition[]
   deletedPredefined?: string[] // IDs of predefined panels the user removed
+}
+
+/** Check if a panel is enabled for a specific view. Defaults to true if not set. */
+export function isPanelEnabled(config: PanelConfig, id: string, view: PanelView): boolean {
+  return config.viewEnabled?.[view]?.[id] !== false
 }
 
 // Per-task URL state (panelId → current URL)
@@ -109,9 +117,12 @@ export const PREDEFINED_WEB_PANELS: WebPanelDefinition[] = [
 ]
 
 export const DEFAULT_PANEL_CONFIG: PanelConfig = {
-  builtinEnabled: {
-    ...Object.fromEntries(BUILTIN_PANEL_IDS.map(id => [id, true])),
-    ...Object.fromEntries(PREDEFINED_WEB_PANELS.map(wp => [wp.id, false]))
+  viewEnabled: {
+    home: { git: true, editor: true, processes: true, tests: true },
+    task: {
+      ...Object.fromEntries(BUILTIN_PANEL_IDS.map(id => [id, true])),
+      ...Object.fromEntries(PREDEFINED_WEB_PANELS.map(wp => [wp.id, false]))
+    },
   },
   webPanels: [...PREDEFINED_WEB_PANELS]
 }
@@ -167,6 +178,8 @@ export interface Task {
   ccs_profile: string | null
   // Temporary task (ephemeral terminal tab, deleted on close)
   is_temporary: boolean
+  // Pull request
+  pr_url: string | null
   // External link (populated via JOIN)
   linear_url: string | null
   created_at: string
@@ -235,6 +248,8 @@ export interface UpdateTaskInput {
   // Merge mode
   mergeState?: MergeState | null
   mergeContext?: MergeContext | null
+  // Pull request
+  prUrl?: string | null
   // Temporary task
   isTemporary?: boolean
   // Legacy

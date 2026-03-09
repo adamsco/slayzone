@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { ChevronRight, FileCode, GitCompare, Globe, Plus, SquareTerminal, Trash2 } from 'lucide-react'
+import { ChevronRight, Cpu, FileCode, GitCompare, Globe, Plus, Settings2, SquareTerminal, Trash2 } from 'lucide-react'
 import { Button, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SelectSeparator, Switch, Tooltip, TooltipContent, TooltipTrigger, IconButton } from '@slayzone/ui'
-import type { PanelConfig, WebPanelDefinition } from '@slayzone/task/shared'
+import type { PanelConfig, PanelView, WebPanelDefinition } from '@slayzone/task/shared'
 import type { TerminalMode, TerminalModeInfo } from '@slayzone/terminal/shared'
-import { DEFAULT_PANEL_CONFIG, inferHostScopeFromUrl, inferProtocolFromUrl, mergePredefinedWebPanels, normalizeDesktopProtocol } from '@slayzone/task/shared'
+import { DEFAULT_PANEL_CONFIG, isPanelEnabled, inferHostScopeFromUrl, inferProtocolFromUrl, mergePredefinedWebPanels, normalizeDesktopProtocol } from '@slayzone/task/shared'
 import { getVisibleModes, getModeLabel, groupTerminalModes } from '@slayzone/terminal'
 import { SettingsTabIntro } from './SettingsTabIntro'
 import { PanelBreadcrumb } from './PanelBreadcrumb'
@@ -127,12 +127,14 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
     window.dispatchEvent(new CustomEvent('panel-config-changed'))
   }
 
-  const toggleBuiltinPanel = (id: string, enabled: boolean) => {
-    savePanelConfig({ ...panelConfig, builtinEnabled: { ...panelConfig.builtinEnabled, [id]: enabled } })
-  }
-
-  const toggleWebPanel = (id: string, enabled: boolean) => {
-    savePanelConfig({ ...panelConfig, builtinEnabled: { ...panelConfig.builtinEnabled, [id]: enabled } })
+  const togglePanel = (id: string, view: PanelView, enabled: boolean) => {
+    savePanelConfig({
+      ...panelConfig,
+      viewEnabled: {
+        ...panelConfig.viewEnabled,
+        [view]: { ...panelConfig.viewEnabled?.[view], [id]: enabled },
+      },
+    })
   }
 
   const validateShortcut = (letter: string, excludeId?: string): string | null => {
@@ -230,40 +232,84 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
 
   return (
     <>
-      <SettingsTabIntro title="Panels" description="Choose which task panels are available and configure defaults." />
+      <SettingsTabIntro title="Panels" description="Choose which panels are available per view." />
 
       {activeTab === 'panels' && (
         <div className="space-y-6">
           <div className="space-y-3">
-            <Label className="text-base font-semibold">Native</Label>
+            <div className="flex items-center gap-3 px-4">
+              <Label className="text-base font-semibold flex-1">Native</Label>
+              <div className="flex items-center gap-5 shrink-0">
+                <span className="text-[10px] font-medium text-muted-foreground w-8 text-center">Home</span>
+                <span className="text-[10px] font-medium text-muted-foreground w-8 text-center">Task</span>
+              </div>
+              <span className="w-3.5" />
+            </div>
             <div className="space-y-2">
+              {/* Terminal — task only */}
               <button type="button" className="flex items-center gap-3 h-11 rounded-lg border px-4 w-full text-left hover:bg-accent/30 transition-colors" onClick={() => navigateTo('panels/terminal')}>
                 <SquareTerminal className="size-4 shrink-0" />
                 <span className="text-sm font-medium flex-1">Terminal</span>
-                <kbd className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded border">⌘T</kbd>
-                <Switch checked={panelConfig.builtinEnabled.terminal !== false} onCheckedChange={(c) => toggleBuiltinPanel('terminal', c)} onClick={(e) => e.stopPropagation()} />
+
+                <div className="flex items-center gap-5 shrink-0">
+                  <Tooltip><TooltipTrigger asChild><span><Switch disabled checked={false} onClick={(e) => e.stopPropagation()} /></span></TooltipTrigger><TooltipContent side="top">Task-only panel</TooltipContent></Tooltip>
+                  <Switch checked={isPanelEnabled(panelConfig, 'terminal', 'task')} onCheckedChange={(c) => togglePanel('terminal', 'task', c)} onClick={(e) => e.stopPropagation()} />
+                </div>
                 <ChevronRight className="size-3.5 shrink-0" />
               </button>
+              {/* Browser — task only */}
               <button type="button" className="flex items-center gap-3 h-11 rounded-lg border px-4 w-full text-left hover:bg-accent/30 transition-colors" onClick={() => navigateTo('panels/browser')}>
                 <Globe className="size-4 shrink-0" />
                 <span className="text-sm font-medium flex-1">Browser</span>
-                <kbd className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded border">⌘B</kbd>
-                <Switch checked={panelConfig.builtinEnabled.browser !== false} onCheckedChange={(c) => toggleBuiltinPanel('browser', c)} onClick={(e) => e.stopPropagation()} />
+
+                <div className="flex items-center gap-5 shrink-0">
+                  <Tooltip><TooltipTrigger asChild><span><Switch disabled checked={false} onClick={(e) => e.stopPropagation()} /></span></TooltipTrigger><TooltipContent side="top">Task-only panel</TooltipContent></Tooltip>
+                  <Switch checked={isPanelEnabled(panelConfig, 'browser', 'task')} onCheckedChange={(c) => togglePanel('browser', 'task', c)} onClick={(e) => e.stopPropagation()} />
+                </div>
                 <ChevronRight className="size-3.5 shrink-0" />
               </button>
+              {/* Editor — shared */}
               <button type="button" className="flex items-center gap-3 h-11 rounded-lg border px-4 w-full text-left hover:bg-accent/30 transition-colors" onClick={() => navigateTo('panels/editor')}>
                 <FileCode className="size-4 shrink-0" />
                 <span className="text-sm font-medium flex-1">Editor</span>
-                <kbd className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded border">⌘E</kbd>
-                <Switch checked={panelConfig.builtinEnabled.editor !== false} onCheckedChange={(c) => toggleBuiltinPanel('editor', c)} onClick={(e) => e.stopPropagation()} />
+
+                <div className="flex items-center gap-5 shrink-0">
+                  <Switch checked={isPanelEnabled(panelConfig, 'editor', 'home')} onCheckedChange={(c) => togglePanel('editor', 'home', c)} onClick={(e) => e.stopPropagation()} />
+                  <Switch checked={isPanelEnabled(panelConfig, 'editor', 'task')} onCheckedChange={(c) => togglePanel('editor', 'task', c)} onClick={(e) => e.stopPropagation()} />
+                </div>
                 <ChevronRight className="size-3.5 shrink-0" />
               </button>
+              {/* Git — shared (home='git', task='diff') */}
               <button type="button" className="flex items-center gap-3 h-11 rounded-lg border px-4 w-full text-left hover:bg-accent/30 transition-colors" onClick={() => navigateTo('panels/diff')}>
                 <GitCompare className="size-4 shrink-0" />
-                <span className="text-sm font-medium flex-1">Diff</span>
-                <kbd className="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded border">⌘G</kbd>
-                <Switch checked={panelConfig.builtinEnabled.diff !== false} onCheckedChange={(c) => toggleBuiltinPanel('diff', c)} onClick={(e) => e.stopPropagation()} />
+                <span className="text-sm font-medium flex-1">Git</span>
+
+                <div className="flex items-center gap-5 shrink-0">
+                  <Switch checked={isPanelEnabled(panelConfig, 'git', 'home')} onCheckedChange={(c) => togglePanel('git', 'home', c)} onClick={(e) => e.stopPropagation()} />
+                  <Switch checked={isPanelEnabled(panelConfig, 'diff', 'task')} onCheckedChange={(c) => togglePanel('diff', 'task', c)} onClick={(e) => e.stopPropagation()} />
+                </div>
                 <ChevronRight className="size-3.5 shrink-0" />
+              </button>
+              {/* Settings — task only */}
+              <button type="button" className="flex items-center gap-3 h-11 rounded-lg border px-4 w-full text-left hover:bg-accent/30 transition-colors" onClick={() => {}}>
+                <Settings2 className="size-4 shrink-0" />
+                <span className="text-sm font-medium flex-1">Settings</span>
+
+                <div className="flex items-center gap-5 shrink-0">
+                  <Tooltip><TooltipTrigger asChild><span><Switch disabled checked={false} onClick={(e) => e.stopPropagation()} /></span></TooltipTrigger><TooltipContent side="top">Task-only panel</TooltipContent></Tooltip>
+                  <Switch checked={isPanelEnabled(panelConfig, 'settings', 'task')} onCheckedChange={(c) => togglePanel('settings', 'task', c)} onClick={(e) => e.stopPropagation()} />
+                </div>
+                <span className="w-3.5" />
+              </button>
+              {/* Processes — shared */}
+              <button type="button" className="flex items-center gap-3 h-11 rounded-lg border px-4 w-full text-left hover:bg-accent/30 transition-colors" onClick={() => {}}>
+                <Cpu className="size-4 shrink-0" />
+                <span className="text-sm font-medium flex-1">Processes</span>
+                <div className="flex items-center gap-5 shrink-0">
+                  <Switch checked={isPanelEnabled(panelConfig, 'processes', 'home')} onCheckedChange={(c) => togglePanel('processes', 'home', c)} onClick={(e) => e.stopPropagation()} />
+                  <Switch checked={isPanelEnabled(panelConfig, 'processes', 'task')} onCheckedChange={(c) => togglePanel('processes', 'task', c)} onClick={(e) => e.stopPropagation()} />
+                </div>
+                <span className="w-3.5" />
               </button>
             </div>
           </div>
@@ -288,7 +334,7 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
                   <Globe className="size-4 shrink-0" />
                   <span className="text-sm font-medium">{wp.name}</span>
                   <span className="text-xs text-muted-foreground truncate flex-1">{wp.baseUrl}</span>
-                  <Switch checked={panelConfig.builtinEnabled[wp.id] !== false} onCheckedChange={(c) => toggleWebPanel(wp.id, c)} onClick={(e) => e.stopPropagation()} />
+                  <Switch checked={isPanelEnabled(panelConfig, wp.id, 'task')} onCheckedChange={(c) => togglePanel(wp.id, 'task', c)} onClick={(e) => e.stopPropagation()} />
                   <ChevronRight className="size-3.5 shrink-0" />
                 </button>
               ))}
@@ -320,7 +366,7 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
           <PanelBreadcrumb label="Terminal" onBack={() => navigateTo('panels')} />
           <div className="flex items-center justify-between">
             <Label className="text-base font-semibold">Terminal</Label>
-            <Switch checked={panelConfig.builtinEnabled.terminal !== false} onCheckedChange={(c) => toggleBuiltinPanel('terminal', c)} />
+            <Switch checked={isPanelEnabled(panelConfig, 'terminal', 'task')} onCheckedChange={(c) => togglePanel('terminal', 'task', c)} />
           </div>
           <div className="space-y-3">
             <Label className="text-sm font-medium">Default mode</Label>
@@ -357,7 +403,7 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
           <PanelBreadcrumb label="Browser" onBack={() => navigateTo('panels')} />
           <div className="flex items-center justify-between">
             <Label className="text-base font-semibold">Browser</Label>
-            <Switch checked={panelConfig.builtinEnabled.browser !== false} onCheckedChange={(c) => toggleBuiltinPanel('browser', c)} />
+            <Switch checked={isPanelEnabled(panelConfig, 'browser', 'task')} onCheckedChange={(c) => togglePanel('browser', 'task', c)} />
           </div>
           <div className="space-y-3">
             <Label className="text-sm font-medium">Dev server</Label>
@@ -400,7 +446,7 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
           <PanelBreadcrumb label="Editor" onBack={() => navigateTo('panels')} />
           <div className="flex items-center justify-between">
             <Label className="text-base font-semibold">Editor</Label>
-            <Switch checked={panelConfig.builtinEnabled.editor !== false} onCheckedChange={(c) => toggleBuiltinPanel('editor', c)} />
+            <Switch checked={isPanelEnabled(panelConfig, 'editor', 'task')} onCheckedChange={(c) => togglePanel('editor', 'task', c)} />
           </div>
           <div className="grid grid-cols-[180px_minmax(0,1fr)] items-center gap-3">
             <span className="text-sm text-muted-foreground">Word wrap</span>
@@ -429,7 +475,7 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
           <PanelBreadcrumb label="Diff" onBack={() => navigateTo('panels')} />
           <div className="flex items-center justify-between">
             <Label className="text-base font-semibold">Diff</Label>
-            <Switch checked={panelConfig.builtinEnabled.diff !== false} onCheckedChange={(c) => toggleBuiltinPanel('diff', c)} />
+            <Switch checked={isPanelEnabled(panelConfig, 'diff', 'task')} onCheckedChange={(c) => togglePanel('diff', 'task', c)} />
           </div>
           <div className="grid grid-cols-[180px_minmax(0,1fr)] items-center gap-3">
             <span className="text-sm text-muted-foreground">Context lines</span>
@@ -453,7 +499,7 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
             <PanelBreadcrumb label={wp.name} onBack={() => navigateTo('panels')} />
             <div className="flex items-center justify-between">
               <Label className="text-base font-semibold">{wp.name}</Label>
-              <Switch checked={panelConfig.builtinEnabled[wp.id] !== false} onCheckedChange={(c) => toggleWebPanel(wp.id, c)} />
+              <Switch checked={isPanelEnabled(panelConfig, wp.id, 'task')} onCheckedChange={(c) => togglePanel(wp.id, 'task', c)} />
             </div>
             <div className="grid grid-cols-[180px_minmax(0,1fr)] items-center gap-3">
               <span className="text-sm text-muted-foreground">Name</span>
