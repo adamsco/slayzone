@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject, TEST_PROJECT_PATH } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, TEST_PROJECT_PATH, resetApp} from './fixtures/electron'
 import {
   openTaskTerminal,
   switchTerminalMode,
@@ -78,6 +78,7 @@ test.describe.skip('MCP Server', () => {
   let taskId: string
 
   test.beforeAll(async ({ mainWindow, electronApp }) => {
+    await resetApp(mainWindow)
     // Discover the dynamic MCP port from the main process
     const port = await electronApp.evaluate(async () => {
       // Wait for MCP server to start (port 0 = random)

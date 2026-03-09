@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome } from './fixtures/electron'
+import { test, expect, seed, goHome, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('Browser panel', () => {
@@ -29,6 +29,7 @@ test.describe('Browser panel', () => {
   }
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: 'Browser Test', color: '#0ea5e9', path: TEST_PROJECT_PATH })
     projectAbbrev = p.name.slice(0, 2).toUpperCase()

@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, projectBlob, TEST_PROJECT_PATH } from './fixtures/electron'
+import { test, expect, seed, goHome, projectBlob, TEST_PROJECT_PATH, resetApp} from './fixtures/electron'
 import {
   closeTopDialog,
   openGlobalContextManager,
@@ -72,6 +72,7 @@ test.describe('Context manager sync flow', () => {
   let projectId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const project = await s.createProject({ name: projectName, color: '#22c55e', path: TEST_PROJECT_PATH })
     projectId = project.id

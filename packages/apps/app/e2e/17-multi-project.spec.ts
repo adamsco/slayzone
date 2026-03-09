@@ -1,8 +1,9 @@
-import { test, expect, seed, goHome, clickProject, projectBlob } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, projectBlob, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('Multi-project & persistence', () => {
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
 
     // Create two distinct projects with tasks

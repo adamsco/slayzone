@@ -1,4 +1,4 @@
-import { test, expect, seed } from './fixtures/electron'
+import { test, expect, seed, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH, goHome, clickProject } from './fixtures/electron'
 import {
   openTaskTerminal,
@@ -22,6 +22,7 @@ test.describe('Gemini integration', () => {
   let taskId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: 'GeminiCli', color: '#059669', path: TEST_PROJECT_PATH })
     projectAbbrev = p.name.slice(0, 2).toUpperCase()

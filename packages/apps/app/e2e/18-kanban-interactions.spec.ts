@@ -1,8 +1,9 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('Kanban interactions', () => {
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     let projects = await s.getProjects()
 

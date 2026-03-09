@@ -1,4 +1,4 @@
-import { test, expect, seed } from './fixtures/electron'
+import { test, expect, seed, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import {
   openTaskTerminal,
@@ -21,6 +21,7 @@ test.describe('Cursor Agent CLI integration', () => {
   let taskId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: 'CursorCli', color: '#e11d48', path: TEST_PROJECT_PATH })
     const t = await s.createTask({ projectId: p.id, title: 'Cursor agent test', status: 'in_progress' })

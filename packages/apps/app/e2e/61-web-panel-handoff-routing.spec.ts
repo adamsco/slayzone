@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe.serial('Web panel handoff routing', () => {
@@ -63,6 +63,7 @@ test.describe.serial('Web panel handoff routing', () => {
   }
 
   test.beforeAll(async ({ electronApp, mainWindow }) => {
+    await resetApp(mainWindow)
     const patchResult = await electronApp.evaluate(({ shell }) => {
       const globalState = globalThis as unknown as {
         __handoffOpenExternalCalls?: Array<{ url: string }>

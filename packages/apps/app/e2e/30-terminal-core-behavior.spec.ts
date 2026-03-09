@@ -3,7 +3,7 @@
  * Merged from: 31-buffer-restore, 32-state-transitions, 34-mode-switch-teardown,
  *              35-tab-rename-persistence, 37-clear-buffer, 55-trailing-output
  */
-import { test, expect, seed, clickProject, goHome } from './fixtures/electron'
+import { test, expect, seed, clickProject, goHome, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import {
   getMainSessionId,
@@ -24,6 +24,7 @@ test.describe('Terminal buffer restore', () => {
   let taskId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: 'Charlie Restore', color: '#f97316', path: TEST_PROJECT_PATH })
     projectAbbrev = p.name.slice(0, 2).toUpperCase()

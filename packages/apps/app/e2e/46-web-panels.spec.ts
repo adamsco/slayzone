@@ -1,4 +1,4 @@
-import { test, expect, seed, clickSettings, clickProject, goHome } from './fixtures/electron'
+import { test, expect, seed, clickSettings, clickProject, goHome, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('Web panels', () => {
@@ -57,6 +57,7 @@ test.describe('Web panels', () => {
   }
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     await s.setSetting('panel_config', '')
 

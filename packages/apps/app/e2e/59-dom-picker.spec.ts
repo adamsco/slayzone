@@ -1,4 +1,4 @@
-import { test, expect, seed } from './fixtures/electron'
+import { test, expect, seed, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import {
   switchTerminalMode,
@@ -13,6 +13,7 @@ test.describe('DOM picker to terminal', () => {
   let sessionId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: projectName, color: '#22c55e', path: TEST_PROJECT_PATH })
     const t = await s.createTask({ projectId: p.id, title: 'DOM picker task', status: 'todo' })

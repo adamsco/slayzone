@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject, TEST_PROJECT_PATH } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, TEST_PROJECT_PATH, resetApp} from './fixtures/electron'
 import fs from 'fs'
 import path from 'path'
 
@@ -20,6 +20,7 @@ test.describe('Export & Import', () => {
   let projectId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     fs.mkdirSync(exportDir, { recursive: true })
 
     const s = seed(mainWindow)

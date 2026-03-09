@@ -1,10 +1,11 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('Task CRUD', () => {
   let projectAbbrev: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: 'CRUD Test', color: '#3b82f6', path: TEST_PROJECT_PATH })
     projectAbbrev = p.name.slice(0, 2).toUpperCase()

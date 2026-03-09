@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import { switchTerminalMode } from './fixtures/terminal'
 
@@ -22,6 +22,7 @@ test.describe('Session banner behavior', () => {
   const detectedId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 
   test.beforeAll(async ({ electronApp, mainWindow }) => {
+    await resetApp(mainWindow)
     await electronApp.evaluate(({ ipcMain }, sessionIdFromStatus: string) => {
       const globalState = globalThis as unknown as {
         __statusBuffers?: Record<string, string>

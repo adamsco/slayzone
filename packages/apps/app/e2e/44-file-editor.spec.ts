@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import fs from 'fs'
 import path from 'path'
@@ -19,6 +19,7 @@ test.describe('File editor', () => {
     page.locator(`button[title$="${name}"]:visible`).first()
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     // Create test files in the test project directory
     fs.writeFileSync(path.join(TEST_PROJECT_PATH, 'hello.ts'), 'export const hello = "world"\n')
     fs.writeFileSync(path.join(TEST_PROJECT_PATH, 'readme.md'), '# Test\n\nA test file.\n')

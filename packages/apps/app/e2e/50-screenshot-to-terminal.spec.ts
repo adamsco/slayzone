@@ -1,4 +1,4 @@
-import { test, expect, seed } from './fixtures/electron'
+import { test, expect, seed, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import {
   openTaskTerminal,
@@ -48,6 +48,7 @@ test.describe.skip('Screenshot to terminal', () => {
   }
 
   test.beforeAll(async ({ electronApp, mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: projectName, color: '#06b6d4', path: TEST_PROJECT_PATH })
     projectAbbrev = p.name.slice(0, 2).toUpperCase()

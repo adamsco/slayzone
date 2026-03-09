@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject, projectBlob } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, projectBlob, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import type { Page, Locator } from '@playwright/test'
 
@@ -234,6 +234,7 @@ test.describe('Project settings & context menu', () => {
   }
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     // Create a dedicated project for this test
     const project = await s.createProject({ name: 'Settings Test', color: '#10b981', path: TEST_PROJECT_PATH })

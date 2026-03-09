@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import { execSync } from 'child_process'
 import { writeFileSync, mkdirSync, existsSync } from 'fs'
@@ -94,6 +94,7 @@ test.describe('Clean merge', () => {
   let projectAbbrev: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     ensureRepo()
     resetRepo()
     setupCleanBranch()

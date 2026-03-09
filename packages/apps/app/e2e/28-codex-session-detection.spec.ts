@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import { switchTerminalMode, openTaskTerminal } from './fixtures/terminal'
 
@@ -21,6 +21,7 @@ test.describe('Session ID banners', () => {
     page.getByText('Session not saved').last()
 
   test.beforeAll(async ({ electronApp, mainWindow }) => {
+    await resetApp(mainWindow)
     // Mock PTY handlers so we don't need real CLIs
     await electronApp.evaluate(({ ipcMain }, sessionIdFromStatus: string) => {
       const globalState = globalThis as unknown as {

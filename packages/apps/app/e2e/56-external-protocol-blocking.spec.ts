@@ -7,7 +7,7 @@
  * figma://blocked. If the OS handles it instead (our fix not working), the webview gets
  * an error and the tab URL stays at about:blank.
  */
-import { test, expect, seed } from './fixtures/electron'
+import { test, expect, seed, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('External protocol blocking', () => {
@@ -32,6 +32,7 @@ test.describe('External protocol blocking', () => {
   `
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: 'ProtoBlock', color: '#6366f1', path: TEST_PROJECT_PATH })
     const t = await s.createTask({ projectId: p.id, title: 'Protocol blocking task', status: 'todo' })

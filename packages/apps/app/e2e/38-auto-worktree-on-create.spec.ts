@@ -1,4 +1,4 @@
-import { test, expect, seed, TEST_PROJECT_PATH } from './fixtures/electron'
+import { test, expect, seed, TEST_PROJECT_PATH, resetApp} from './fixtures/electron'
 import { execSync } from 'child_process'
 import path from 'path'
 
@@ -27,6 +27,7 @@ function ensureGitRepo(projectPath: string): void {
 
 test.describe('Auto worktree on task create', () => {
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     ensureGitRepo(TEST_PROJECT_PATH)
     const s = seed(mainWindow)
     await s.setSetting('worktree_base_path', '')

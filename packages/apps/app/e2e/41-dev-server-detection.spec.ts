@@ -1,4 +1,4 @@
-import { test, expect, seed } from './fixtures/electron'
+import { test, expect, seed, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import {
   getMainSessionId,
@@ -33,6 +33,7 @@ test.describe('Dev server URL detection', () => {
   let sessionId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
 
     // Ensure clean defaults (previous runs may have left settings dirty)

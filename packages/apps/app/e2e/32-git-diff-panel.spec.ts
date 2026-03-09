@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import { execSync } from 'child_process'
 import { writeFileSync, existsSync } from 'fs'
@@ -24,6 +24,7 @@ test.describe.skip('Git diff panel', () => {
   let projectAbbrev: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     ensureRepo()
 
     // Clean working tree

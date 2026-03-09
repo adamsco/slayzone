@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, projectBlob, openProjectSettings } from './fixtures/electron'
+import { test, expect, seed, goHome, projectBlob, openProjectSettings, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('Project execution context settings', () => {
@@ -6,6 +6,7 @@ test.describe('Project execution context settings', () => {
   let projectId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     // Use a unique abbreviation to avoid collisions with earlier suites (e.g. "EX Project").
     const project = await s.createProject({ name: 'QX Exec Ctx', color: '#7c3aed', path: TEST_PROJECT_PATH })

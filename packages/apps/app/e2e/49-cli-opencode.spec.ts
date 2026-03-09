@@ -1,4 +1,4 @@
-import { test, expect, seed } from './fixtures/electron'
+import { test, expect, seed, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH, goHome, clickProject } from './fixtures/electron'
 import {
   openTaskTerminal,
@@ -20,6 +20,7 @@ test.describe('OpenCode CLI integration', () => {
   let taskId: string
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: 'OpenCli', color: '#7c3aed', path: TEST_PROJECT_PATH })
     const t = await s.createTask({ projectId: p.id, title: 'Opencode cli test', status: 'in_progress' })

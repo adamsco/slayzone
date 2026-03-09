@@ -8,7 +8,7 @@
  *
  * Doctor-menu tests use `claude-code` (binary must be installed).
  */
-import { test, expect, seed } from './fixtures/electron'
+import { test, expect, seed, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH, goHome, clickProject } from './fixtures/electron'
 import {
   openTaskTerminal,
@@ -39,6 +39,7 @@ test.describe('Terminal crash overlay', () => {
   const mode = absentMode! // narrowed by skip above
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({
       name: 'CrashRec',

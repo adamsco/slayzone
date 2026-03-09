@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 
 test.describe('AI description generation', () => {
@@ -6,6 +6,7 @@ test.describe('AI description generation', () => {
   let taskId: string
 
   test.beforeAll(async ({ electronApp, mainWindow }) => {
+    await resetApp(mainWindow)
     // Mock the AI IPC handler to avoid calling real CLI
     await electronApp.evaluate(({ ipcMain }) => {
       ipcMain.removeHandler('ai:generate-description')

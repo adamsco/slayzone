@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import { execSync } from 'child_process'
 import { existsSync } from 'fs'
@@ -35,6 +35,7 @@ test.describe('Git worktree operations', () => {
   }
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     // Ensure test project dir has a git repo with an initial commit
     try { execSync('git rev-parse --is-inside-work-tree', { cwd: TEST_PROJECT_PATH }) }
     catch {

@@ -1,4 +1,4 @@
-import { test, expect, seed, clickProject, goHome, TEST_PROJECT_PATH } from './fixtures/electron'
+import { test, expect, seed, clickProject, goHome, TEST_PROJECT_PATH, resetApp} from './fixtures/electron'
 import { spawnSync } from 'child_process'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -14,6 +14,7 @@ test.describe('CLI: slay', () => {
   const PROJECT_ABBREV = 'CL'
 
   test.beforeAll(async ({ electronApp, mainWindow }) => {
+    await resetApp(mainWindow)
     if (!fs.existsSync(SLAY_JS)) {
       throw new Error(`CLI not built. Run: pnpm --filter @slayzone/cli build\nExpected: ${SLAY_JS}`)
     }

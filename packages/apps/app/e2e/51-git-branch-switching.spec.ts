@@ -1,4 +1,4 @@
-import { test, expect, seed, goHome, clickProject } from './fixtures/electron'
+import { test, expect, seed, goHome, clickProject, resetApp} from './fixtures/electron'
 import { TEST_PROJECT_PATH } from './fixtures/electron'
 import { execSync } from 'child_process'
 import fs from 'fs'
@@ -39,6 +39,7 @@ test.describe('Git branch switching & creation', () => {
     page.locator('[data-radix-popper-content-wrapper]').last()
 
   test.beforeAll(async ({ mainWindow }) => {
+    await resetApp(mainWindow)
     // Always init own git repo — TEST_PROJECT_PATH is inside slayzone repo
     // so `git rev-parse --is-inside-work-tree` would misleadingly succeed.
     const hasOwnGit = fs.existsSync(path.join(TEST_PROJECT_PATH, '.git'))
