@@ -309,7 +309,9 @@ const api: ElectronAPI = {
     hasGithubRemote: (repoPath) => ipcRenderer.invoke('git:hasGithubRemote', repoPath),
     listOpenPrs: (repoPath) => ipcRenderer.invoke('git:listOpenPrs', repoPath),
     getPrByUrl: (repoPath, url) => ipcRenderer.invoke('git:getPrByUrl', repoPath, url),
-    createPr: (input) => ipcRenderer.invoke('git:createPr', input)
+    createPr: (input) => ipcRenderer.invoke('git:createPr', input),
+    getPrComments: (repoPath, prNumber) => ipcRenderer.invoke('git:getPrComments', repoPath, prNumber),
+    addPrComment: (repoPath, prNumber, body) => ipcRenderer.invoke('git:addPrComment', repoPath, prNumber, body)
   },
   tabs: {
     list: (taskId) => ipcRenderer.invoke('tabs:list', taskId),

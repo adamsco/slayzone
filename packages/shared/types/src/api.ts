@@ -17,7 +17,7 @@ import type {
 } from '@slayzone/terminal/shared'
 import type { TerminalTab, CreateTerminalTabInput, UpdateTerminalTabInput } from '@slayzone/task-terminals/shared'
 import type { Theme, ThemePreference } from '@slayzone/settings/shared'
-import type { DetectedWorktree, MergeResult, MergeWithAIResult, GitDiffSnapshot, GitSyncResult, ConflictFileContent, ConflictAnalysis, RebaseProgress, CommitInfo, AheadBehind, StatusSummary, GhPullRequest, CreatePrInput, CreatePrResult } from '@slayzone/worktrees/shared'
+import type { DetectedWorktree, MergeResult, MergeWithAIResult, GitDiffSnapshot, GitSyncResult, ConflictFileContent, ConflictAnalysis, RebaseProgress, CommitInfo, AheadBehind, StatusSummary, GhPullRequest, GhPrComment, CreatePrInput, CreatePrResult } from '@slayzone/worktrees/shared'
 import type { MergeContext } from '@slayzone/task/shared'
 import type {
   AiConfigItem,
@@ -402,6 +402,8 @@ export interface ElectronAPI {
     listOpenPrs: (repoPath: string) => Promise<GhPullRequest[]>
     getPrByUrl: (repoPath: string, url: string) => Promise<GhPullRequest | null>
     createPr: (input: CreatePrInput) => Promise<CreatePrResult>
+    getPrComments: (repoPath: string, prNumber: number) => Promise<GhPrComment[]>
+    addPrComment: (repoPath: string, prNumber: number, body: string) => Promise<void>
   }
   tabs: {
     list: (taskId: string) => Promise<TerminalTab[]>

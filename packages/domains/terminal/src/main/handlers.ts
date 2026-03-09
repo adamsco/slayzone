@@ -25,6 +25,10 @@ interface PtyCreateOpts {
 }
 
 function mapModeRow(row: any): TerminalModeInfo {
+  let usageConfig = null
+  if (row.usage_config) {
+    try { usageConfig = JSON.parse(row.usage_config) } catch { /* ignore corrupt */ }
+  }
   return {
     id: row.id,
     label: row.label,
@@ -38,6 +42,7 @@ function mapModeRow(row: any): TerminalModeInfo {
     patternAttention: row.pattern_attention,
     patternWorking: row.pattern_working,
     patternError: row.pattern_error,
+    usageConfig,
   }
 }
 
@@ -82,8 +87,8 @@ export function registerPtyHandlers(ipcMain: IpcMain, db: Database): void {
   ipcMain.handle('terminalModes:create', async (_, input: CreateTerminalModeInput) => {
     const id = input.id
     db.prepare(`
-      INSERT INTO terminal_modes (id, label, type, initial_command, resume_command, default_flags, enabled, is_builtin, "order", pattern_attention, pattern_working, pattern_error)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+      INSERT INTO terminal_modes (id, label, type, initial_command, resume_command, default_flags, enabled, is_builtin, "order", pattern_attention, pattern_working, pattern_error, usage_config)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
     `).run(
       id,
       input.label,
@@ -95,7 +100,8 @@ export function registerPtyHandlers(ipcMain: IpcMain, db: Database): void {
       input.order ?? 0,
       input.patternAttention ?? null,
       input.patternWorking ?? null,
-      input.patternError ?? null
+      input.patternError ?? null,
+      input.usageConfig ? JSON.stringify(input.usageConfig) : null
     )
     const row = db.prepare('SELECT * FROM terminal_modes WHERE id = ?').get(id)
     return mapModeRow(row)
@@ -147,6 +153,10 @@ export function registerPtyHandlers(ipcMain: IpcMain, db: Database): void {
     if (updates.patternError !== undefined) {
       sets.push('pattern_error = ?')
       params.push(updates.patternError ?? null)
+    }
+    if (updates.usageConfig !== undefined) {
+      sets.push('usage_config = ?')
+      params.push(updates.usageConfig ? JSON.stringify(updates.usageConfig) : null)
     }
 
     if (sets.length > 0) {

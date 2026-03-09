@@ -4,7 +4,8 @@ import { spawn } from 'child_process'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { homedir } from 'os'
-import type { ProviderUsage, UsageWindow } from '@slayzone/terminal/shared'
+import type Database from 'better-sqlite3'
+import type { ProviderUsage, UsageWindow, UsageProviderConfig } from '@slayzone/terminal/shared'
 
 const TIMEOUT_MS = 10_000
 
@@ -17,7 +18,7 @@ const CODEX: ProviderMeta = { id: 'codex', label: 'Codex', cli: 'codex', vendor:
 // ── Error helpers ────────────────────────────────────────────────────
 
 function usageError(p: ProviderMeta, error: string): ProviderUsage {
-  return { provider: p.id, label: p.label, fiveHour: null, sevenDay: null, sevenDayOpus: null, sevenDaySonnet: null, error, fetchedAt: Date.now() }
+  return { provider: p.id, label: p.label, windows: [], error, fetchedAt: Date.now() }
 }
 
 class RateLimitError extends Error {
@@ -58,6 +59,12 @@ function friendlyError(e: unknown): string {
   return msg
 }
 
+// ── Dot-path extraction ─────────────────────────────────────────────
+
+function getByPath(obj: any, path: string): any {
+  return path.split('.').reduce((o, k) => o?.[k], obj)
+}
+
 // ── Claude (Anthropic OAuth API) ─────────────────────────────────────
 
 function getKeychainToken(): Promise<string | null> {
@@ -85,9 +92,9 @@ function getKeychainToken(): Promise<string | null> {
   })
 }
 
-function mapWindow(w: { utilization: number; resets_at: string } | null): UsageWindow | null {
+function mapWindow(key: string, label: string, w: { utilization: number; resets_at: string } | null): UsageWindow | null {
   if (!w) return null
-  return { utilization: w.utilization, resetsAt: w.resets_at }
+  return { key, label, utilization: w.utilization, resetsAt: w.resets_at }
 }
 
 async function fetchClaudeUsage(): Promise<ProviderUsage> {
@@ -106,16 +113,14 @@ async function fetchClaudeUsage(): Promise<ProviderUsage> {
   if (!res.ok) return usageError(CLAUDE, httpError(res.status, CLAUDE))
 
   const data = await res.json()
-  return {
-    provider: CLAUDE.id,
-    label: CLAUDE.label,
-    fiveHour: mapWindow(data.five_hour),
-    sevenDay: mapWindow(data.seven_day),
-    sevenDayOpus: mapWindow(data.seven_day_opus),
-    sevenDaySonnet: mapWindow(data.seven_day_sonnet),
-    error: null,
-    fetchedAt: Date.now()
-  }
+  const windows: UsageWindow[] = [
+    mapWindow('fiveHour', '5h', data.five_hour),
+    mapWindow('sevenDay', '7d', data.seven_day),
+    mapWindow('sevenDayOpus', 'Opus', data.seven_day_opus),
+    mapWindow('sevenDaySonnet', 'Son.', data.seven_day_sonnet),
+  ].filter((w): w is UsageWindow => w !== null)
+
+  return { provider: CLAUDE.id, label: CLAUDE.label, windows, error: null, fetchedAt: Date.now() }
 }
 
 // ── Codex (ChatGPT backend API) ──────────────────────────────────────
@@ -137,9 +142,9 @@ async function getCodexAuth(): Promise<CodexAuth | null> {
   }
 }
 
-function mapCodexWindow(w: { used_percent: number; reset_at: number } | null): UsageWindow | null {
+function mapCodexWindow(key: string, label: string, w: { used_percent: number; reset_at: number } | null): UsageWindow | null {
   if (!w) return null
-  return { utilization: w.used_percent, resetsAt: new Date(w.reset_at * 1000).toISOString() }
+  return { key, label, utilization: w.used_percent, resetsAt: new Date(w.reset_at * 1000).toISOString() }
 }
 
 async function fetchCodexUsage(): Promise<ProviderUsage> {
@@ -161,32 +166,164 @@ async function fetchCodexUsage(): Promise<ProviderUsage> {
 
   const data = await res.json()
   const rl = data.rate_limit
-  return {
-    provider: CODEX.id,
-    label: CODEX.label,
-    fiveHour: mapCodexWindow(rl?.primary_window),
-    sevenDay: mapCodexWindow(rl?.secondary_window),
-    sevenDayOpus: null,
-    sevenDaySonnet: null,
-    error: null,
-    fetchedAt: Date.now()
+  const windows: UsageWindow[] = [
+    mapCodexWindow('fiveHour', '5h', rl?.primary_window),
+    mapCodexWindow('sevenDay', '7d', rl?.secondary_window),
+  ].filter((w): w is UsageWindow => w !== null)
+
+  return { provider: CODEX.id, label: CODEX.label, windows, error: null, fetchedAt: Date.now() }
+}
+
+// ── Custom provider fetcher ─────────────────────────────────────────
+
+async function resolveAuth(config: UsageProviderConfig): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {}
+
+  if (config.authType === 'bearer-env' && config.authEnvVar) {
+    const token = process.env[config.authEnvVar]
+    if (!token) throw new Error(`Env var ${config.authEnvVar} not set`)
+    const name = config.authHeaderName || 'Authorization'
+    const template = config.authHeaderTemplate || 'Bearer {token}'
+    headers[name] = template.replace('{token}', token)
+  }
+
+  if (config.authType === 'file-json' && config.authFilePath) {
+    const filePath = config.authFilePath.replace(/^~/, homedir())
+    const raw = await readFile(filePath, 'utf-8')
+    const parsed = JSON.parse(raw)
+    const paths = Array.isArray(config.authFileTokenPath)
+      ? config.authFileTokenPath
+      : config.authFileTokenPath ? [config.authFileTokenPath] : []
+    let token: string | null = null
+    for (const p of paths) {
+      token = getByPath(parsed, p) ?? null
+      if (token) break
+    }
+    if (!token) throw new Error(`Token not found at path: ${paths.join(' | ')}`)
+    const name = config.authHeaderName || 'Authorization'
+    const template = config.authHeaderTemplate || 'Bearer {token}'
+    headers[name] = template.replace('{token}', String(token))
+  }
+
+  if (config.extraHeaders) {
+    for (const [k, v] of Object.entries(config.extraHeaders)) {
+      headers[k] = v
+    }
+  }
+
+  return headers
+}
+
+function parseResetsAt(value: any, format?: string): string {
+  if (format === 'unix-s') return new Date(Number(value) * 1000).toISOString()
+  if (format === 'unix-ms') return new Date(Number(value)).toISOString()
+  return String(value) // assume ISO
+}
+
+function resolveLabel(raw: string, mapping: UsageProviderConfig['windowMapping']): string {
+  if (mapping.labelMap?.[raw]) return mapping.labelMap[raw]
+  return raw
+}
+
+function extractWindows(data: any, config: UsageProviderConfig): UsageWindow[] {
+  const mapping = config.windowMapping
+  const windows: UsageWindow[] = []
+
+  if (config.singleWindow) {
+    const util = getByPath(data, mapping.utilization)
+    if (util == null) return []
+    const rawLabel = mapping.label.startsWith('=') ? mapping.label.slice(1) : (getByPath(data, mapping.label) ?? mapping.label)
+    windows.push({
+      key: mapping.key ? getByPath(data, mapping.key) ?? 'default' : 'default',
+      label: resolveLabel(rawLabel, mapping),
+      utilization: Number(util),
+      resetsAt: parseResetsAt(getByPath(data, mapping.resetsAt), mapping.resetsAtFormat),
+    })
+    return windows
+  }
+
+  const arr = config.windowsPath ? getByPath(data, config.windowsPath) : data
+  if (!Array.isArray(arr)) return []
+
+  for (let i = 0; i < arr.length; i++) {
+    const item = arr[i]
+    const util = getByPath(item, mapping.utilization)
+    if (util == null) continue
+    const rawLabel = mapping.label.startsWith('=') ? mapping.label.slice(1) : (getByPath(item, mapping.label) ?? `Window ${i + 1}`)
+    windows.push({
+      key: mapping.key ? (getByPath(item, mapping.key) ?? `w${i}`) : `w${i}`,
+      label: resolveLabel(rawLabel, mapping),
+      utilization: Number(util),
+      resetsAt: parseResetsAt(getByPath(item, mapping.resetsAt), mapping.resetsAtFormat),
+    })
+  }
+
+  return windows
+}
+
+async function fetchCustomUsage(providerId: string, providerLabel: string, config: UsageProviderConfig): Promise<ProviderUsage> {
+  const meta: ProviderMeta = { id: providerId, label: providerLabel, cli: providerId, vendor: providerLabel }
+
+  const authHeaders = await resolveAuth(config)
+  const res = await net.fetch(config.url, {
+    method: config.method || 'GET',
+    headers: {
+      'Accept': 'application/json',
+      ...authHeaders,
+    },
+  })
+
+  if (res.status === 429) throw new RateLimitError(parseRetryAfter(res))
+  if (!res.ok) return usageError(meta, httpError(res.status, meta))
+
+  const data = await res.json()
+  const windows = extractWindows(data, config)
+
+  return { provider: providerId, label: providerLabel, windows, error: null, fetchedAt: Date.now() }
+}
+
+// Standalone test for usage config (no caching)
+async function testUsageConfig(config: UsageProviderConfig): Promise<{ ok: boolean; windows?: UsageWindow[]; error?: string }> {
+  try {
+    const authHeaders = await resolveAuth(config)
+    const res = await net.fetch(config.url, {
+      method: config.method || 'GET',
+      headers: { 'Accept': 'application/json', ...authHeaders },
+    })
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` }
+    const data = await res.json()
+    const windows = extractWindows(data, config)
+    if (windows.length === 0) return { ok: false, error: 'No windows found — check response mapping' }
+    return { ok: true, windows }
+  } catch (e) {
+    return { ok: false, error: friendlyError(e) }
   }
 }
 
-// ── Cache + backoff ───────────────────────────────────────────────────
+// ── Cache + backoff (per-provider) ──────────────────────────────────
 
 const MIN_INTERVAL_MS = 10_000   // hard floor: never fetch faster than 10s apart
 const DEFAULT_TTL_MS = 60_000    // auto-poll cache: 1 minute
 
-let cachedResult: ProviderUsage[] | null = null
-let cachedAt = 0
-let backoffUntil = 0             // extended on 429 via Retry-After
+interface CacheEntry {
+  result: ProviderUsage
+  cachedAt: number
+  backoffUntil: number
+}
+
+const cache = new Map<string, CacheEntry>()
 let inflight: Promise<ProviderUsage[]> | null = null
+let lastFetchAt = 0
+
+// Built-in provider IDs that have hardcoded fetchers
+const BUILTIN_USAGE_IDS = new Set(['claude', 'codex'])
 
 function fetchProvider(p: ProviderMeta, fetcher: () => Promise<ProviderUsage>): Promise<ProviderUsage> {
   return fetcher().catch((e): ProviderUsage => {
     if (e instanceof RateLimitError) {
-      backoffUntil = Math.max(backoffUntil, Date.now() + e.retryAfterMs)
+      const entry = cache.get(p.id)
+      const backoffUntil = Math.max(entry?.backoffUntil ?? 0, Date.now() + e.retryAfterMs)
+      if (entry) entry.backoffUntil = backoffUntil
     }
     return usageError(p, e instanceof RateLimitError ? e.message : friendlyError(e))
   })
@@ -194,35 +331,69 @@ function fetchProvider(p: ProviderMeta, fetcher: () => Promise<ProviderUsage>): 
 
 // ── Handler ──────────────────────────────────────────────────────────
 
-export function registerUsageHandlers(ipcMain: IpcMain): void {
+export function registerUsageHandlers(ipcMain: IpcMain, db: Database.Database): void {
   ipcMain.handle('usage:fetch', async (_e, force?: boolean): Promise<ProviderUsage[]> => {
     const now = Date.now()
 
-    // Respect 429 backoff — even for force refreshes
-    if (cachedResult && now < backoffUntil) return cachedResult
-
     // Hard floor: never refetch within 10s (blocks spam-clicking)
-    if (cachedResult && now - cachedAt < MIN_INTERVAL_MS) return cachedResult
+    if (now - lastFetchAt < MIN_INTERVAL_MS && cache.size > 0) {
+      return [...cache.values()].map(e => e.result)
+    }
 
     // Auto-poll uses longer cache TTL
-    if (!force && cachedResult && now - cachedAt < DEFAULT_TTL_MS) return cachedResult
+    if (!force && now - lastFetchAt < DEFAULT_TTL_MS && cache.size > 0) {
+      return [...cache.values()].map(e => e.result)
+    }
 
     // Deduplicate concurrent requests
     if (inflight) return inflight
 
-    inflight = Promise.all([
+    // Gather custom providers from DB
+    const customRows = db.prepare(
+      `SELECT id, label, usage_config FROM terminal_modes WHERE usage_config IS NOT NULL AND enabled = 1`
+    ).all() as { id: string; label: string; usage_config: string }[]
+
+    const fetchers: Promise<ProviderUsage>[] = [
       fetchProvider(CLAUDE, fetchClaudeUsage),
-      fetchProvider(CODEX, fetchCodexUsage)
-    ]).then((result) => {
-      cachedResult = result
-      cachedAt = Date.now()
+      fetchProvider(CODEX, fetchCodexUsage),
+    ]
+
+    for (const row of customRows) {
+      if (BUILTIN_USAGE_IDS.has(row.id)) continue
+      try {
+        const config: UsageProviderConfig = JSON.parse(row.usage_config)
+        if (!config.enabled) continue
+        const entry = cache.get(row.id)
+        if (entry && now < entry.backoffUntil) {
+          fetchers.push(Promise.resolve(entry.result))
+          continue
+        }
+        const meta: ProviderMeta = { id: row.id, label: row.label, cli: row.id, vendor: row.label }
+        fetchers.push(fetchProvider(meta, () => fetchCustomUsage(row.id, row.label, config)))
+      } catch { /* skip corrupt config */ }
+    }
+
+    inflight = Promise.all(fetchers).then((results) => {
+      lastFetchAt = Date.now()
+      for (const r of results) {
+        const existing = cache.get(r.provider)
+        cache.set(r.provider, {
+          result: r,
+          cachedAt: Date.now(),
+          backoffUntil: existing?.backoffUntil ?? 0,
+        })
+      }
       inflight = null
-      return result
+      return results
     }).catch((e) => {
       inflight = null
       throw e
     })
 
     return inflight
+  })
+
+  ipcMain.handle('usage:test', async (_e, config: UsageProviderConfig) => {
+    return testUsageConfig(config)
   })
 }

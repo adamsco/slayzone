@@ -22,6 +22,7 @@ export interface TerminalModeInfo {
   patternAttention?: string | null
   patternWorking?: string | null
   patternError?: string | null
+  usageConfig?: UsageProviderConfig | null
 }
 
 export interface CreateTerminalModeInput {
@@ -36,6 +37,7 @@ export interface CreateTerminalModeInput {
   patternAttention?: string | null
   patternWorking?: string | null
   patternError?: string | null
+  usageConfig?: UsageProviderConfig | null
 }
 
 export interface UpdateTerminalModeInput {
@@ -49,6 +51,7 @@ export interface UpdateTerminalModeInput {
   patternAttention?: string | null
   patternWorking?: string | null
   patternError?: string | null
+  usageConfig?: UsageProviderConfig | null
 }
 
 export interface DetectionEngine {
@@ -71,6 +74,7 @@ export const DEFAULT_TERMINAL_MODES: TerminalModeInfo[] = [
   { id: BuiltinTerminalMode.Gemini, label: 'Gemini', type: 'gemini', initialCommand: 'gemini {flags}', resumeCommand: 'gemini --resume latest {flags}', defaultFlags: '--yolo', enabled: true, isBuiltin: true, order: 2 },
   { id: BuiltinTerminalMode.CursorAgent, label: 'Cursor', type: 'cursor-agent', initialCommand: 'cursor-agent {flags}', resumeCommand: 'cursor-agent --resume {id} {flags}', defaultFlags: '--force', enabled: true, isBuiltin: true, order: 3 },
   { id: BuiltinTerminalMode.OpenCode, label: 'OpenCode', type: 'opencode', initialCommand: 'opencode {flags}', resumeCommand: 'opencode --session {id} {flags}', defaultFlags: '', enabled: true, isBuiltin: true, order: 4 },
+  { id: 'terminal', label: 'Terminal', type: 'terminal', initialCommand: null, resumeCommand: null, defaultFlags: null, enabled: true, isBuiltin: true, order: 5 },
 ]
 
 // Duplicated from @slayzone/projects/shared — neither domain can depend on the
@@ -132,6 +136,8 @@ export interface ValidationResult {
 
 // Provider usage / rate limiting
 export interface UsageWindow {
+  key: string         // unique within provider, e.g. "fiveHour"
+  label: string       // display label, e.g. "5h", "7d", "Opus"
   utilization: number // 0-100
   resetsAt: string    // ISO timestamp
 }
@@ -139,12 +145,35 @@ export interface UsageWindow {
 export interface ProviderUsage {
   provider: string
   label: string
-  fiveHour: UsageWindow | null
-  sevenDay: UsageWindow | null
-  sevenDayOpus: UsageWindow | null
-  sevenDaySonnet: UsageWindow | null
+  windows: UsageWindow[]
   error: string | null
   fetchedAt: number
+}
+
+// Custom usage provider configuration (stored as JSON in terminal_modes.usage_config)
+export interface UsageWindowMapping {
+  key?: string                // dot-path to key field, or omit for auto-index
+  label: string               // dot-path or literal prefixed with "="
+  labelMap?: Record<string, string>  // rename map, e.g. { "TIME_LIMIT": "30d" }
+  utilization: string         // dot-path, e.g. "used_percent"
+  resetsAt: string            // dot-path, e.g. "reset_at"
+  resetsAtFormat?: 'iso' | 'unix-s' | 'unix-ms'
+}
+
+export interface UsageProviderConfig {
+  enabled: boolean
+  url: string
+  method?: 'GET' | 'POST'
+  authType: 'none' | 'bearer-env' | 'file-json'
+  authEnvVar?: string
+  authFilePath?: string
+  authFileTokenPath?: string | string[]  // single path or fallback chain
+  authHeaderName?: string
+  authHeaderTemplate?: string
+  extraHeaders?: Record<string, string>
+  windowsPath?: string        // dot-path to array in response
+  windowMapping: UsageWindowMapping
+  singleWindow?: boolean      // map root object directly (no array)
 }
 
 /** Command to discover session ID for providers that don't support --session-id at creation. */

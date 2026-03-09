@@ -1216,6 +1216,41 @@ const migrations: Migration[] = [
         ALTER TABLE integration_project_mappings ADD COLUMN last_discovery_at TEXT DEFAULT NULL;
       `)
     }
+  },
+  {
+    version: 67,
+    up: (db) => {
+      db.exec(`ALTER TABLE terminal_modes ADD COLUMN usage_config TEXT DEFAULT NULL;`)
+    }
+  },
+  {
+    version: 68,
+    up: (db) => {
+      db.exec(`ALTER TABLE tasks ADD COLUMN pr_url TEXT DEFAULT NULL;`)
+    }
+  },
+  {
+    version: 69,
+    up: (db) => {
+      const row = db.prepare(`SELECT value FROM settings WHERE key = 'panel_config'`).get() as { value: string } | undefined
+      if (!row) return
+      try {
+        const config = JSON.parse(row.value) as { builtinEnabled?: Record<string, boolean>; viewEnabled?: Record<string, Record<string, boolean>>; [k: string]: unknown }
+        if (config.viewEnabled) {
+          if (config.builtinEnabled) { delete config.builtinEnabled }
+          else return
+        } else {
+          const legacy = config.builtinEnabled ?? {}
+          delete config.builtinEnabled
+          const homeIds = new Set(['git', 'diff', 'editor', 'processes', 'tests'])
+          config.viewEnabled = {
+            home: Object.fromEntries(Object.entries(legacy).filter(([id]) => homeIds.has(id))),
+            task: { ...legacy },
+          }
+        }
+        db.prepare(`UPDATE settings SET value = ? WHERE key = 'panel_config'`).run(JSON.stringify(config))
+      } catch { /* malformed JSON, skip */ }
+    }
   }
 ]
 

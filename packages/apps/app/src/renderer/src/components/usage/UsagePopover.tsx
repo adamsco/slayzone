@@ -8,15 +8,7 @@ import {
 } from '@slayzone/ui'
 import type { ProviderUsage, UsageWindow } from '@slayzone/terminal/shared'
 
-type UsageWindowKey = 'fiveHour' | 'sevenDay' | 'sevenDayOpus' | 'sevenDaySonnet'
-type PinnedBars = Record<string, UsageWindowKey[]>
-
-const WINDOW_LABELS: Record<UsageWindowKey, string> = {
-  fiveHour: '5h',
-  sevenDay: '7d',
-  sevenDayOpus: 'Opus',
-  sevenDaySonnet: 'Son.',
-}
+type PinnedBars = Record<string, string[]>
 
 interface UsagePopoverProps {
   data: ProviderUsage[]
@@ -110,8 +102,8 @@ function ProviderSection({
   onTogglePin,
 }: {
   usage: ProviderUsage
-  pinned: UsageWindowKey[]
-  onTogglePin: (key: UsageWindowKey) => void
+  pinned: string[]
+  onTogglePin: (key: string) => void
 }) {
   if (usage.error) {
     return (
@@ -125,11 +117,7 @@ function ProviderSection({
     )
   }
 
-  const rows: { key: UsageWindowKey; label: string; w: UsageWindow }[] = []
-  if (usage.fiveHour) rows.push({ key: 'fiveHour', label: '5h', w: usage.fiveHour })
-  if (usage.sevenDay) rows.push({ key: 'sevenDay', label: '7d', w: usage.sevenDay })
-  if (usage.sevenDayOpus) rows.push({ key: 'sevenDayOpus', label: 'Opus', w: usage.sevenDayOpus })
-  if (usage.sevenDaySonnet) rows.push({ key: 'sevenDaySonnet', label: 'Son.', w: usage.sevenDaySonnet })
+  if (usage.windows.length === 0) return null
 
   return (
     <div className="space-y-1.5">
@@ -137,27 +125,24 @@ function ProviderSection({
         <span className="text-xs font-medium flex-1">{usage.label}</span>
         <span className="text-[10px] text-muted-foreground w-16 shrink-0 text-right">Resets in</span>
       </div>
-      {rows.map((r) => (
+      {usage.windows.map((w) => (
         <WindowRow
-          key={r.key}
-          label={r.label}
-          w={r.w}
-          pinned={pinned.includes(r.key)}
-          onTogglePin={() => onTogglePin(r.key)}
+          key={w.key}
+          label={w.label}
+          w={w}
+          pinned={pinned.includes(w.key)}
+          onTogglePin={() => onTogglePin(w.key)}
         />
       ))}
     </div>
   )
 }
 
-const WINDOW_KEYS: UsageWindowKey[] = ['fiveHour', 'sevenDay', 'sevenDayOpus', 'sevenDaySonnet']
-
 function defaultPins(data: ProviderUsage[]): PinnedBars {
   const pins: PinnedBars = {}
   for (const p of data) {
-    if (p.error) continue
-    const first = WINDOW_KEYS.find((k) => p[k])
-    if (first) pins[p.provider] = [first]
+    if (p.error || p.windows.length === 0) continue
+    pins[p.provider] = [p.windows[0].key]
   }
   return pins
 }
@@ -187,7 +172,7 @@ export function UsagePopover({ data, onRefresh }: UsagePopoverProps) {
   const effectivePinned = pinned ?? defaultPins(data)
 
   const togglePin = useCallback(
-    (provider: string, windowKey: UsageWindowKey) => {
+    (provider: string, windowKey: string) => {
       setPinned((prev) => {
         const base = prev ?? defaultPins(data)
         const next = { ...base }
@@ -222,8 +207,8 @@ export function UsagePopover({ data, onRefresh }: UsagePopoverProps) {
     if (!keys) return []
     return keys
       .map((k) => {
-        const w = p[k]
-        return w ? { label: `${p.label} ${WINDOW_LABELS[k]}`, pct: w.utilization } : null
+        const w = p.windows.find((w) => w.key === k)
+        return w ? { label: `${p.label} ${w.label}`, pct: w.utilization } : null
       })
       .filter(Boolean) as { label: string; pct: number }[]
   })
