@@ -1679,9 +1679,18 @@ app.whenReady().then(async () => {
       if (linearSyncPoller) { clearInterval(linearSyncPoller); linearSyncPoller = null }
       if (discoveryPoller) { clearInterval(discoveryPoller); discoveryPoller = null }
 
-      // 3. Stop MCP
+      // 3. Stop + restart MCP (CLI tests need it running)
       mcpCleanup?.()
       mcpCleanup = null
+      ;(globalThis as Record<string, unknown>).__mcpPort = undefined
+      const mcpMod = await import('./mcp-server')
+      mcpMod.startMcpServer(db, 0)
+      mcpCleanup = () => mcpMod.stopMcpServer()
+      // Wait for server to be listening (listen callback sets __mcpPort)
+      await new Promise<void>((resolve) => {
+        const check = () => (globalThis as Record<string, unknown>).__mcpPort ? resolve() : setTimeout(check, 10)
+        check()
+      })
 
       // 4. Close file watchers
       closeAllWatchers()

@@ -219,7 +219,7 @@ test.describe('Session banner behavior', () => {
     await expect(mainWindow.getByText('Session not saved').last()).toBeVisible()
 
     // Click detect — should not crash, banner stays (PTY doesn't exist)
-    await mainWindow.getByRole('button', { name: /Run \/status/ }).click()
+    await mainWindow.getByRole('button', { name: /Run \/status/ }).last().click()
 
     // Banner still visible, session not saved
     await expect(mainWindow.getByText('Session not saved').last()).toBeVisible()

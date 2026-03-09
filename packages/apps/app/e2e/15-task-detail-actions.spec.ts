@@ -4,6 +4,11 @@ import { TEST_PROJECT_PATH } from './fixtures/electron'
 test.describe('Task detail actions', () => {
   let projectAbbrev: string
   const openTaskFromBoard = async (mainWindow: import('@playwright/test').Page, title: string) => {
+    // Hide any lingering toasts that might block pointer events
+    await mainWindow.evaluate(() => {
+      document.querySelectorAll('[data-sonner-toast]').forEach(el => (el as HTMLElement).style.display = 'none')
+    })
+
     await goHome(mainWindow)
     await clickProject(mainWindow, projectAbbrev)
 
