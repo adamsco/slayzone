@@ -151,7 +151,7 @@ export function ProjectGeneralTab({ projectPath, visible, onSwitchToDiff }: Proj
 
   return (
     <div className="h-full flex flex-col">
-      <div className="min-h-0 overflow-y-auto p-4 pb-0 space-y-6">
+      <div className="shrink-0 p-4 pb-0 space-y-6">
       <Section label="Branch">
         <Popover open={branchPopoverOpen} onOpenChange={handleBranchPopoverChange}>
           <PopoverTrigger asChild>
@@ -226,11 +226,11 @@ export function ProjectGeneralTab({ projectPath, visible, onSwitchToDiff }: Proj
 
       </div>
 
-      {/* Recent commits — fills remaining height, scrolls internally */}
+      {/* Recent commits */}
       {recentCommits.length > 0 && (
-        <div className="flex-1 min-h-[200px] flex flex-col px-4 pt-6 pb-4">
-          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Recent Commits</div>
-          <div className="flex-1 min-h-0 space-y-0.5 px-3 py-2.5 rounded-lg border bg-muted/30 overflow-y-auto">
+        <div className="flex-1 min-h-[200px] flex flex-col p-4 pt-6">
+          <div className="shrink-0 text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Recent Commits</div>
+          <div className="min-h-0 overflow-y-auto space-y-0.5 px-3 py-2.5 rounded-lg border bg-muted/30">
             {recentCommits.map((commit) => (
               <div
                 key={commit.hash}

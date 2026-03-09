@@ -11,8 +11,10 @@ import { CommitTimeline } from './CommitTimeline'
 import { GeneralTabContent } from './GeneralTabContent'
 import { ProjectGeneralTab } from './ProjectGeneralTab'
 import { WorktreesTab, type WorktreesTabHandle } from './WorktreesTab'
+import { PullRequestTab } from './PullRequestTab'
+import { ProjectPrTab } from './ProjectPrTab'
 
-export type GitTabId = 'general' | 'changes' | 'conflicts' | 'worktrees'
+export type GitTabId = 'general' | 'changes' | 'conflicts' | 'worktrees' | 'pr'
 const isMac = navigator.platform.startsWith('Mac')
 const gitGeneralShortcut = isMac ? '⌘G' : 'Ctrl+G'
 const gitDiffShortcut = isMac ? '⌘⇧G' : 'Ctrl+Shift+G'
@@ -95,6 +97,13 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
   const [conflictToolbar, setConflictToolbar] = useState<ConflictToolbarData | null>(null)
 
   const showWorktrees = !task
+  const [hasGithubRemote, setHasGithubRemote] = useState(false)
+
+  // Check if repo has a GitHub remote
+  useEffect(() => {
+    if (!projectPath) { setHasGithubRemote(false); return }
+    window.api.git.hasGithubRemote(projectPath).then(setHasGithubRemote).catch(() => setHasGithubRemote(false))
+  }, [projectPath])
 
   // Auto-switch to conflicts tab when conflicts detected
   useEffect(() => {
@@ -106,12 +115,15 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
     if (isUncommitted) setActiveTab('changes')
   }, [isUncommitted])
 
-  // Reset active tab if worktrees becomes hidden
+  // Reset active tab if worktrees/pr becomes hidden
   useEffect(() => {
     if (!showWorktrees && activeTab === 'worktrees') {
       setActiveTab('general')
     }
-  }, [showWorktrees, activeTab])
+    if (!hasGithubRemote && activeTab === 'pr') {
+      setActiveTab('general')
+    }
+  }, [showWorktrees, hasGithubRemote, activeTab])
 
   // Merge-mode: commit and continue merge
   const handleCommitAndContinueMerge = useCallback(async () => {
@@ -203,6 +215,14 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
             Conflicts
           </TabButton>
         )}
+        {hasGithubRemote && (
+          <TabButton
+            active={activeTab === 'pr'}
+            onClick={() => setActiveTab('pr')}
+          >
+            {task ? 'Pull request' : 'Pull requests'}
+          </TabButton>
+        )}
 
         {/* Right-aligned actions */}
         <div className="flex-1" />
@@ -247,7 +267,7 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
 
       {/* Tab content */}
       <div className="flex-1 min-h-0 relative">
-        <div className={cn('absolute inset-0 overflow-y-auto', activeTab !== 'general' && 'hidden')}>
+        <div className={cn('absolute inset-0', activeTab !== 'general' && 'hidden')}>
           {task ? (
             <GeneralTabContent
               task={task}
@@ -296,6 +316,26 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
               onTaskUpdated={onTaskUpdated!}
               onToolbarChange={setConflictToolbar}
             />
+          </div>
+        )}
+        {hasGithubRemote && (
+          <div className={cn('absolute inset-0', activeTab !== 'pr' && 'hidden')}>
+            {task ? (
+              <PullRequestTab
+                task={task}
+                projectPath={projectPath}
+                visible={visible && activeTab === 'pr'}
+                onUpdateTask={onUpdateTask!}
+                onTaskUpdated={onTaskUpdated!}
+              />
+            ) : (
+              <ProjectPrTab
+                projectPath={projectPath}
+                visible={visible && activeTab === 'pr'}
+                tasks={tasks}
+                onTaskClick={onTaskClick}
+              />
+            )}
           </div>
         )}
       </div>
