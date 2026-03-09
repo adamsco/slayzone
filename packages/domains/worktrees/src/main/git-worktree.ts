@@ -1,4 +1,4 @@
-import { execSync, spawnSync, spawn } from 'child_process'
+import { spawnSync, spawn } from 'child_process'
 import { platform } from 'os'
 import { existsSync, readFileSync, writeFileSync, chmodSync, constants as fsConstants, accessSync } from 'fs'
 import path from 'path'
@@ -14,143 +14,58 @@ function trimOutput(value: unknown, maxLength = 1200): string | null {
   return `${normalized.slice(0, maxLength)}...[trimmed:${normalized.length - maxLength}]`
 }
 
-function extractExecErrorDetails(error: unknown): {
-  message: string
-  exitCode: number | null
-  stderr: string | null
-  stdout: string | null
-} {
-  const raw = error as {
-    message?: string
-    status?: number
-    stderr?: unknown
-    stdout?: unknown
-  }
-
-  const stderr = Buffer.isBuffer(raw.stderr)
-    ? trimOutput(raw.stderr.toString('utf8'))
-    : trimOutput(raw.stderr)
-  const stdout = Buffer.isBuffer(raw.stdout)
-    ? trimOutput(raw.stdout.toString('utf8'))
-    : trimOutput(raw.stdout)
-
-  return {
-    message: raw.message ?? String(error),
-    exitCode: typeof raw.status === 'number' ? raw.status : null,
-    stderr,
-    stdout
-  }
-}
-
-function execGit(command: string, options: Parameters<typeof execSync>[1] & { cwd: string }): string | Buffer {
-  const startedAt = Date.now()
-  try {
-    const result = execSync(command, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      ...options
-    })
-    recordDiagnosticEvent({
-      level: 'info',
-      source: 'git',
-      event: 'git.command',
-      message: command,
-      payload: {
-        command,
-        cwd: options.cwd,
-        durationMs: Date.now() - startedAt,
-        success: true
-      }
-    })
-    return result
-  } catch (error) {
-    const details = extractExecErrorDetails(error)
-    recordDiagnosticEvent({
-      level: 'error',
-      source: 'git',
-      event: 'git.command_failed',
-      message: details.message,
-      payload: {
-        command,
-        cwd: options.cwd,
-        durationMs: Date.now() - startedAt,
-        success: false,
-        exitCode: details.exitCode,
-        stderr: details.stderr,
-        stdout: details.stdout
-      }
-    })
-    // Strip "Command failed: git ..." prefix, keep only stderr
-    if (error instanceof Error) {
-      const stderr = (error as { stderr?: Buffer | string }).stderr?.toString().trim()
-      if (stderr) error.message = stderr
-    }
-    throw error
-  }
-}
-
-/** Safe git execution with argument array — prevents shell injection */
-function spawnGit(args: string[], options: { cwd: string }): string {
-  const startedAt = Date.now()
-  const command = `git ${args.join(' ')}`
-  const result = spawnSync('git', args, {
-    cwd: options.cwd,
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  if (result.status !== 0) {
-    const error = new Error(result.stderr?.trim() || `git command failed: ${command}`) as Error & {
-      status: number | null; stderr: string; stdout: string
-    }
-    error.status = result.status
-    error.stderr = result.stderr ?? ''
-    error.stdout = result.stdout ?? ''
-    recordDiagnosticEvent({
-      level: 'error',
-      source: 'git',
-      event: 'git.command_failed',
-      message: error.message,
-      payload: {
-        command,
-        cwd: options.cwd,
-        durationMs: Date.now() - startedAt,
-        success: false,
-        exitCode: result.status,
-        stderr: trimOutput(result.stderr),
-        stdout: trimOutput(result.stdout)
-      }
-    })
-    throw error
-  }
-  recordDiagnosticEvent({
-    level: 'info',
-    source: 'git',
-    event: 'git.command',
-    message: command,
-    payload: {
-      command,
+/** Async git execution — won't block the main process */
+function execGit(args: string[], options: { cwd: string }): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const command = `git ${args.join(' ')}`
+    const startedAt = Date.now()
+    const child = spawn('git', args, {
       cwd: options.cwd,
-      durationMs: Date.now() - startedAt,
-      success: true
-    }
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    const stdout: string[] = []
+    const stderr: string[] = []
+    child.stdout.on('data', (data: Buffer) => stdout.push(data.toString()))
+    child.stderr.on('data', (data: Buffer) => stderr.push(data.toString()))
+    child.on('close', (code) => {
+      const durationMs = Date.now() - startedAt
+      if (code !== 0) {
+        const errMsg = stderr.join('').trim() || `git command failed: ${command}`
+        recordDiagnosticEvent({
+          level: 'error', source: 'git', event: 'git.command_failed',
+          message: errMsg,
+          payload: { command, cwd: options.cwd, durationMs, success: false, exitCode: code, stderr: trimOutput(stderr.join('')), stdout: trimOutput(stdout.join('')) }
+        })
+        const error = new Error(errMsg) as Error & { status: number | null; stderr: string; stdout: string }
+        error.status = code
+        error.stderr = stderr.join('')
+        error.stdout = stdout.join('')
+        reject(error)
+      } else {
+        recordDiagnosticEvent({
+          level: 'info', source: 'git', event: 'git.command',
+          message: command,
+          payload: { command, cwd: options.cwd, durationMs, success: true }
+        })
+        resolve(stdout.join(''))
+      }
+    })
+    child.on('error', (err) => reject(err))
   })
-  return result.stdout
 }
 
-export function isGitRepo(path: string): boolean {
+export async function isGitRepo(repoPath: string): Promise<boolean> {
   try {
-    execGit('git rev-parse --git-dir', { cwd: path })
+    await execGit(['rev-parse', '--git-dir'], { cwd: repoPath })
     return true
   } catch {
     return false
   }
 }
 
-export function detectWorktrees(repoPath: string): DetectedWorktree[] {
+export async function detectWorktrees(repoPath: string): Promise<DetectedWorktree[]> {
   try {
-    const output = execGit('git worktree list --porcelain', {
-      cwd: repoPath,
-      encoding: 'utf-8'
-    }) as string
+    const output = await execGit(['worktree', 'list', '--porcelain'], { cwd: repoPath })
 
     const worktrees: DetectedWorktree[] = []
     let current: Partial<DetectedWorktree> = {}
@@ -203,11 +118,11 @@ export interface WorktreeSetupResult {
   output?: string
 }
 
-export function createWorktree(repoPath: string, targetPath: string, branch?: string, sourceBranch?: string): void {
+export async function createWorktree(repoPath: string, targetPath: string, branch?: string, sourceBranch?: string): Promise<void> {
   const args = ['worktree', 'add', targetPath]
   if (branch) args.push('-b', branch)
   if (sourceBranch) args.push(sourceBranch)
-  spawnGit(args, { cwd: repoPath })
+  await execGit(args, { cwd: repoPath })
 }
 
 const SETUP_SCRIPT = '.slay/worktree-setup.sh'
@@ -352,40 +267,34 @@ export function runWorktreeSetupScriptSync(
   return { ran: true, success, output }
 }
 
-export function removeWorktree(repoPath: string, worktreePath: string): void {
+export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
   try {
-    spawnGit(['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath })
+    await execGit(['worktree', 'remove', worktreePath, '--force'], { cwd: repoPath })
   } catch (err) {
     if (!existsSync(worktreePath)) {
-      spawnGit(['worktree', 'prune'], { cwd: repoPath })
+      await execGit(['worktree', 'prune'], { cwd: repoPath })
       return
     }
     throw err
   }
 }
 
-export function initRepo(path: string): void {
-  execGit('git init', { cwd: path })
+export async function initRepo(repoPath: string): Promise<void> {
+  await execGit(['init'], { cwd: repoPath })
 }
 
-export function getCurrentBranch(path: string): string | null {
+export async function getCurrentBranch(repoPath: string): Promise<string | null> {
   try {
-    const output = execGit('git branch --show-current', {
-      cwd: path,
-      encoding: 'utf-8'
-    }) as string
+    const output = await execGit(['branch', '--show-current'], { cwd: repoPath })
     return output.trim() || null
   } catch {
     return null
   }
 }
 
-export function listBranches(path: string): string[] {
+export async function listBranches(repoPath: string): Promise<string[]> {
   try {
-    const output = execGit('git branch --list --no-color', {
-      cwd: path,
-      encoding: 'utf-8'
-    }) as string
+    const output = await execGit(['branch', '--list', '--no-color'], { cwd: repoPath })
     return output
       .split('\n')
       .map(line => line.replace(/^\*?\s+/, '').trim())
@@ -395,49 +304,43 @@ export function listBranches(path: string): string[] {
   }
 }
 
-export function checkoutBranch(path: string, branch: string): void {
-  spawnGit(['checkout', branch], { cwd: path })
+export async function checkoutBranch(repoPath: string, branch: string): Promise<void> {
+  await execGit(['checkout', branch], { cwd: repoPath })
 }
 
-export function createBranch(path: string, branch: string): void {
-  spawnGit(['checkout', '-b', branch], { cwd: path })
+export async function createBranch(repoPath: string, branch: string): Promise<void> {
+  await execGit(['checkout', '-b', branch], { cwd: repoPath })
 }
 
-export function hasUncommittedChanges(path: string): boolean {
+export async function hasUncommittedChanges(repoPath: string): Promise<boolean> {
   try {
     // -uno: ignore untracked files — they don't block git merge
-    const output = execGit('git status --porcelain -uno', {
-      cwd: path,
-      encoding: 'utf-8'
-    }) as string
+    const output = await execGit(['status', '--porcelain', '-uno'], { cwd: repoPath })
     return output.trim().length > 0
   } catch {
     return false
   }
 }
 
-export function mergeIntoParent(
+export async function mergeIntoParent(
   projectPath: string,
   parentBranch: string,
   sourceBranch: string
-): MergeResult {
+): Promise<MergeResult> {
   try {
     // Check if we're on parent branch, if not checkout
-    const currentBranch = getCurrentBranch(projectPath)
+    const currentBranch = await getCurrentBranch(projectPath)
     if (currentBranch !== parentBranch) {
-      spawnGit(['checkout', parentBranch], { cwd: projectPath })
+      await execGit(['checkout', parentBranch], { cwd: projectPath })
     }
 
     // Attempt merge
     try {
-      spawnGit(['merge', sourceBranch, '--no-ff', '--no-edit'], { cwd: projectPath })
+      await execGit(['merge', sourceBranch, '--no-ff', '--no-edit'], { cwd: projectPath })
       return { success: true, merged: true, conflicted: false }
     } catch {
       // Check for merge conflicts
-      const status = execGit('git status --porcelain', {
-        cwd: projectPath,
-        encoding: 'utf-8'
-      }) as string
+      const status = await execGit(['status', '--porcelain'], { cwd: projectPath })
       if (status.includes('UU') || status.includes('AA') || status.includes('DD')) {
         return { success: false, merged: false, conflicted: true, error: 'Merge conflicts detected' }
       }
@@ -453,32 +356,29 @@ export function mergeIntoParent(
   }
 }
 
-export function abortMerge(path: string): void {
-  execGit('git merge --abort', { cwd: path })
+export async function abortMerge(repoPath: string): Promise<void> {
+  await execGit(['merge', '--abort'], { cwd: repoPath })
 }
 
-export function getConflictedFiles(path: string): string[] {
+export async function getConflictedFiles(repoPath: string): Promise<string[]> {
   try {
-    const output = execGit('git diff --name-only --diff-filter=U', {
-      cwd: path,
-      encoding: 'utf-8'
-    }) as string
+    const output = await execGit(['diff', '--name-only', '--diff-filter=U'], { cwd: repoPath })
     return output.trim().split('\n').filter(Boolean)
   } catch {
     return []
   }
 }
 
-export function startMergeNoCommit(
+export async function startMergeNoCommit(
   projectPath: string,
   parentBranch: string,
   sourceBranch: string
-): { clean: boolean; conflictedFiles: string[] } {
+): Promise<{ clean: boolean; conflictedFiles: string[] }> {
   // Checkout parent branch
-  const currentBranch = getCurrentBranch(projectPath)
+  const currentBranch = await getCurrentBranch(projectPath)
   if (currentBranch !== parentBranch) {
     try {
-      spawnGit(['checkout', parentBranch], { cwd: projectPath })
+      await execGit(['checkout', parentBranch], { cwd: projectPath })
     } catch (err) {
       const msg = err instanceof Error && 'stderr' in err ? String((err as { stderr: unknown }).stderr) : String(err)
       throw new Error(`Cannot checkout ${parentBranch}: ${msg.trim()}`)
@@ -487,13 +387,13 @@ export function startMergeNoCommit(
 
   // Attempt merge with --no-commit
   try {
-    spawnGit(['merge', sourceBranch, '--no-commit', '--no-ff'], { cwd: projectPath })
+    await execGit(['merge', sourceBranch, '--no-commit', '--no-ff'], { cwd: projectPath })
     // Clean merge - commit it
-    execGit(`git commit --no-edit`, { cwd: projectPath })
+    await execGit(['commit', '--no-edit'], { cwd: projectPath })
     return { clean: true, conflictedFiles: [] }
   } catch (err) {
     // Check for conflicts
-    const conflictedFiles = getConflictedFiles(projectPath)
+    const conflictedFiles = await getConflictedFiles(projectPath)
     if (conflictedFiles.length > 0) {
       return { clean: false, conflictedFiles }
     }
@@ -503,43 +403,43 @@ export function startMergeNoCommit(
   }
 }
 
-export function isMergeInProgress(path: string): boolean {
+export async function isMergeInProgress(repoPath: string): Promise<boolean> {
   try {
-    execGit('git rev-parse --verify MERGE_HEAD', { cwd: path })
+    await execGit(['rev-parse', '--verify', 'MERGE_HEAD'], { cwd: repoPath })
     return true
   } catch {
     return false
   }
 }
 
-export function stageFile(path: string, filePath: string): void {
-  spawnGit(['add', '--', filePath], { cwd: path })
+export async function stageFile(repoPath: string, filePath: string): Promise<void> {
+  await execGit(['add', '--', filePath], { cwd: repoPath })
 }
 
-export function unstageFile(path: string, filePath: string): void {
-  spawnGit(['reset', 'HEAD', '--', filePath], { cwd: path })
+export async function unstageFile(repoPath: string, filePath: string): Promise<void> {
+  await execGit(['reset', 'HEAD', '--', filePath], { cwd: repoPath })
 }
 
-export function discardFile(path: string, filePath: string, untracked?: boolean): void {
+export async function discardFile(repoPath: string, filePath: string, untracked?: boolean): Promise<void> {
   if (untracked) {
-    spawnGit(['clean', '-f', '--', filePath], { cwd: path })
+    await execGit(['clean', '-f', '--', filePath], { cwd: repoPath })
   } else {
-    spawnGit(['checkout', '--', filePath], { cwd: path })
+    await execGit(['checkout', '--', filePath], { cwd: repoPath })
   }
 }
 
-export function stageAll(path: string): void {
-  execGit('git add -A', { cwd: path })
+export async function stageAll(repoPath: string): Promise<void> {
+  await execGit(['add', '-A'], { cwd: repoPath })
 }
 
-export function unstageAll(path: string): void {
-  execGit('git reset HEAD', { cwd: path })
+export async function unstageAll(repoPath: string): Promise<void> {
+  await execGit(['reset', 'HEAD'], { cwd: repoPath })
 }
 
-export function getUntrackedFileDiff(repoPath: string, filePath: string): string {
+export async function getUntrackedFileDiff(repoPath: string, filePath: string): Promise<string> {
   try {
     const devNull = platform() === 'win32' ? 'NUL' : '/dev/null'
-    return spawnGit(['diff', '--no-index', '--no-ext-diff', '--', devNull, filePath], { cwd: repoPath })
+    return await execGit(['diff', '--no-index', '--no-ext-diff', '--', devNull, filePath], { cwd: repoPath })
   } catch (err: unknown) {
     // git diff --no-index exits with code 1 when files differ — expected
     const e = err as { stdout?: string }
@@ -548,12 +448,10 @@ export function getUntrackedFileDiff(repoPath: string, filePath: string): string
   }
 }
 
-export function getWorkingDiff(path: string, opts?: { contextLines?: string; ignoreWhitespace?: boolean }): GitDiffSnapshot {
-  try {
-    execGit('git rev-parse --git-dir', { cwd: path })
-  } catch {
-    throw new Error(`Not a git repository: ${path}`)
-  }
+export async function getWorkingDiff(repoPath: string, opts?: { contextLines?: string; ignoreWhitespace?: boolean }): Promise<GitDiffSnapshot> {
+  await execGit(['rev-parse', '--git-dir'], { cwd: repoPath }).catch(() => {
+    throw new Error(`Not a git repository: ${repoPath}`)
+  })
 
   // Build extra flags from diff settings
   const extraFlags: string[] = []
@@ -564,35 +462,22 @@ export function getWorkingDiff(path: string, opts?: { contextLines?: string; ign
   if (opts?.ignoreWhitespace) {
     extraFlags.push('-w')
   }
-  const extra = extraFlags.length > 0 ? ' ' + extraFlags.join(' ') : ''
 
-  const unstagedFilesRaw = execGit('git diff --name-only', {
-    cwd: path,
-    encoding: 'utf-8'
-  }) as string
-  const stagedFilesRaw = execGit('git diff --cached --name-only', {
-    cwd: path,
-    encoding: 'utf-8'
-  }) as string
-  const untrackedFilesRaw = execGit('git ls-files --others --exclude-standard', {
-    cwd: path,
-    encoding: 'utf-8'
-  }) as string
-  const unstagedPatch = execGit(`git diff --no-ext-diff${extra}`, {
-    cwd: path,
-    encoding: 'utf-8'
-  }) as string
-  const stagedPatch = execGit(`git diff --cached --no-ext-diff${extra}`, {
-    cwd: path,
-    encoding: 'utf-8'
-  }) as string
+  // Run independent git queries in parallel
+  const [unstagedFilesRaw, stagedFilesRaw, untrackedFilesRaw, unstagedPatch, stagedPatch] = await Promise.all([
+    execGit(['diff', '--name-only'], { cwd: repoPath }),
+    execGit(['diff', '--cached', '--name-only'], { cwd: repoPath }),
+    execGit(['ls-files', '--others', '--exclude-standard'], { cwd: repoPath }),
+    execGit(['diff', '--no-ext-diff', ...extraFlags], { cwd: repoPath }),
+    execGit(['diff', '--cached', '--no-ext-diff', ...extraFlags], { cwd: repoPath }),
+  ])
 
   const unstagedFiles = unstagedFilesRaw.trim().split('\n').filter(Boolean)
   const stagedFiles = stagedFilesRaw.trim().split('\n').filter(Boolean)
   const untrackedFiles = untrackedFilesRaw.trim().split('\n').filter(Boolean)
 
   return {
-    targetPath: path,
+    targetPath: repoPath,
     files: [...new Set([...unstagedFiles, ...stagedFiles, ...untrackedFiles])].sort(),
     stagedFiles: stagedFiles.sort(),
     unstagedFiles: unstagedFiles.sort(),
@@ -604,10 +489,10 @@ export function getWorkingDiff(path: string, opts?: { contextLines?: string; ign
   }
 }
 
-export function getConflictContent(repoPath: string, filePath: string): ConflictFileContent {
-  const gitShow = (stage: string): string | null => {
+export async function getConflictContent(repoPath: string, filePath: string): Promise<ConflictFileContent> {
+  const gitShow = async (stage: string): Promise<string | null> => {
     try {
-      return spawnGit(['show', `${stage}:${filePath}`], { cwd: repoPath })
+      return await execGit(['show', `${stage}:${filePath}`], { cwd: repoPath })
     } catch {
       return null
     }
@@ -620,51 +505,52 @@ export function getConflictContent(repoPath: string, filePath: string): Conflict
     // File may have been deleted
   }
 
-  return {
-    path: filePath,
-    base: gitShow(':1'),
-    ours: gitShow(':2'),
-    theirs: gitShow(':3'),
-    merged
-  }
+  const [base, ours, theirs] = await Promise.all([
+    gitShow(':1'),
+    gitShow(':2'),
+    gitShow(':3'),
+  ])
+
+  return { path: filePath, base, ours, theirs, merged }
 }
 
 export function writeResolvedFile(repoPath: string, filePath: string, content: string): void {
   writeFileSync(path.join(repoPath, filePath), content, 'utf-8')
 }
 
-export function commitFiles(repoPath: string, message: string): void {
-  spawnGit(['commit', '-m', message], { cwd: repoPath })
+export async function commitFiles(repoPath: string, message: string): Promise<void> {
+  await execGit(['commit', '-m', message], { cwd: repoPath })
 }
 
 // --- General tab operations ---
 
-export function getRecentCommits(repoPath: string, count = 5): CommitInfo[] {
+function parseCommitOutput(output: string): CommitInfo[] {
+  const lines = output.trim().split('\n')
+  const commits: CommitInfo[] = []
+  for (let i = 0; i + 4 < lines.length; i += 5) {
+    commits.push({
+      hash: lines[i],
+      shortHash: lines[i + 1],
+      message: lines[i + 2],
+      author: lines[i + 3],
+      relativeDate: lines[i + 4]
+    })
+  }
+  return commits
+}
+
+export async function getRecentCommits(repoPath: string, count = 5): Promise<CommitInfo[]> {
   try {
-    const output = execGit(`git log -${count} --format=%H%n%h%n%s%n%an%n%ar`, {
-      cwd: repoPath,
-      encoding: 'utf-8'
-    }) as string
-    const lines = output.trim().split('\n')
-    const commits: CommitInfo[] = []
-    for (let i = 0; i + 4 < lines.length; i += 5) {
-      commits.push({
-        hash: lines[i],
-        shortHash: lines[i + 1],
-        message: lines[i + 2],
-        author: lines[i + 3],
-        relativeDate: lines[i + 4]
-      })
-    }
-    return commits
+    const output = await execGit(['log', `-${count}`, '--format=%H%n%h%n%s%n%an%n%ar'], { cwd: repoPath })
+    return parseCommitOutput(output)
   } catch {
     return []
   }
 }
 
-export function getAheadBehind(repoPath: string, branch: string, upstream: string): AheadBehind {
+export async function getAheadBehind(repoPath: string, branch: string, upstream: string): Promise<AheadBehind> {
   try {
-    const output = spawnGit(['rev-list', '--left-right', '--count', `${upstream}...${branch}`], { cwd: repoPath })
+    const output = await execGit(['rev-list', '--left-right', '--count', `${upstream}...${branch}`], { cwd: repoPath })
     const [behind, ahead] = output.trim().split(/\s+/).map(Number)
     return { ahead: ahead || 0, behind: behind || 0 }
   } catch {
@@ -672,21 +558,22 @@ export function getAheadBehind(repoPath: string, branch: string, upstream: strin
   }
 }
 
-export function getStatusSummary(repoPath: string): StatusSummary {
+function parseStatusOutput(output: string): StatusSummary {
+  const lines = output.trim().split('\n').filter(Boolean)
+  let staged = 0, unstaged = 0, untracked = 0
+  for (const line of lines) {
+    const x = line[0], y = line[1]
+    if (x === '?') { untracked++; continue }
+    if (x !== ' ' && x !== '?') staged++
+    if (y !== ' ' && y !== '?') unstaged++
+  }
+  return { staged, unstaged, untracked }
+}
+
+export async function getStatusSummary(repoPath: string): Promise<StatusSummary> {
   try {
-    const output = execGit('git status --porcelain', {
-      cwd: repoPath,
-      encoding: 'utf-8'
-    }) as string
-    const lines = output.trim().split('\n').filter(Boolean)
-    let staged = 0, unstaged = 0, untracked = 0
-    for (const line of lines) {
-      const x = line[0], y = line[1]
-      if (x === '?') { untracked++; continue }
-      if (x !== ' ' && x !== '?') staged++
-      if (y !== ' ' && y !== '?') unstaged++
-    }
-    return { staged, unstaged, untracked }
+    const output = await execGit(['status', '--porcelain'], { cwd: repoPath })
+    return parseStatusOutput(output)
   } catch {
     return { staged: 0, unstaged: 0, untracked: 0 }
   }
@@ -694,18 +581,15 @@ export function getStatusSummary(repoPath: string): StatusSummary {
 
 // --- Rebase operations ---
 
-function getGitDir(repoPath: string): string {
-  const output = execGit('git rev-parse --git-dir', {
-    cwd: repoPath,
-    encoding: 'utf-8'
-  }) as string
+async function getGitDir(repoPath: string): Promise<string> {
+  const output = await execGit(['rev-parse', '--git-dir'], { cwd: repoPath })
   const dir = output.trim()
   return path.isAbsolute(dir) ? dir : path.join(repoPath, dir)
 }
 
-export function isRebaseInProgress(repoPath: string): boolean {
+export async function isRebaseInProgress(repoPath: string): Promise<boolean> {
   try {
-    const gitDir = getGitDir(repoPath)
+    const gitDir = await getGitDir(repoPath)
     return existsSync(path.join(gitDir, 'rebase-merge')) ||
            existsSync(path.join(gitDir, 'rebase-apply'))
   } catch {
@@ -713,9 +597,9 @@ export function isRebaseInProgress(repoPath: string): boolean {
   }
 }
 
-export function getRebaseProgress(repoPath: string): RebaseProgress | null {
+export async function getRebaseProgress(repoPath: string): Promise<RebaseProgress | null> {
   try {
-    const gitDir = getGitDir(repoPath)
+    const gitDir = await getGitDir(repoPath)
     const mergeDir = path.join(gitDir, 'rebase-merge')
     const applyDir = path.join(gitDir, 'rebase-apply')
     const dir = existsSync(mergeDir) ? mergeDir : existsSync(applyDir) ? applyDir : null
@@ -765,50 +649,48 @@ export function getRebaseProgress(repoPath: string): RebaseProgress | null {
   }
 }
 
-export function abortRebase(repoPath: string): void {
-  execGit('git rebase --abort', { cwd: repoPath })
+export async function abortRebase(repoPath: string): Promise<void> {
+  await execGit(['rebase', '--abort'], { cwd: repoPath })
 }
 
-export function continueRebase(repoPath: string): { done: boolean; conflictedFiles: string[] } {
+export async function continueRebase(repoPath: string): Promise<{ done: boolean; conflictedFiles: string[] }> {
   try {
-    execGit('git rebase --continue', { cwd: repoPath })
+    await execGit(['rebase', '--continue'], { cwd: repoPath })
     // Check if rebase is still in progress
-    if (isRebaseInProgress(repoPath)) {
-      const files = getConflictedFiles(repoPath)
+    if (await isRebaseInProgress(repoPath)) {
+      const files = await getConflictedFiles(repoPath)
       return { done: false, conflictedFiles: files }
     }
     return { done: true, conflictedFiles: [] }
   } catch {
-    const files = getConflictedFiles(repoPath)
+    const files = await getConflictedFiles(repoPath)
     return { done: false, conflictedFiles: files }
   }
 }
 
-export function skipRebaseCommit(repoPath: string): { done: boolean; conflictedFiles: string[] } {
+export async function skipRebaseCommit(repoPath: string): Promise<{ done: boolean; conflictedFiles: string[] }> {
   try {
-    execGit('git rebase --skip', { cwd: repoPath })
-    if (isRebaseInProgress(repoPath)) {
-      const files = getConflictedFiles(repoPath)
+    await execGit(['rebase', '--skip'], { cwd: repoPath })
+    if (await isRebaseInProgress(repoPath)) {
+      const files = await getConflictedFiles(repoPath)
       return { done: false, conflictedFiles: files }
     }
     return { done: true, conflictedFiles: [] }
   } catch {
-    const files = getConflictedFiles(repoPath)
+    const files = await getConflictedFiles(repoPath)
     return { done: false, conflictedFiles: files }
   }
 }
 
-export function getMergeContext(repoPath: string): MergeContext | null {
+export async function getMergeContext(repoPath: string): Promise<MergeContext | null> {
   try {
-    const gitDir = getGitDir(repoPath)
+    const gitDir = await getGitDir(repoPath)
 
     // Check for rebase
     const mergeDir = path.join(gitDir, 'rebase-merge')
     const applyDir = path.join(gitDir, 'rebase-apply')
     if (existsSync(mergeDir) || existsSync(applyDir)) {
       const dir = existsSync(mergeDir) ? mergeDir : applyDir
-      // head-name = the branch being rebased (source)
-      // onto = the commit being rebased onto (target)
       let sourceBranch = 'unknown'
       let targetBranch = 'unknown'
       try {
@@ -816,19 +698,18 @@ export function getMergeContext(repoPath: string): MergeContext | null {
       } catch { /* fallback */ }
       try {
         const ontoHash = readFileSync(path.join(dir, 'onto'), 'utf-8').trim()
-        // Resolve hash to branch name
-        const name = spawnGit(['name-rev', '--name-only', ontoHash], { cwd: repoPath })
+        const name = await execGit(['name-rev', '--name-only', ontoHash], { cwd: repoPath })
         targetBranch = name.trim().replace(/~\d+$/, '')
       } catch { /* fallback */ }
       return { type: 'rebase', sourceBranch, targetBranch }
     }
 
     // Check for merge
-    if (isMergeInProgress(repoPath)) {
-      const targetBranch = getCurrentBranch(repoPath) ?? 'unknown'
+    if (await isMergeInProgress(repoPath)) {
+      const targetBranch = (await getCurrentBranch(repoPath)) ?? 'unknown'
       let sourceBranch = 'unknown'
       try {
-        const name = spawnGit(['name-rev', '--name-only', 'MERGE_HEAD'], { cwd: repoPath })
+        const name = await execGit(['name-rev', '--name-only', 'MERGE_HEAD'], { cwd: repoPath })
         sourceBranch = name.trim().replace(/~\d+$/, '')
       } catch { /* fallback */ }
       return { type: 'merge', sourceBranch, targetBranch }
@@ -842,18 +723,18 @@ export function getMergeContext(repoPath: string): MergeContext | null {
 
 // --- Remote operations ---
 
-export function getRemoteUrl(repoPath: string): string | null {
+export async function getRemoteUrl(repoPath: string): Promise<string | null> {
   try {
-    const output = spawnGit(['remote', 'get-url', 'origin'], { cwd: repoPath })
+    const output = await execGit(['remote', 'get-url', 'origin'], { cwd: repoPath })
     return output.trim() || null
   } catch {
     return null
   }
 }
 
-export function getAheadBehindUpstream(repoPath: string, branch: string): AheadBehind | null {
+export async function getAheadBehindUpstream(repoPath: string, branch: string): Promise<AheadBehind | null> {
   try {
-    const output = spawnGit(['rev-list', '--left-right', '--count', `${branch}...${branch}@{upstream}`], { cwd: repoPath })
+    const output = await execGit(['rev-list', '--left-right', '--count', `${branch}...${branch}@{upstream}`], { cwd: repoPath })
     const [ahead, behind] = output.trim().split(/\s+/).map(Number)
     return { ahead: ahead || 0, behind: behind || 0 }
   } catch {
@@ -861,44 +742,8 @@ export function getAheadBehindUpstream(repoPath: string, branch: string): AheadB
   }
 }
 
-/** Async git execution for network operations — won't block the main process */
-function spawnGitAsync(args: string[], options: { cwd: string }): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const command = `git ${args.join(' ')}`
-    const startedAt = Date.now()
-    const child = spawn('git', args, {
-      cwd: options.cwd,
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
-    const stdout: string[] = []
-    const stderr: string[] = []
-    child.stdout.on('data', (data: Buffer) => stdout.push(data.toString()))
-    child.stderr.on('data', (data: Buffer) => stderr.push(data.toString()))
-    child.on('close', (code) => {
-      const durationMs = Date.now() - startedAt
-      if (code !== 0) {
-        const errMsg = stderr.join('').trim() || `git command failed: ${command}`
-        recordDiagnosticEvent({
-          level: 'error', source: 'git', event: 'git.command_failed',
-          message: errMsg,
-          payload: { command, cwd: options.cwd, durationMs, success: false, exitCode: code, stderr: trimOutput(stderr.join('')), stdout: trimOutput(stdout.join('')) }
-        })
-        reject(new Error(errMsg))
-      } else {
-        recordDiagnosticEvent({
-          level: 'info', source: 'git', event: 'git.command',
-          message: command,
-          payload: { command, cwd: options.cwd, durationMs, success: true }
-        })
-        resolve(stdout.join(''))
-      }
-    })
-    child.on('error', (err) => reject(err))
-  })
-}
-
 export async function gitFetch(repoPath: string): Promise<void> {
-  await spawnGitAsync(['fetch'], { cwd: repoPath })
+  await execGit(['fetch'], { cwd: repoPath })
 }
 
 export async function gitPush(repoPath: string, branch?: string, force?: boolean): Promise<GitSyncResult> {
@@ -906,7 +751,7 @@ export async function gitPush(repoPath: string, branch?: string, force?: boolean
     const args = ['push']
     if (force) args.push('--force-with-lease')
     if (branch) args.push('-u', 'origin', branch)
-    await spawnGitAsync(args, { cwd: repoPath })
+    await execGit(args, { cwd: repoPath })
     return { success: true }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) }
@@ -915,7 +760,7 @@ export async function gitPush(repoPath: string, branch?: string, force?: boolean
 
 export async function gitPull(repoPath: string): Promise<GitSyncResult> {
   try {
-    await spawnGitAsync(['pull'], { cwd: repoPath })
+    await execGit(['pull'], { cwd: repoPath })
     return { success: true }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) }

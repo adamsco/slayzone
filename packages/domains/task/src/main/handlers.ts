@@ -120,7 +120,7 @@ function cleanupTaskImmediate(taskId: string): void {
 }
 
 /** Kill PTY + processes + remove worktree — used for archive and hard purge */
-function cleanupTaskFull(db: Database, taskId: string): void {
+async function cleanupTaskFull(db: Database, taskId: string): Promise<void> {
   cleanupTaskImmediate(taskId)
   runtimeAdapters.killTaskProcesses(taskId)
 
@@ -136,7 +136,7 @@ function cleanupTaskFull(db: Database, taskId: string): void {
 
   if (project?.path) {
     try {
-      removeWorktree(project.path, task.worktree_path)
+      await removeWorktree(project.path, task.worktree_path)
     } catch (err) {
       console.error('Failed to remove worktree:', err)
       runtimeAdapters.recordDiagnosticEvent({
@@ -187,12 +187,12 @@ function isAutoCreateWorktreeEnabled(db: Database, projectId: string): boolean {
   return parseBooleanSetting(globalRow?.value)
 }
 
-function maybeAutoCreateWorktree(
+async function maybeAutoCreateWorktree(
   db: Database,
   taskId: string,
   projectId: string,
   taskTitle: string
-): void {
+): Promise<void> {
   if (!isAutoCreateWorktreeEnabled(db, projectId)) return
 
   const projectRow = db.prepare('SELECT path, worktree_source_branch FROM projects WHERE id = ?').get(projectId) as
@@ -210,7 +210,7 @@ function maybeAutoCreateWorktree(
     return
   }
 
-  if (!isGitRepo(projectRow.path)) {
+  if (!(await isGitRepo(projectRow.path))) {
     runtimeAdapters.recordDiagnosticEvent({
       level: 'info',
       source: 'task',
@@ -229,12 +229,12 @@ function maybeAutoCreateWorktree(
   const basePath = resolveWorktreeBasePathTemplate(baseTemplate, projectRow.path)
   const branch = slugify(taskTitle) || `task-${taskId.slice(0, 8)}`
   const worktreePath = path.join(basePath, branch)
-  const parentBranch = getCurrentBranch(projectRow.path)
+  const parentBranch = await getCurrentBranch(projectRow.path)
 
   const sourceBranch = projectRow.worktree_source_branch ?? undefined
 
   try {
-    createWorktree(projectRow.path, worktreePath, branch, sourceBranch)
+    await createWorktree(projectRow.path, worktreePath, branch, sourceBranch)
     // Fire-and-forget: don't block task creation on setup script
     void runWorktreeSetupScript(worktreePath, projectRow.path, sourceBranch)
     db.prepare(`
@@ -401,9 +401,11 @@ export function registerTaskHandlers(ipcMain: IpcMain, db: Database): void {
   const stale = db.prepare(
     `SELECT id FROM tasks WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-5 minutes')`
   ).all() as { id: string }[]
-  for (const { id } of stale) {
-    cleanupTaskFull(db, id)
-  }
+  void (async () => {
+    for (const { id } of stale) {
+      await cleanupTaskFull(db, id)
+    }
+  })()
   if (stale.length > 0) {
     const placeholders = stale.map(() => '?').join(',')
     db.prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...stale.map((r) => r.id))
@@ -492,7 +494,7 @@ export function registerTaskHandlers(ipcMain: IpcMain, db: Database): void {
       data.isTemporary ? 1 : 0,
       ccsDefaultProfile
     )
-    maybeAutoCreateWorktree(db, id, data.projectId, data.title)
+    void maybeAutoCreateWorktree(db, id, data.projectId, data.title)
     const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined
     const task = parseTask(row)
     if (task) {
@@ -549,11 +551,11 @@ export function registerTaskHandlers(ipcMain: IpcMain, db: Database): void {
   })
 
   // Archive operations
-  ipcMain.handle('db:tasks:archive', (_, id: string) => {
-    cleanupTaskFull(db, id)
+  ipcMain.handle('db:tasks:archive', async (_, id: string) => {
+    await cleanupTaskFull(db, id)
     // Also archive sub-tasks
     const childIds = (db.prepare('SELECT id FROM tasks WHERE parent_id = ? AND archived_at IS NULL').all(id) as { id: string }[]).map(r => r.id)
-    for (const childId of childIds) { cleanupTaskFull(db, childId) }
+    for (const childId of childIds) { await cleanupTaskFull(db, childId) }
     db.prepare(`
       UPDATE tasks SET archived_at = datetime('now'), worktree_path = NULL, updated_at = datetime('now')
       WHERE id = ? OR parent_id = ?
@@ -563,15 +565,15 @@ export function registerTaskHandlers(ipcMain: IpcMain, db: Database): void {
     return parseTask(row)
   })
 
-  ipcMain.handle('db:tasks:archiveMany', (_, ids: string[]) => {
+  ipcMain.handle('db:tasks:archiveMany', async (_, ids: string[]) => {
     if (ids.length === 0) return
     for (const id of ids) {
-      cleanupTaskFull(db, id)
+      await cleanupTaskFull(db, id)
     }
     // Also archive sub-tasks of all given parents
     const parentPlaceholders = ids.map(() => '?').join(',')
     const childIds = (db.prepare(`SELECT id FROM tasks WHERE parent_id IN (${parentPlaceholders}) AND archived_at IS NULL`).all(...ids) as { id: string }[]).map(r => r.id)
-    for (const childId of childIds) { cleanupTaskFull(db, childId) }
+    for (const childId of childIds) { await cleanupTaskFull(db, childId) }
     const allIds = [...ids, ...childIds]
     const placeholders = allIds.map(() => '?').join(',')
     db.prepare(`

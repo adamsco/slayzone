@@ -69,17 +69,17 @@ export function registerWorktreeHandlers(ipcMain: IpcMain): void {
   })
 
   ipcMain.handle('git:createWorktree', async (_, repoPath: string, targetPath: string, branch?: string, sourceBranch?: string) => {
-    createWorktree(repoPath, targetPath, branch, sourceBranch)
+    await createWorktree(repoPath, targetPath, branch, sourceBranch)
     const setupResult = await runWorktreeSetupScript(targetPath, repoPath, sourceBranch)
     return { setupResult }
   })
 
   ipcMain.handle('git:removeWorktree', (_, repoPath: string, worktreePath: string) => {
-    removeWorktree(repoPath, worktreePath)
+    return removeWorktree(repoPath, worktreePath)
   })
 
   ipcMain.handle('git:init', (_, path: string) => {
-    initRepo(path)
+    return initRepo(path)
   })
 
   ipcMain.handle('git:getCurrentBranch', (_, path: string) => {
@@ -91,11 +91,11 @@ export function registerWorktreeHandlers(ipcMain: IpcMain): void {
   })
 
   ipcMain.handle('git:checkoutBranch', (_, path: string, branch: string) => {
-    checkoutBranch(path, branch)
+    return checkoutBranch(path, branch)
   })
 
   ipcMain.handle('git:createBranch', (_, path: string, branch: string) => {
-    createBranch(path, branch)
+    return createBranch(path, branch)
   })
 
   ipcMain.handle('git:hasUncommittedChanges', (_, path: string) => {
@@ -107,18 +107,18 @@ export function registerWorktreeHandlers(ipcMain: IpcMain): void {
   })
 
   ipcMain.handle('git:abortMerge', (_, path: string) => {
-    abortMerge(path)
+    return abortMerge(path)
   })
 
   ipcMain.handle(
     'git:mergeWithAI',
-    (_, projectPath: string, worktreePath: string, parentBranch: string, sourceBranch: string): MergeWithAIResult => {
+    async (_, projectPath: string, worktreePath: string, parentBranch: string, sourceBranch: string): Promise<MergeWithAIResult> => {
       try {
         // Check for uncommitted changes in worktree
-        const hasChanges = hasUncommittedChanges(worktreePath)
+        const hasChanges = await hasUncommittedChanges(worktreePath)
 
         // Start merge
-        const result = startMergeNoCommit(projectPath, parentBranch, sourceBranch)
+        const result = await startMergeNoCommit(projectPath, parentBranch, sourceBranch)
 
         // If clean merge and no uncommitted changes, we're done
         if (result.clean && !hasChanges) {
@@ -193,23 +193,23 @@ ${steps.join('\n\n')}`
   })
 
   ipcMain.handle('git:stageFile', (_, path: string, filePath: string) => {
-    stageFile(path, filePath)
+    return stageFile(path, filePath)
   })
 
   ipcMain.handle('git:unstageFile', (_, path: string, filePath: string) => {
-    unstageFile(path, filePath)
+    return unstageFile(path, filePath)
   })
 
   ipcMain.handle('git:discardFile', (_, path: string, filePath: string, untracked?: boolean) => {
-    discardFile(path, filePath, untracked)
+    return discardFile(path, filePath, untracked)
   })
 
   ipcMain.handle('git:stageAll', (_, path: string) => {
-    stageAll(path)
+    return stageAll(path)
   })
 
   ipcMain.handle('git:unstageAll', (_, path: string) => {
-    unstageAll(path)
+    return unstageAll(path)
   })
 
   ipcMain.handle('git:getUntrackedFileDiff', (_, repoPath: string, filePath: string) => {
@@ -225,7 +225,7 @@ ${steps.join('\n\n')}`
   })
 
   ipcMain.handle('git:commitFiles', (_, repoPath: string, message: string) => {
-    commitFiles(repoPath, message)
+    return commitFiles(repoPath, message)
   })
 
   ipcMain.handle(
@@ -276,7 +276,7 @@ SUMMARY: <2-3 sentences explaining what each branch changed and why they conflic
   })
 
   ipcMain.handle('git:abortRebase', (_, path: string) => {
-    abortRebase(path)
+    return abortRebase(path)
   })
 
   ipcMain.handle('git:continueRebase', (_, path: string) => {
@@ -308,8 +308,8 @@ SUMMARY: <2-3 sentences explaining what each branch changed and why they conflic
     shell.openPath(path)
   })
 
-  ipcMain.handle('git:isDirty', (_, path: string) => {
-    const summary = getStatusSummary(path)
+  ipcMain.handle('git:isDirty', async (_, path: string) => {
+    const summary = await getStatusSummary(path)
     return (summary.staged + summary.unstaged + summary.untracked) > 0
   })
 

@@ -820,7 +820,8 @@ export async function createPty(opts: CreatePtyOptions): Promise<{ success: bool
         const data = interceptSyncQueries(session, data0)
 
         // Append to buffer for history restoration (filter problematic sequences)
-        const seq = session.buffer.append(filterBufferData(data))
+        const cleanData = filterBufferData(data)
+        const seq = session.buffer.append(cleanData)
         // Track current seq for IPC emission
         const currentSeq = seq
 
@@ -891,8 +892,7 @@ export async function createPty(opts: CreatePtyOptions): Promise<{ success: bool
 
       if (!win.isDestroyed()) {
         try {
-          // Filter problematic sequences before sending to renderer
-          const cleanData = filterBufferData(data)
+          // cleanData already filtered above (buffer append)
           win.webContents.send('pty:data', sessionId, cleanData, currentSeq)
         } catch {
           // Window destroyed between check and send, ignore

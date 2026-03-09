@@ -86,15 +86,15 @@ describe('git:detectWorktrees', () => {
 // --- git:createWorktree + git:removeWorktree ---
 
 describe('git:createWorktree', () => {
-  test('creates worktree with new branch', () => {
+  test('creates worktree with new branch', async () => {
     const wtPath = path.join(root, 'wt-1')
-    createWorktree(repoPath, wtPath, 'feature-1')
+    await createWorktree(repoPath, wtPath, 'feature-1')
     expect(fs.existsSync(wtPath)).toBe(true)
     const branch = git('git branch --show-current', wtPath)
     expect(branch).toBe('feature-1')
   })
 
-  test('creates worktree from sourceBranch', () => {
+  test('creates worktree from sourceBranch', async () => {
     git('git checkout -b release-1')
     fs.writeFileSync(path.join(repoPath, 'release.txt'), 'release content')
     git('git add release.txt')
@@ -102,7 +102,7 @@ describe('git:createWorktree', () => {
     git('git checkout main')
 
     const wtPath = path.join(root, 'wt-source')
-    createWorktree(repoPath, wtPath, 'feature-from-release', 'release-1')
+    await createWorktree(repoPath, wtPath, 'feature-from-release', 'release-1')
     expect(fs.existsSync(wtPath)).toBe(true)
     expect(fs.existsSync(path.join(wtPath, 'release.txt'))).toBe(true)
     // Clean up
@@ -113,7 +113,7 @@ describe('git:createWorktree', () => {
 // --- .slay/worktree-setup.sh ---
 
 describe('worktree setup script', () => {
-  test('runs .slay/worktree-setup.sh with env vars', () => {
+  test('runs .slay/worktree-setup.sh with env vars', async () => {
     fs.mkdirSync(path.join(repoPath, '.slay'), { recursive: true })
     fs.writeFileSync(
       path.join(repoPath, '.slay', 'worktree-setup.sh'),
@@ -124,7 +124,7 @@ describe('worktree setup script', () => {
     git('git commit -m "add setup script"')
 
     const wtPath = path.join(root, 'wt-setup')
-    createWorktree(repoPath, wtPath, 'feature-setup')
+    await createWorktree(repoPath, wtPath, 'feature-setup')
     const result = runWorktreeSetupScriptSync(wtPath, repoPath)
     expect(result.ran).toBe(true)
     expect(result.success).toBe(true)
@@ -135,14 +135,14 @@ describe('worktree setup script', () => {
     h.invoke('git:removeWorktree', repoPath, wtPath)
   })
 
-  test('returns ran=false when no setup script', () => {
+  test('returns ran=false when no setup script', async () => {
     fs.unlinkSync(path.join(repoPath, '.slay', 'worktree-setup.sh'))
     fs.rmdirSync(path.join(repoPath, '.slay'))
     git('git add -A')
     git('git commit -m "remove setup script"')
 
     const wtPath = path.join(root, 'wt-no-setup')
-    createWorktree(repoPath, wtPath, 'feature-no-setup')
+    await createWorktree(repoPath, wtPath, 'feature-no-setup')
     const result = runWorktreeSetupScriptSync(wtPath, repoPath)
     expect(result.ran).toBe(false)
     // Clean up
