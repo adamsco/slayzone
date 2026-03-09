@@ -182,9 +182,9 @@ test.describe('Git branch switching & creation', () => {
     // Branch should remain unchanged when staged changes exist.
     await expect.poll(() => git('git branch --show-current'), { timeout: 5_000 }).toBe(currentBranch)
 
-    // Clean up staged change
-    git('git checkout -- README.md')
+    // Clean up staged change (README.md is new, not tracked — can't use checkout)
     git('git reset README.md')
+    fs.unlinkSync(path.join(TEST_PROJECT_PATH, 'README.md'))
     await mainWindow.keyboard.press('Escape')
   })
 

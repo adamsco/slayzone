@@ -159,6 +159,8 @@ test.describe('Doctor from terminal menu', () => {
   })
 
   test('Doctor menu item is present for AI modes', async ({ mainWindow }) => {
+    // Wait for terminal menu button to be visible (PTY may still be initializing)
+    await expect(terminalMenuButton(mainWindow)).toBeVisible({ timeout: 10_000 })
     // Open the three-dots menu
     await openTerminalMenu(mainWindow)
 
