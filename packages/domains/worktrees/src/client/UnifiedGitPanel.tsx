@@ -292,11 +292,9 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
             <GeneralTabContent
               task={task}
               projectPath={projectPath}
-              completedStatus={completedStatus}
               visible={visible && activeTab === 'general'}
               pollIntervalMs={pollIntervalMs}
               onUpdateTask={onUpdateTask!}
-              onTaskUpdated={onTaskUpdated!}
               onSwitchTab={setActiveTab}
               onSwitchToPrView={handleSwitchToPrView}
             />

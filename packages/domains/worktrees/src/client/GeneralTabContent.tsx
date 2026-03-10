@@ -1,20 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { GitBranch, GitMerge, GitPullRequest, Plus, Trash2, ChevronDown, Check, Loader2, ArrowUp, ArrowDown, GitCommitHorizontal, AlertTriangle, Copy, Link2, ExternalLink } from 'lucide-react'
+import { GitBranch, GitPullRequest, Plus, Check, GitCommitHorizontal, AlertTriangle, Copy, Link2 } from 'lucide-react'
 import {
   Button,
-  IconButton,
-  Input,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -22,7 +9,7 @@ import {
   toast
 } from '@slayzone/ui'
 import type { Task, UpdateTaskInput } from '@slayzone/task/shared'
-import type { MergeResult, CommitInfo, AheadBehind, StatusSummary } from '../shared/types'
+import type { CommitInfo, AheadBehind, StatusSummary } from '../shared/types'
 import { RemoteSection } from './RemoteSection'
 import {
   DEFAULT_WORKTREE_BASE_PATH_TEMPLATE,
@@ -34,23 +21,19 @@ import {
 interface GeneralTabContentProps {
   task: Task
   projectPath: string | null
-  completedStatus: string
   visible: boolean
   pollIntervalMs?: number
   onUpdateTask: (data: UpdateTaskInput) => Promise<Task>
-  onTaskUpdated: (task: Task) => void
-  onSwitchTab: (tab: 'changes' | 'conflicts') => void
+  onSwitchTab: (tab: 'changes' | 'conflicts' | 'branches') => void
   onSwitchToPrView?: (view: 'create' | 'link') => void
 }
 
 export function GeneralTabContent({
   task,
   projectPath,
-  completedStatus,
   visible,
   pollIntervalMs = 5000,
   onUpdateTask,
-  onTaskUpdated,
   onSwitchTab,
   onSwitchToPrView
 }: GeneralTabContentProps) {
@@ -62,40 +45,20 @@ export function GeneralTabContent({
   const [currentBranch, setCurrentBranch] = useState<string | null>(null)
   const [worktreeBranch, setWorktreeBranch] = useState<string | null>(null)
   const [statusSummary, setStatusSummary] = useState<StatusSummary | null>(null)
-  const [aheadBehind, setAheadBehind] = useState<AheadBehind | null>(null)
   const [recentCommits, setRecentCommits] = useState<CommitInfo[]>([])
   const [copiedHash, setCopiedHash] = useState<string | null>(null)
   const copiedTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const [initializing, setInitializing] = useState(false)
 
-  // Branch popover
-  const [branchPopoverOpen, setBranchPopoverOpen] = useState(false)
-  const [branches, setBranches] = useState<string[]>([])
-  const [loadingBranches, setLoadingBranches] = useState(false)
-  const [newBranchName, setNewBranchName] = useState('')
-  const [switching, setSwitching] = useState(false)
-  const [branchError, setBranchError] = useState<string | null>(null)
 
   // Worktree
   const [creating, setCreating] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [deleteWorktreeConfirmOpen, setDeleteWorktreeConfirmOpen] = useState(false)
-  const [deleteWorktreeHasChanges, setDeleteWorktreeHasChanges] = useState(false)
-  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false)
-  const [merging, setMerging] = useState(false)
-  const [mergeResult, setMergeResult] = useState<MergeResult | null>(null)
 
   // Remote
   const [remoteUrl, setRemoteUrl] = useState<string | null>(null)
   const [upstreamAB, setUpstreamAB] = useState<AheadBehind | null>(null)
-  const [hasGithubRemote, setHasGithubRemote] = useState(false)
 
-  // Check GitHub remote
-  useEffect(() => {
-    if (!projectPath) { setHasGithubRemote(false); return }
-    window.api.git.hasGithubRemote(projectPath).then(setHasGithubRemote).catch(() => setHasGithubRemote(false))
-  }, [projectPath])
 
   // Poll for git data
   const fetchGitData = useCallback(async () => {
@@ -122,21 +85,9 @@ export function GeneralTabContent({
         setStatusSummary(status)
         setRecentCommits(commits)
         setUpstreamAB(uab)
-
-        // Ahead/behind only for worktrees with parent branch
-        if (hasWorktree && task.worktree_parent_branch && worktreeBranch) {
-          const ab = await window.api.git.getAheadBehind(
-            projectPath,
-            worktreeBranch,
-            task.worktree_parent_branch
-          )
-          setAheadBehind(ab)
-        } else {
-          setAheadBehind(null)
-        }
       }
     } catch { /* polling error */ }
-  }, [projectPath, targetPath, hasWorktree, task.worktree_parent_branch, worktreeBranch])
+  }, [projectPath, targetPath, hasWorktree, worktreeBranch])
 
   useEffect(() => {
     if (!visible || !projectPath) return
@@ -152,48 +103,6 @@ export function GeneralTabContent({
   }, [task.worktree_path])
 
   // Branch popover handlers
-  const handleBranchPopoverChange = (open: boolean) => {
-    setBranchPopoverOpen(open)
-    if (open && projectPath) {
-      setLoadingBranches(true)
-      setBranchError(null)
-      window.api.git.listBranches(projectPath).then(setBranches).catch(() => setBranches([])).finally(() => setLoadingBranches(false))
-    }
-    if (!open) { setNewBranchName(''); setBranchError(null) }
-  }
-
-  const handleCheckoutBranch = async (branch: string) => {
-    if (!projectPath || branch === currentBranch) return
-    setSwitching(true)
-    setBranchError(null)
-    try {
-      const hasChanges = await window.api.git.hasUncommittedChanges(projectPath)
-      if (hasChanges) { setBranchError('Uncommitted changes — commit or stash first'); return }
-      await window.api.git.checkoutBranch(projectPath, branch)
-      setCurrentBranch(branch)
-      setBranchPopoverOpen(false)
-    } catch (err) {
-      setBranchError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSwitching(false)
-    }
-  }
-
-  const handleCreateBranch = async () => {
-    if (!projectPath || !newBranchName.trim()) return
-    setSwitching(true)
-    setBranchError(null)
-    try {
-      await window.api.git.createBranch(projectPath, newBranchName.trim())
-      setCurrentBranch(newBranchName.trim())
-      setNewBranchName('')
-      setBranchPopoverOpen(false)
-    } catch (err) {
-      setBranchError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSwitching(false)
-    }
-  }
 
   const handleInitGit = async () => {
     if (!projectPath) return
@@ -226,28 +135,6 @@ export function GeneralTabContent({
     }
   }
 
-  const handleDeleteWorktreeClick = async () => {
-    if (!task.worktree_path || !projectPath) return
-    try {
-      const hasChanges = await window.api.git.hasUncommittedChanges(task.worktree_path)
-      setDeleteWorktreeHasChanges(hasChanges)
-    } catch {
-      setDeleteWorktreeHasChanges(false)
-    }
-    setDeleteWorktreeConfirmOpen(true)
-  }
-
-  const handleDeleteWorktreeConfirm = async () => {
-    if (!task.worktree_path || !projectPath) return
-    setDeleteWorktreeConfirmOpen(false)
-    setDeleting(true)
-    try {
-      await window.api.git.removeWorktree(projectPath, task.worktree_path)
-      await onUpdateTask({ id: task.id, worktreePath: null })
-    } catch (err) {
-      toast(err instanceof Error ? err.message : 'Failed to remove worktree')
-    } finally { setDeleting(false) }
-  }
 
   const handleCopyHash = useCallback((hash: string) => {
     navigator.clipboard.writeText(hash)
@@ -257,47 +144,6 @@ export function GeneralTabContent({
     toast('Commit hash copied to clipboard')
   }, [])
 
-  const handleMergeConfirm = async () => {
-    if (!task.worktree_path || !task.worktree_parent_branch || !projectPath) return
-    setMergeConfirmOpen(false)
-    setMerging(true)
-    setMergeResult(null)
-    try {
-      const sourceBranch = await window.api.git.getCurrentBranch(task.worktree_path)
-      if (!sourceBranch) {
-        setMergeResult({ success: false, merged: false, conflicted: false, error: 'Cannot merge: detached HEAD' })
-        return
-      }
-      const hasChanges = await window.api.git.hasUncommittedChanges(task.worktree_path)
-      if (hasChanges) {
-        const ctx = { type: 'merge' as const, sourceBranch, targetBranch: task.worktree_parent_branch }
-        const updated = await onUpdateTask({ id: task.id, mergeState: 'uncommitted', mergeContext: ctx })
-        onTaskUpdated(updated)
-        return
-      }
-      const result = await window.api.git.mergeWithAI(projectPath, task.worktree_path, task.worktree_parent_branch, sourceBranch)
-      if (result.success) {
-        const updated = await onUpdateTask({ id: task.id, status: completedStatus })
-        onTaskUpdated(updated)
-        await window.api.pty.kill(task.id)
-        setMergeResult({ success: true, merged: true, conflicted: false })
-      } else if (result.resolving) {
-        const ctx = await window.api.git.getMergeContext(projectPath)
-        const updated = await onUpdateTask({
-          id: task.id,
-          mergeState: 'conflicts',
-          mergeContext: ctx ?? { type: 'merge', sourceBranch, targetBranch: task.worktree_parent_branch }
-        })
-        onTaskUpdated(updated)
-      } else if (result.error) {
-        setMergeResult({ success: false, merged: false, conflicted: false, error: result.error })
-      }
-    } catch (err) {
-      setMergeResult({ success: false, merged: false, conflicted: false, error: err instanceof Error ? err.message : String(err) })
-    } finally {
-      setMerging(false)
-    }
-  }
 
   // Early returns
   if (!projectPath) {
@@ -319,7 +165,6 @@ export function GeneralTabContent({
     )
   }
 
-  const worktreeName = task.worktree_path?.split('/').pop() || 'Worktree'
   const totalChanges = statusSummary ? statusSummary.staged + statusSummary.unstaged + statusSummary.untracked : 0
 
   return (
@@ -340,56 +185,45 @@ export function GeneralTabContent({
           </button>
         )}
 
+
         {/* Branch */}
-        <Section label="Branch">
-          {hasWorktree ? (
-            <div className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg border bg-muted/30">
-              <GitBranch className="h-4 w-4 text-muted-foreground shrink-0" />
-              <span className="truncate">{worktreeBranch || currentBranch || 'detached HEAD'}</span>
-            </div>
-          ) : (
-            <Popover open={branchPopoverOpen} onOpenChange={handleBranchPopoverChange}>
-              <PopoverTrigger asChild>
-                <button data-testid="branch-trigger" className="flex items-center gap-2 text-sm hover:bg-muted/50 rounded-lg px-3 py-2 transition-colors w-full text-left border bg-muted/30">
-                  <GitBranch className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <span className="truncate flex-1">{currentBranch || 'detached HEAD'}</span>
-                  <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="w-64 p-0">
-                <form onSubmit={(e) => { e.preventDefault(); handleCreateBranch() }} className="flex gap-1 p-2 border-b">
-                  <Input
-                    value={newBranchName}
-                    onChange={(e) => setNewBranchName(e.target.value)}
-                    placeholder="New branch..."
-                    className="h-7 text-xs"
-                    disabled={switching}
-                  />
-                  <IconButton type="submit" aria-label="Create branch" variant="ghost" className="h-7 w-7 shrink-0" disabled={!newBranchName.trim() || switching}>
-                    <Plus className="h-3.5 w-3.5" />
-                  </IconButton>
-                </form>
-                {branchError && <div className="px-2 py-1.5 text-xs text-destructive border-b">{branchError}</div>}
-                <div className="max-h-48 overflow-y-auto py-1">
-                  {loadingBranches ? (
-                    <div className="flex items-center justify-center py-3"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
-                  ) : branches.length === 0 ? (
-                    <p className="text-xs text-muted-foreground px-2 py-2">No branches</p>
-                  ) : branches.map((branch) => (
-                    <button
-                      key={branch}
-                      onClick={() => handleCheckoutBranch(branch)}
-                      disabled={switching}
-                      className="flex items-center gap-2 w-full px-2 py-1.5 text-xs hover:bg-muted transition-colors text-left"
-                    >
-                      {branch === currentBranch ? <Check className="h-3 w-3 text-primary shrink-0" /> : <span className="w-3 shrink-0" />}
-                      <span className="truncate">{branch}</span>
-                    </button>
-                  ))}
-                </div>
-              </PopoverContent>
-            </Popover>
-          )}
+        <Section label={<>Branch <span className="text-[10px] font-mono font-normal text-muted-foreground/70 ml-1.5 normal-case px-1.5 py-0.5 rounded-full bg-muted border">{(hasWorktree ? worktreeBranch : currentBranch) || 'detached HEAD'}</span></>}>
+          <div className="flex gap-2">
+            {onSwitchToPrView && (
+              <>
+                <Button variant="outline" size="sm" onClick={() => onSwitchToPrView('create')} className="gap-2 flex-1 justify-center min-w-0">
+                  <GitPullRequest className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">Create PR</span>
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => onSwitchToPrView('link')} className="gap-2 flex-1 justify-center min-w-0">
+                  <Link2 className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">Link PR</span>
+                </Button>
+              </>
+            )}
+            {hasWorktree ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onSwitchTab('branches')}
+                className="gap-2 flex-1 justify-center min-w-0"
+              >
+                <GitBranch className="h-4 w-4 shrink-0" />
+                <span className="truncate">View worktree</span>
+              </Button>
+            ) : (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={handleAddWorktree} disabled={creating} className="gap-2 flex-1 justify-center min-w-0">
+                    <Plus className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{creating ? 'Creating...' : 'Branch to worktree'}</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Create branch "{slugify(task.title) || `task-${task.id.slice(0, 8)}`}"
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+          {error && <p className="text-xs text-destructive mt-1">{error}</p>}
         </Section>
 
         {/* Status */}
@@ -453,137 +287,6 @@ export function GeneralTabContent({
           </div>
         </Section>
 
-        {/* Actions */}
-        <Section label="Actions">
-          {hasWorktree ? (
-            <div className="p-3 rounded-lg border bg-muted/30 space-y-3">
-              <div className="flex items-center gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm truncate">{worktreeName}</div>
-                  {task.worktree_parent_branch && (
-                    <div className="text-xs text-muted-foreground">from {task.worktree_parent_branch}</div>
-                  )}
-                </div>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <IconButton
-                      aria-label="Delete worktree"
-                      variant="ghost"
-                      onClick={handleDeleteWorktreeClick}
-                      disabled={deleting}
-                      className="shrink-0 h-8 w-8 text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </IconButton>
-                  </TooltipTrigger>
-                  <TooltipContent>Remove worktree</TooltipContent>
-                </Tooltip>
-              </div>
-
-              {/* Ahead/behind */}
-              {aheadBehind && (aheadBehind.ahead > 0 || aheadBehind.behind > 0) && (
-                <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                  {aheadBehind.ahead > 0 && (
-                    <span className="flex items-center gap-1">
-                      <ArrowUp className="h-3 w-3" /> {aheadBehind.ahead} ahead
-                    </span>
-                  )}
-                  {aheadBehind.behind > 0 && (
-                    <span className="flex items-center gap-1">
-                      <ArrowDown className="h-3 w-3" /> {aheadBehind.behind} behind
-                    </span>
-                  )}
-                </div>
-              )}
-
-              {/* Merge button */}
-              {task.worktree_parent_branch && !task.merge_state && (
-                <>
-                  {mergeResult?.success ? (
-                    <p className="text-xs text-green-500">Merged successfully</p>
-                  ) : (
-                    <>
-                      {mergeResult?.error && <p className="text-xs text-destructive">{mergeResult.error}</p>}
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => { setMergeResult(null); setMergeConfirmOpen(true) }}
-                        disabled={merging}
-                        className="gap-2 w-full justify-start"
-                      >
-                        <GitMerge className="h-4 w-4" />
-                        {merging ? 'Merging...' : `Merge into ${task.worktree_parent_branch}`}
-                      </Button>
-                    </>
-                  )}
-                </>
-              )}
-
-              {/* PR actions */}
-              {hasGithubRemote && onSwitchToPrView && !task.pr_url && (
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => onSwitchToPrView('create')} className="gap-2 flex-1 justify-center min-w-0">
-                    <GitPullRequest className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">Create new PR</span>
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => onSwitchToPrView('link')} className="gap-2 flex-1 justify-center min-w-0">
-                    <Link2 className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">Link to existing PR</span>
-                  </Button>
-                </div>
-              )}
-              {hasGithubRemote && task.pr_url && (
-                <button
-                  onClick={() => onSwitchToPrView?.('create')}
-                  className="flex items-center gap-2 w-full text-left px-3 py-2 rounded-md bg-muted/50 hover:bg-muted transition-colors"
-                >
-                  <GitPullRequest className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="text-xs truncate flex-1">
-                    #{task.pr_url.match(/\/pull\/(\d+)/)?.[1]} — {task.pr_url.replace(/^https?:\/\/github\.com\//, '')}
-                  </span>
-                  <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0" />
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              {hasGithubRemote && onSwitchToPrView && !task.pr_url && (
-                <>
-                  <Button variant="outline" size="sm" onClick={() => onSwitchToPrView('create')} className="gap-2 flex-1 justify-center min-w-0">
-                    <GitPullRequest className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">Create new PR</span>
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={() => onSwitchToPrView('link')} className="gap-2 flex-1 justify-center min-w-0">
-                    <Link2 className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">Link to existing PR</span>
-                  </Button>
-                </>
-              )}
-              {hasGithubRemote && task.pr_url && (
-                <button
-                  onClick={() => onSwitchToPrView?.('create')}
-                  className="flex items-center gap-2 flex-1 text-left px-3 py-1.5 rounded-md border bg-muted/30 hover:bg-muted/50 transition-colors"
-                >
-                  <GitPullRequest className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="text-xs truncate flex-1">
-                    PR #{task.pr_url.match(/\/pull\/(\d+)/)?.[1]}
-                  </span>
-                  <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0" />
-                </button>
-              )}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="sm" onClick={handleAddWorktree} disabled={creating} className="gap-2 flex-1 justify-center min-w-0">
-                    <Plus className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{creating ? 'Creating...' : 'Branch to worktree'}</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Create branch "{slugify(task.title) || `task-${task.id.slice(0, 8)}`}"
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          )}
-          {error && <p className="text-xs text-destructive mt-1">{error}</p>}
-        </Section>
-
-
       </div>
 
       {/* Recent commits */}
@@ -616,47 +319,11 @@ export function GeneralTabContent({
         </div>
       )}
 
-      {/* Delete worktree confirmation dialog */}
-      <AlertDialog open={deleteWorktreeConfirmOpen} onOpenChange={setDeleteWorktreeConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove Worktree</AlertDialogTitle>
-            <AlertDialogDescription>
-              {deleteWorktreeHasChanges
-                ? `This worktree has uncommitted changes (${totalChanges} file${totalChanges !== 1 ? 's' : ''}) that will be permanently lost.`
-                : 'This will remove the worktree directory from disk.'}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteWorktreeConfirm}>
-              {deleteWorktreeHasChanges ? 'Remove Anyway' : 'Remove'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Merge confirmation dialog */}
-      <AlertDialog open={mergeConfirmOpen} onOpenChange={setMergeConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Merge Worktree</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will merge {worktreeBranch || 'the worktree branch'} into {task.worktree_parent_branch}.
-              If there are conflicts, you'll review and resolve them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleMergeConfirm}>Start Merge</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   )
 }
 
-function Section({ label, right, children }: { label: string; right?: React.ReactNode; children: React.ReactNode }) {
+function Section({ label, right, children }: { label: React.ReactNode; right?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
       <div className="flex items-baseline gap-2 mb-2">
