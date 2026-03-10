@@ -392,6 +392,67 @@ export function GeneralTabContent({
           )}
         </Section>
 
+        {/* Status */}
+        <Section
+          label="Status"
+          right={remoteUrl && (
+            <button
+              onClick={() => { navigator.clipboard.writeText(remoteUrl); toast('Remote URL copied') }}
+              className="flex items-center gap-1 group"
+              title="Click to copy"
+            >
+              <span className="text-[10px] font-mono text-muted-foreground truncate max-w-[200px]">
+                {remoteUrl.replace(/^https?:\/\//, '').replace(/\.git$/, '')}
+              </span>
+              <Copy className="h-2.5 w-2.5 text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+          )}
+        >
+          <div className="flex items-center gap-2 flex-wrap px-3 py-2.5 rounded-lg border bg-muted/30">
+            {statusSummary && totalChanges > 0 ? (
+              <>
+                {statusSummary.staged > 0 && (
+                  <StatusChip
+                    label={`${statusSummary.staged} staged`}
+                    className="text-green-400 bg-green-500/10"
+                    onClick={() => onSwitchTab('changes')}
+                  />
+                )}
+                {statusSummary.unstaged > 0 && (
+                  <StatusChip
+                    label={`${statusSummary.unstaged} modified`}
+                    className="text-yellow-400 bg-yellow-500/10"
+                    onClick={() => onSwitchTab('changes')}
+                  />
+                )}
+                {statusSummary.untracked > 0 && (
+                  <StatusChip
+                    label={`${statusSummary.untracked} untracked`}
+                    className="text-muted-foreground bg-muted"
+                    onClick={() => onSwitchTab('changes')}
+                  />
+                )}
+              </>
+            ) : (
+              <span className="text-xs text-muted-foreground">No changes</span>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => onSwitchTab('changes')} className="h-7 px-2 text-xs text-muted-foreground">
+              View diff
+            </Button>
+            {remoteUrl && (
+              <div className="ml-auto">
+                <RemoteSection
+                  remoteUrl={remoteUrl}
+                  upstreamAB={upstreamAB}
+                  targetPath={targetPath!}
+                  branch={hasWorktree ? worktreeBranch : currentBranch}
+                  onSyncDone={fetchGitData}
+                />
+              </div>
+            )}
+          </div>
+        </Section>
+
         {/* Actions */}
         <Section label="Actions">
           {hasWorktree ? (
@@ -520,67 +581,6 @@ export function GeneralTabContent({
             </div>
           )}
           {error && <p className="text-xs text-destructive mt-1">{error}</p>}
-        </Section>
-
-        {/* Changes + remote sync */}
-        <Section
-          label="Status"
-          right={remoteUrl && (
-            <button
-              onClick={() => { navigator.clipboard.writeText(remoteUrl); toast('Remote URL copied') }}
-              className="flex items-center gap-1 group"
-              title="Click to copy"
-            >
-              <span className="text-[10px] font-mono text-muted-foreground truncate max-w-[200px]">
-                {remoteUrl.replace(/^https?:\/\//, '').replace(/\.git$/, '')}
-              </span>
-              <Copy className="h-2.5 w-2.5 text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-            </button>
-          )}
-        >
-          <div className="flex items-center gap-2 flex-wrap px-3 py-2.5 rounded-lg border bg-muted/30">
-            {statusSummary && totalChanges > 0 ? (
-              <>
-                {statusSummary.staged > 0 && (
-                  <StatusChip
-                    label={`${statusSummary.staged} staged`}
-                    className="text-green-400 bg-green-500/10"
-                    onClick={() => onSwitchTab('changes')}
-                  />
-                )}
-                {statusSummary.unstaged > 0 && (
-                  <StatusChip
-                    label={`${statusSummary.unstaged} modified`}
-                    className="text-yellow-400 bg-yellow-500/10"
-                    onClick={() => onSwitchTab('changes')}
-                  />
-                )}
-                {statusSummary.untracked > 0 && (
-                  <StatusChip
-                    label={`${statusSummary.untracked} untracked`}
-                    className="text-muted-foreground bg-muted"
-                    onClick={() => onSwitchTab('changes')}
-                  />
-                )}
-              </>
-            ) : (
-              <span className="text-xs text-muted-foreground">No changes</span>
-            )}
-            <Button variant="ghost" size="sm" onClick={() => onSwitchTab('changes')} className="h-7 px-2 text-xs text-muted-foreground">
-              View diff
-            </Button>
-            {remoteUrl && (
-              <div className="ml-auto">
-                <RemoteSection
-                  remoteUrl={remoteUrl}
-                  upstreamAB={upstreamAB}
-                  targetPath={targetPath!}
-                  branch={hasWorktree ? worktreeBranch : currentBranch}
-                  onSyncDone={fetchGitData}
-                />
-              </div>
-            )}
-          </div>
         </Section>
 
 
