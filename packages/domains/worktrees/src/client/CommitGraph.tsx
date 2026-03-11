@@ -1,4 +1,4 @@
-import { cn } from '@slayzone/ui'
+import { cn, Tooltip, TooltipTrigger, TooltipContent } from '@slayzone/ui'
 import { Copy, Check } from 'lucide-react'
 import { useState, useRef, useCallback, useMemo } from 'react'
 import type { CommitInfo, DagCommit } from '../shared/types'
@@ -26,40 +26,25 @@ export function buildForkGraphNodes(opts: {
   column1Label: string
   forkPoint: string
   preForkCommits: CommitInfo[]
-  column1EmptyMessage?: string
 }): { nodes: GraphNode[]; columns: number } {
   const nodes: GraphNode[] = []
   const fp = opts.forkPoint
 
   // Column 0
-  if (opts.column0Commits.length > 0) {
-    for (let i = 0; i < opts.column0Commits.length; i++) {
-      nodes.push({
-        commit: opts.column0Commits[i], column: 0,
-        type: i === 0 ? 'branch-tip' : 'commit',
-        branchName: opts.column0Label, branchLabel: i === 0 ? opts.column0Label : undefined
-      })
-    }
-  } else {
+  for (let i = 0; i < opts.column0Commits.length; i++) {
     nodes.push({
-      commit: { hash: fp, shortHash: fp.slice(0, 7), message: 'Up to date', author: '', relativeDate: '' },
-      column: 0, type: 'branch-tip', branchName: opts.column0Label, branchLabel: opts.column0Label
+      commit: opts.column0Commits[i], column: 0,
+      type: i === 0 ? 'branch-tip' : 'commit',
+      branchName: opts.column0Label, branchLabel: i === 0 ? opts.column0Label : undefined
     })
   }
 
   // Column 1
-  if (opts.column1Commits.length > 0) {
-    for (let i = 0; i < opts.column1Commits.length; i++) {
-      nodes.push({
-        commit: opts.column1Commits[i], column: 1,
-        type: i === 0 ? 'branch-tip' : 'commit',
-        branchName: opts.column1Label, branchLabel: i === 0 ? opts.column1Label : undefined
-      })
-    }
-  } else {
+  for (let i = 0; i < opts.column1Commits.length; i++) {
     nodes.push({
-      commit: { hash: fp, shortHash: fp.slice(0, 7), message: opts.column1EmptyMessage ?? 'Up to date', author: '', relativeDate: '' },
-      column: 1, type: 'branch-tip', branchName: opts.column1Label, branchLabel: opts.column1Label
+      commit: opts.column1Commits[i], column: 1,
+      type: i === 0 ? 'branch-tip' : 'commit',
+      branchName: opts.column1Label, branchLabel: i === 0 ? opts.column1Label : undefined
     })
   }
 
@@ -72,12 +57,12 @@ export function buildForkGraphNodes(opts: {
     nodes.push({ commit: c, column: 0, type: 'commit' })
   }
 
-  return { nodes, columns: 2 }
+  return { nodes, columns: opts.column1Commits.length > 0 ? 2 : 1 }
 }
 
 // --- Constants ---
 
-const ROW_HEIGHT = 32
+const ROW_HEIGHT = 44
 const COLUMN_WIDTH = 24
 const DOT_RADIUS = 4
 const MERGE_DOT_OUTER = 6
@@ -581,18 +566,17 @@ function SvgDot({ cx, cy, color, type, dimmed }: { cx: number; cy: number; color
 // --- Row renderers ---
 
 function CommitRow({
-  shortHash, message, author, relativeDate, refs, color, gutterWidth, copiedHash, onCopy, dimmed
+  shortHash, message, author, relativeDate, refs, color, gutterWidth, copiedHash, onCopy, dimmed, branchName
 }: {
   shortHash: string; message: string; author: string; relativeDate: string
   refs?: string[]; color: string; gutterWidth: number
-  copiedHash: string | null; onCopy: (hash: string) => void; dimmed?: boolean
+  copiedHash: string | null; onCopy: (hash: string) => void; dimmed?: boolean; branchName?: string
 }) {
-  return (
+  const row = (
     <div
       className={cn('flex items-center group hover:bg-accent/50 rounded transition-colors cursor-pointer', dimmed && 'opacity-20')}
       style={{ height: ROW_HEIGHT, paddingLeft: gutterWidth }}
       onClick={() => onCopy(shortHash)}
-      title="Click to copy hash"
     >
       <div className="flex-1 min-w-0 flex items-center gap-2 pr-3">
         <div className="flex-1 min-w-0">
@@ -613,6 +597,15 @@ function CommitRow({
         }
       </div>
     </div>
+  )
+
+  if (!branchName) return row
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{row}</TooltipTrigger>
+      <TooltipContent side="top">{branchName}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -669,6 +662,17 @@ function DagGraph({ commits, filterQuery, tipsOnly, className, copiedHash, onCop
     [commits, fullLayout, tipsOnly]
   )
 
+  // Map column → branch name from the first ref-bearing node in that column
+  const columnBranch = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const node of fullLayout.nodes) {
+      if (node.commit.refs.length > 0 && !map.has(node.column)) {
+        map.set(node.column, node.commit.refs.join(', '))
+      }
+    }
+    return map
+  }, [fullLayout])
+
   // Filter dimming — must be before any early return (hooks rule)
   const matchSet = useMemo(() => {
     if (!filterQuery) return null
@@ -715,7 +719,8 @@ function DagGraph({ commits, filterQuery, tipsOnly, className, copiedHash, onCop
             author={node.commit.author} relativeDate={node.commit.relativeDate}
             refs={node.commit.refs.length > 0 ? node.commit.refs : undefined}
             color={getColor(node.column)} gutterWidth={gutterWidth}
-            copiedHash={copiedHash} onCopy={onCopy} dimmed={dimmed} />
+            copiedHash={copiedHash} onCopy={onCopy} dimmed={dimmed}
+            branchName={columnBranch.get(node.column)} />
         )
       })}
     </div>
@@ -785,7 +790,8 @@ function TipsGraph({ nodes, maxColumns, className, copiedHash, onCopy }: {
           author={node.commit.author} relativeDate={node.commit.relativeDate}
           refs={node.branchLabel ? [node.branchLabel] : undefined}
           color={getColor(node.column)} gutterWidth={gutterWidth}
-          copiedHash={copiedHash} onCopy={onCopy} />
+          copiedHash={copiedHash} onCopy={onCopy}
+          branchName={node.branchName} />
       ))}
     </div>
   )

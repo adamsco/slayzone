@@ -460,13 +460,10 @@ export function useConsolidatedGeneralData(
   let graphColumns = 1
 
   if (hasWorktree && parentBranch && forkPoint) {
-    const column1EmptyMessage = diffStats && diffStats.filesChanged > 0
-      ? `${diffStats.filesChanged} file${diffStats.filesChanged !== 1 ? 's' : ''} changed (uncommitted)`
-      : 'No changes yet'
     const result = buildForkGraphNodes({
       column0Commits: incomingCommits, column0Label: parentBranch,
       column1Commits: branchCommits, column1Label: taskBranch ?? 'HEAD',
-      forkPoint, preForkCommits, column1EmptyMessage
+      forkPoint, preForkCommits
     })
     graphNodes = result.nodes
     graphColumns = result.columns
