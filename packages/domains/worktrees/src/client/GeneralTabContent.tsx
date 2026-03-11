@@ -6,6 +6,7 @@
  * Bottom (worktree): fork graph
  * Bottom (no worktree): recent commits
  */
+import { useState, useCallback } from 'react'
 import { Loader2, GitBranch, FolderOpen, ArrowLeft, Cloud, CloudOff } from 'lucide-react'
 import { Button, toast } from '@slayzone/ui'
 import type { Task, UpdateTaskInput } from '@slayzone/task/shared'
@@ -13,6 +14,7 @@ import { useConsolidatedGeneralData } from './useConsolidatedGeneralData'
 import { CommitGraph } from './CommitGraph'
 import { RemoteSection } from './RemoteSection'
 import { CopyFilesDialog } from './CopyFilesDialog'
+import { CreatePrDialog, LinkPrDialog } from './PullRequestTab'
 import {
   NoProjectFallback,
   CheckingFallback,
@@ -33,16 +35,37 @@ interface GeneralTabContentProps {
   projectPath: string | null
   visible: boolean
   pollIntervalMs?: number
+  hasGithubRemote?: boolean
   onUpdateTask: (data: UpdateTaskInput) => Promise<Task>
-  onSwitchTab: (tab: 'changes' | 'conflicts' | 'branches') => void
-  onSwitchToPrView?: (view: 'create' | 'link' | null) => void
+  onTaskUpdated: (task: Task) => void
+  onSwitchTab: (tab: 'changes' | 'conflicts' | 'branches' | 'pr') => void
 }
 
 export function GeneralTabContent({
   task, projectPath, visible, pollIntervalMs = 5000,
-  onUpdateTask, onSwitchTab, onSwitchToPrView
+  hasGithubRemote, onUpdateTask, onTaskUpdated, onSwitchTab
 }: GeneralTabContentProps) {
   const data = useConsolidatedGeneralData(task, projectPath, visible, pollIntervalMs, onUpdateTask)
+  const [createPrOpen, setCreatePrOpen] = useState(false)
+  const [linkPrOpen, setLinkPrOpen] = useState(false)
+  const [linkError, setLinkError] = useState<string | null>(null)
+
+  const handlePrCreated = useCallback(async (url: string) => {
+    const updated = await onUpdateTask({ id: task.id, prUrl: url })
+    onTaskUpdated?.(updated)
+    setCreatePrOpen(false)
+  }, [task.id, onUpdateTask, onTaskUpdated])
+
+  const handlePrLinked = useCallback(async (url: string) => {
+    setLinkError(null)
+    try {
+      const updated = await onUpdateTask({ id: task.id, prUrl: url })
+      onTaskUpdated?.(updated)
+      setLinkPrOpen(false)
+    } catch (err) {
+      setLinkError(err instanceof Error ? err.message : String(err))
+    }
+  }, [task.id, onUpdateTask, onTaskUpdated])
 
   if (!projectPath) return <NoProjectFallback />
   if (data.isGitRepo === null) return <CheckingFallback />
@@ -84,11 +107,11 @@ export function GeneralTabContent({
             </span>
           ) : null}
           <div className="ml-auto flex items-center gap-2">
-            {onSwitchToPrView && (
+            {hasGithubRemote && (
               data.pr ? (
-                <PrStatusChip pr={data.pr} onClick={() => onSwitchToPrView(null)} />
+                <PrStatusChip pr={data.pr} onClick={() => onSwitchTab('pr')} />
               ) : (
-                <PrButtons onSwitchToPrView={onSwitchToPrView} />
+                <PrButtons onCreatePr={() => setCreatePrOpen(true)} onLinkPr={() => setLinkPrOpen(true)} />
               )
             )}
             {data.hasWorktree ? (
@@ -199,6 +222,25 @@ export function GeneralTabContent({
         projectId={task.project_id}
         onConfirm={data.handleCopyFilesConfirm}
       />
+
+      {projectPath && (
+        <>
+          <CreatePrDialog
+            open={createPrOpen}
+            onOpenChange={setCreatePrOpen}
+            task={task}
+            projectPath={projectPath}
+            onCreated={handlePrCreated}
+          />
+          <LinkPrDialog
+            open={linkPrOpen}
+            onOpenChange={setLinkPrOpen}
+            projectPath={projectPath}
+            onLink={handlePrLinked}
+            error={linkError}
+          />
+        </>
+      )}
     </div>
   )
 }

@@ -187,13 +187,13 @@ export function PrStatusChip({ pr, onClick }: { pr: GhPullRequest; onClick: () =
 
 // --- PR buttons ---
 
-export function PrButtons({ onSwitchToPrView }: { onSwitchToPrView: (view: 'create' | 'link' | null) => void }) {
+export function PrButtons({ onCreatePr, onLinkPr }: { onCreatePr: () => void; onLinkPr: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false)
   return (
     <div className="flex">
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button variant="outline" size="sm" onClick={() => onSwitchToPrView('create')} className="gap-2 rounded-r-none border-r-0">
+          <Button variant="outline" size="sm" onClick={onCreatePr} className="gap-2 rounded-r-none border-r-0">
             <GitPullRequest className="h-3.5 w-3.5 shrink-0" /> Create PR
           </Button>
         </TooltipTrigger>
@@ -207,7 +207,7 @@ export function PrButtons({ onSwitchToPrView }: { onSwitchToPrView: (view: 'crea
         </PopoverTrigger>
         <PopoverContent align="end" className="w-44 p-1">
           <button
-            onClick={() => { setMenuOpen(false); onSwitchToPrView('link') }}
+            onClick={() => { setMenuOpen(false); onLinkPr() }}
             className="flex items-center gap-2 w-full px-2 py-1.5 text-xs hover:bg-muted rounded transition-colors text-left"
           >
             <Link2 className="h-3 w-3 shrink-0 text-muted-foreground" />

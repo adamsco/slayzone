@@ -47,6 +47,11 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
 } from '@slayzone/ui'
 import type { Task, UpdateTaskInput } from '@slayzone/task/shared'
 import type { GhPullRequest, GhPrComment, GhPrCommit, GhPrTimelineEvent, MergeStrategy } from '../shared/types'
@@ -59,27 +64,16 @@ interface PullRequestTabProps {
   task: Task
   projectPath: string | null
   visible: boolean
-  initialView?: 'create' | 'link' | null
-  onInitialViewConsumed?: () => void
   onUpdateTask: (data: UpdateTaskInput) => Promise<Task>
   onTaskUpdated: (task: Task) => void
 }
 
-type View = 'idle' | 'create' | 'link'
-
-export function PullRequestTab({ task, projectPath, visible, initialView, onInitialViewConsumed, onUpdateTask, onTaskUpdated }: PullRequestTabProps) {
+export function PullRequestTab({ task, projectPath, visible, onUpdateTask, onTaskUpdated }: PullRequestTabProps) {
   const [ghInstalled, setGhInstalled] = useState<boolean | null>(null)
   const [pr, setPr] = useState<GhPullRequest | null>(null)
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState<View>('idle')
-
-  // Apply initial view from parent (e.g. general tab → create PR)
-  useEffect(() => {
-    if (initialView && !task.pr_url) {
-      setView(initialView)
-      onInitialViewConsumed?.()
-    }
-  }, [initialView])
+  const [createOpen, setCreateOpen] = useState(false)
+  const [linkOpen, setLinkOpen] = useState(false)
 
   const [error, setError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval>>(undefined)
@@ -121,7 +115,6 @@ export function PullRequestTab({ task, projectPath, visible, initialView, onInit
     const updated = await onUpdateTask({ id: task.id, prUrl: null })
     onTaskUpdated(updated)
     setPr(null)
-    setView('idle')
   }, [task.id, onUpdateTask, onTaskUpdated])
 
   const handleLinkPr = useCallback(async (url: string) => {
@@ -133,7 +126,7 @@ export function PullRequestTab({ task, projectPath, visible, initialView, onInit
         const data = await window.api.git.getPrByUrl(projectPath, url)
         setPr(data)
       }
-      setView('idle')
+      setLinkOpen(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -146,7 +139,7 @@ export function PullRequestTab({ task, projectPath, visible, initialView, onInit
       const data = await window.api.git.getPrByUrl(projectPath, url)
       setPr(data)
     }
-    setView('idle')
+    setCreateOpen(false)
   }, [task.id, projectPath, onUpdateTask, onTaskUpdated])
 
   if (!projectPath) {
@@ -203,42 +196,34 @@ export function PullRequestTab({ task, projectPath, visible, initialView, onInit
   }
 
   // No PR linked
-  if (view === 'create') {
-    return (
-      <CreatePrForm
-        task={task}
-        projectPath={projectPath}
-        onCreated={handleCreated}
-        onCancel={() => setView('idle')}
-      />
-    )
-  }
-
-  if (view === 'link') {
-    return (
-      <LinkPrView
-        projectPath={projectPath}
-        onLink={handleLinkPr}
-        onCancel={() => setView('idle')}
-        error={error}
-      />
-    )
-  }
-
   return (
     <div className="h-full flex items-center justify-center">
       <div className="space-y-3 text-center">
         <GitPullRequest className="h-8 w-8 text-muted-foreground mx-auto" />
         <p className="text-sm text-muted-foreground">No pull request linked</p>
         <div className="flex gap-2 justify-center">
-          <Button variant="outline" size="sm" onClick={() => setView('create')} className="gap-2">
+          <Button variant="outline" size="sm" onClick={() => setCreateOpen(true)} className="gap-2">
             <Plus className="h-3.5 w-3.5" /> Create PR
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setView('link')} className="gap-2">
+          <Button variant="outline" size="sm" onClick={() => setLinkOpen(true)} className="gap-2">
             <Link2 className="h-3.5 w-3.5" /> Link Existing
           </Button>
         </div>
       </div>
+      <CreatePrDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        task={task}
+        projectPath={projectPath}
+        onCreated={handleCreated}
+      />
+      <LinkPrDialog
+        open={linkOpen}
+        onOpenChange={setLinkOpen}
+        projectPath={projectPath}
+        onLink={handleLinkPr}
+        error={error}
+      />
     </div>
   )
 }
@@ -1191,37 +1176,28 @@ function formatRelativeTime(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString()
 }
 
-// --- Create PR form ---
+// --- Create PR dialog ---
 
-function CreatePrForm({ task, projectPath, onCreated, onCancel }: {
+export function CreatePrDialog({ open, onOpenChange, task, projectPath, onCreated }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   task: Task
   projectPath: string
   onCreated: (url: string) => void
-  onCancel: () => void
 }) {
   const targetPath = task.worktree_path ?? projectPath
+  const [baseBranch, setBaseBranch] = useState(task.worktree_parent_branch ?? '')
   const [title, setTitle] = useState(task.title)
   const [body, setBody] = useState('')
-  const [baseBranch, setBaseBranch] = useState(task.worktree_parent_branch ?? '')
   const [draft, setDraft] = useState(false)
-  const [branches, setBranches] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [showBranches, setShowBranches] = useState(false)
 
+  // Resolve default branch when worktree_parent_branch is not set
   useEffect(() => {
-    ;(async () => {
-      try {
-        const list = await window.api.git.listBranches(projectPath)
-        setBranches(list)
-        if (!baseBranch && list.length > 0) {
-          // Default to main/master if available
-          const defaultBranch = list.find(b => b === 'main') ?? list.find(b => b === 'master') ?? list[0]
-          setBaseBranch(defaultBranch)
-        }
-      } catch { /* ignore */ }
-    })()
-  }, [projectPath])
+    if (!open || task.worktree_parent_branch) return
+    window.api.git.getDefaultBranch(projectPath).then(setBaseBranch).catch(() => setBaseBranch('main'))
+  }, [open, projectPath, task.worktree_parent_branch])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -1245,89 +1221,63 @@ function CreatePrForm({ task, projectPath, onCreated, onCancel }: {
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      <form onSubmit={handleSubmit} className="p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium">Create Pull Request</h3>
-          <Button type="button" variant="ghost" size="sm" onClick={onCancel} className="text-xs">
-            Cancel
-          </Button>
-        </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Create Pull Request</DialogTitle>
+          <DialogDescription>
+            Into <span className="font-mono font-medium text-foreground">{baseBranch}</span>
+          </DialogDescription>
+        </DialogHeader>
 
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-muted-foreground">Title</label>
-          <Input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="PR title..."
-            className="h-8 text-sm"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-muted-foreground">Description</label>
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Describe your changes..."
-            rows={4}
-            className="w-full rounded-md border bg-transparent px-3 py-2 text-sm resize-y min-h-[80px] focus:outline-none focus:ring-1 focus:ring-ring"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="text-xs font-medium text-muted-foreground">Base Branch</label>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setShowBranches(!showBranches)}
-              className="flex items-center gap-2 w-full h-8 px-3 text-sm rounded-md border bg-transparent text-left hover:bg-muted/50"
-            >
-              <span className="flex-1 truncate">{baseBranch || 'Select branch...'}</span>
-              <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
-            </button>
-            {showBranches && (
-              <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-md border bg-popover shadow-md">
-                {branches.map((branch) => (
-                  <button
-                    key={branch}
-                    type="button"
-                    onClick={() => { setBaseBranch(branch); setShowBranches(false) }}
-                    className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-accent text-left"
-                  >
-                    {branch === baseBranch ? <Check className="h-3 w-3 text-primary" /> : <span className="w-3" />}
-                    {branch}
-                  </button>
-                ))}
-              </div>
-            )}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Title</label>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="PR title..."
+              className="h-8 text-sm"
+            />
           </div>
-        </div>
 
-        <label className="flex items-center gap-2 text-xs">
-          <Checkbox checked={draft} onCheckedChange={(v) => setDraft(!!v)} />
-          Create as draft
-        </label>
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Description</label>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Describe your changes..."
+              rows={4}
+              className="w-full rounded-md border bg-transparent px-3 py-2 text-sm resize-y min-h-[80px] focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+          </div>
 
-        {error && (
-          <div className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2">{error}</div>
-        )}
+          <label className="flex items-center gap-2 text-xs">
+            <Checkbox checked={draft} onCheckedChange={(v) => setDraft(!!v)} />
+            Create as draft
+          </label>
 
-        <Button type="submit" size="sm" disabled={creating || !title.trim() || !baseBranch} className="gap-2">
-          {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitPullRequest className="h-3.5 w-3.5" />}
-          {creating ? 'Creating...' : 'Create Pull Request'}
-        </Button>
-      </form>
-    </div>
+          {error && (
+            <div className="text-xs text-destructive bg-destructive/10 rounded-md px-3 py-2">{error}</div>
+          )}
+
+          <Button type="submit" size="sm" disabled={creating || !title.trim() || !baseBranch} className="gap-2">
+            {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitPullRequest className="h-3.5 w-3.5" />}
+            {creating ? 'Creating...' : 'Create Pull Request'}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
-// --- Link existing PR ---
+// --- Link existing PR dialog ---
 
-function LinkPrView({ projectPath, onLink, onCancel, error }: {
+export function LinkPrDialog({ open, onOpenChange, projectPath, onLink, error }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   projectPath: string
   onLink: (url: string) => void
-  onCancel: () => void
   error: string | null
 }) {
   const [prs, setPrs] = useState<GhPullRequest[]>([])
@@ -1335,6 +1285,9 @@ function LinkPrView({ projectPath, onLink, onCancel, error }: {
   const [fetchError, setFetchError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!open) return
+    setLoading(true)
+    setFetchError(null)
     ;(async () => {
       try {
         const list = await window.api.git.listOpenPrs(projectPath)
@@ -1345,47 +1298,49 @@ function LinkPrView({ projectPath, onLink, onCancel, error }: {
         setLoading(false)
       }
     })()
-  }, [projectPath])
+  }, [projectPath, open])
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="shrink-0 px-4 py-3 border-b flex items-center justify-between">
-        <h3 className="text-sm font-medium">Link Pull Request</h3>
-        <Button variant="ghost" size="sm" onClick={onCancel} className="text-xs">Cancel</Button>
-      </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Link Pull Request</DialogTitle>
+          <DialogDescription>Select an open pull request to link to this task</DialogDescription>
+        </DialogHeader>
 
-      {(error || fetchError) && (
-        <div className="px-4 py-2 text-xs text-destructive">{error || fetchError}</div>
-      )}
-
-      <div className="flex-1 min-h-0 overflow-y-auto">
-        {loading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-          </div>
-        ) : prs.length === 0 ? (
-          <div className="py-8 text-center text-xs text-muted-foreground">No open pull requests</div>
-        ) : (
-          <div className="py-1">
-            {prs.map((pr) => (
-              <button
-                key={pr.number}
-                onClick={() => onLink(pr.url)}
-                className="flex items-start gap-3 w-full px-4 py-2.5 text-left hover:bg-accent/50 transition-colors"
-              >
-                <PrStateIcon state={pr.state} isDraft={pr.isDraft} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-medium truncate">{pr.title}</div>
-                  <div className="text-[10px] text-muted-foreground">
-                    #{pr.number} · {pr.headRefName} → {pr.baseRefName} · {pr.author}
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
+        {(error || fetchError) && (
+          <div className="text-xs text-destructive">{error || fetchError}</div>
         )}
-      </div>
-    </div>
+
+        <div className="max-h-[50vh] overflow-y-auto -mx-2">
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            </div>
+          ) : prs.length === 0 ? (
+            <div className="py-8 text-center text-xs text-muted-foreground">No open pull requests</div>
+          ) : (
+            <div className="py-1">
+              {prs.map((pr) => (
+                <button
+                  key={pr.number}
+                  onClick={() => onLink(pr.url)}
+                  className="flex items-start gap-3 w-full px-4 py-2.5 text-left hover:bg-accent/50 transition-colors rounded-md"
+                >
+                  <PrStateIcon state={pr.state} isDraft={pr.isDraft} />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium truncate">{pr.title}</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      #{pr.number} · {pr.headRefName} → {pr.baseRefName} · {pr.author}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
