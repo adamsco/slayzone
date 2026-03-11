@@ -1,7 +1,7 @@
 import './assets/main.css'
 
 import { createRoot } from 'react-dom/client'
-import { ThemeProvider } from '@slayzone/settings'
+import { ThemeProvider, tabStoreReady } from '@slayzone/settings'
 import { PtyProvider } from '@slayzone/terminal'
 import { TelemetryProvider } from '@slayzone/telemetry/client'
 import { UndoProvider } from '@slayzone/ui'
@@ -33,16 +33,20 @@ window.addEventListener('unhandledrejection', (event) => {
   })
 })
 
-createRoot(document.getElementById('root')!).render(
-  <ConvexAuthBootstrap>
-    <PtyProvider>
-      <ThemeProvider>
-        <TelemetryProvider>
-          <UndoProvider>
-            <App />
-          </UndoProvider>
-        </TelemetryProvider>
-      </ThemeProvider>
-    </PtyProvider>
-  </ConvexAuthBootstrap>
-)
+// Wait for tab store to hydrate from SQLite before rendering —
+// prevents race conditions where effects wipe persisted tabs.
+tabStoreReady.then(() => {
+  createRoot(document.getElementById('root')!).render(
+    <ConvexAuthBootstrap>
+      <PtyProvider>
+        <ThemeProvider>
+          <TelemetryProvider>
+            <UndoProvider>
+              <App />
+            </UndoProvider>
+          </TelemetryProvider>
+        </ThemeProvider>
+      </PtyProvider>
+    </ConvexAuthBootstrap>
+  )
+})

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { MoreHorizontal, Archive, Trash2, AlertTriangle, Sparkles, Loader2, Terminal as TerminalIcon, Globe, Settings2, GitBranch, FileCode, ChevronRight, Plus, GripVertical, Camera, X, Info, CheckCircle2, XCircle, Stethoscope, Cpu } from 'lucide-react'
 import { DndContext, PointerSensor, useSensors, useSensor, closestCenter, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
@@ -152,13 +152,13 @@ interface TaskDetailPageProps {
   onDeleteTask?: (taskId: string) => Promise<void>
   onNavigateToTask?: (taskId: string) => void
   onConvertTask?: (task: Task) => Promise<Task | void>
-  onCloseTab: () => void
+  onCloseTab: (taskId: string) => void
   settingsRevision?: number
   terminalFocusRequestId?: number
   onTerminalFocusRequestHandled?: (taskId: string, requestId: number) => void
 }
 
-export function TaskDetailPage({
+export const TaskDetailPage = React.memo(function TaskDetailPage({
   taskId,
   isActive,
   compact,
@@ -816,7 +816,7 @@ export function TaskDetailPage({
         }
       }
       // Nothing was closed — close the task tab
-      onCloseTabRef.current?.()
+      onCloseTabRef.current?.(taskId)
     })
   }, [isActive, setBrowserTabs])
 
@@ -2184,4 +2184,4 @@ export function TaskDetailPage({
 
     </div>
   )
-}
+})

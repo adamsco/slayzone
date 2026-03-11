@@ -27,7 +27,7 @@ import {
   type ProjectCreationContext,
   type ProjectStartMode
 } from '@slayzone/projects'
-import { UserSettingsDialog, useViewState, AppearanceProvider, type Tab } from '@slayzone/settings'
+import { UserSettingsDialog, useTabStore, AppearanceProvider, type Tab } from '@slayzone/settings'
 import { OnboardingDialog } from '@slayzone/onboarding'
 import { TestPanel } from '@slayzone/test-panel'
 import { track } from '@slayzone/telemetry/client'
@@ -115,9 +115,14 @@ function App(): React.JSX.Element {
     { push: pushUndo, undo }
   )
 
-  // View state (tabs + selected project, persisted)
-  const [tabs, activeTabIndex, selectedProjectId, setTabs, setActiveTabIndex, setSelectedProjectId] =
-    useViewState()
+  // View state (tabs + selected project, persisted via zustand)
+  const tabs = useTabStore((s) => s.tabs)
+  const activeTabIndex = useTabStore((s) => s.activeTabIndex)
+  const selectedProjectId = useTabStore((s) => s.selectedProjectId)
+  const { setTabs, setActiveTabIndex, setSelectedProjectId, openTask, openTaskInBackground, reorderTabs, reopenClosedTab } = useTabStore.getState()
+
+  // Expose tab store for e2e tests (same pattern as __slayzone_refreshData)
+  if (!(window as any).__slayzone_tabStore) (window as any).__slayzone_tabStore = useTabStore
 
   // Filter state (persisted per project)
   const [filter, setFilter] = useFilterState(selectedProjectId)
@@ -223,8 +228,10 @@ function App(): React.JSX.Element {
   const ptyContext = usePty()
   const [terminalStates, setTerminalStates] = useState<Map<string, TerminalState>>(new Map())
 
-  // Closed tabs stack for Cmd+Shift+T reopen
-  const closedTabsRef = useRef<Extract<typeof tabs[number], { type: 'task' }>[]>([])
+  // Sync task/project data into tab store for worktree grouping + temp task detection
+  useEffect(() => {
+    useTabStore.setState({ _taskLookup: { tasks, projects } })
+  }, [tasks, projects])
 
 
   const [showAnimatedTour, setShowAnimatedTour] = useState(false)
@@ -310,19 +317,19 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     if (leaderboardEnabled === null) return
-    setTabs((prev) => {
-      const hasLeaderboard = prev.some((tab) => tab.type === 'leaderboard')
-      if (leaderboardEnabled) {
-        if (hasLeaderboard) return prev
-        const homeIndex = prev.findIndex((tab) => tab.type === 'home')
-        const insertAt = homeIndex >= 0 ? homeIndex + 1 : 0
-        const next = [...prev]
-        next.splice(insertAt, 0, { type: 'leaderboard', title: 'Leaderboard' })
-        return next
-      }
-      if (!hasLeaderboard) return prev
-      return prev.filter((tab) => tab.type !== 'leaderboard')
-    })
+    const prev = useTabStore.getState().tabs
+    const hasLeaderboard = prev.some((tab) => tab.type === 'leaderboard')
+    if (leaderboardEnabled) {
+      if (hasLeaderboard) return
+      const homeIndex = prev.findIndex((tab) => tab.type === 'home')
+      const insertAt = homeIndex >= 0 ? homeIndex + 1 : 0
+      const next = [...prev]
+      next.splice(insertAt, 0, { type: 'leaderboard', title: 'Leaderboard' })
+      setTabs(next)
+    } else {
+      if (!hasLeaderboard) return
+      setTabs(prev.filter((tab) => tab.type !== 'leaderboard'))
+    }
   }, [leaderboardEnabled, setTabs])
 
   // Get task IDs from open tabs
@@ -487,131 +494,40 @@ function App(): React.JSX.Element {
         if (subscribedMode && latestMode && subscribedMode !== latestMode) return
         void window.api.db.deleteTask(tab.taskId).catch(() => {})
         setTasks((prev) => prev.filter((task) => task.id !== tab.taskId))
-        setTabs((prev) => {
-          const index = prev.findIndex((t) => t.type === 'task' && t.taskId === tab.taskId)
-          if (index < 1) return prev
-          setActiveTabIndex((idx) => (idx >= index ? Math.max(0, idx - 1) : idx))
-          return prev.filter((_, i) => i !== index)
-        })
+        useTabStore.getState().closeTabByTaskId(tab.taskId)
       })
     })
 
     return () => {
       unsubscribes.forEach((unsub) => unsub())
     }
-  }, [tabs, tasks, ptyContext, setTasks, setTabs, setActiveTabIndex])
+  }, [tabs, tasks, ptyContext, setTasks])
 
-  // Tab management
-  /** Find insertion index: adjacent to tabs sharing the same worktree, or append. */
-  const findWorktreeInsertIndex = (taskId: string): number => {
-    const task = tasks.find((t) => t.id === taskId)
-    if (!task?.project_id) return tabs.length
-    const project = projects.find((p) => p.id === task.project_id)
-    const effectivePath = task.worktree_path || project?.path
-    if (!effectivePath) return tabs.length
-    // Find the last tab index sharing the same effective worktree path
-    let lastSibling = -1
-    for (let i = tabs.length - 1; i >= 0; i--) {
-      const tab = tabs[i]
-      if (tab.type !== 'task') continue
-      const t = tasks.find((x) => x.id === tab.taskId)
-      if (!t?.project_id) continue
-      const p = projects.find((pr) => pr.id === t.project_id)
-      const otherPath = t.worktree_path || p?.path
-      if (otherPath === effectivePath) {
-        lastSibling = i
-        break
-      }
-    }
-    return lastSibling >= 0 ? lastSibling + 1 : tabs.length
-  }
-
-  const openTask = (taskId: string): void => {
-    const existing = tabs.findIndex((t) => t.type === 'task' && t.taskId === taskId)
-    if (existing >= 0) {
-      setActiveTabIndex(existing)
-    } else {
-      const task = tasks.find((t) => t.id === taskId)
-      const title = task?.title || 'Task'
-      const status = task?.status
-      const isSubTask = !!task?.parent_id
-      const isTemporary = !!task?.is_temporary
-      const newTab: Tab = { type: 'task', taskId, title, status, isSubTask, isTemporary }
-      const insertAt = findWorktreeInsertIndex(taskId)
-      const newTabs = [...tabs]
-      newTabs.splice(insertAt, 0, newTab)
-      setTabs(newTabs)
-      setActiveTabIndex(insertAt)
-    }
-  }
-
-  const openTaskInBackground = (taskId: string): void => {
-    const existing = tabs.findIndex((t) => t.type === 'task' && t.taskId === taskId)
-    if (existing < 0) {
-      const task = tasks.find((t) => t.id === taskId)
-      const title = task?.title || 'Task'
-      const status = task?.status
-      const isSubTask = !!task?.parent_id
-      const isTemporary = !!task?.is_temporary
-      const newTab: Tab = { type: 'task', taskId, title, status, isSubTask, isTemporary }
-      const insertAt = findWorktreeInsertIndex(taskId)
-      const newTabs = [...tabs]
-      newTabs.splice(insertAt, 0, newTab)
-      setTabs(newTabs)
-    }
-  }
-
-  const closeTab = (index: number): void => {
-    const tab = tabs[index]
-    if (!tab || tab.type !== 'task') return
+  // Tab management — side-effect wrappers (store handles pure tab state)
+  // Read tasks from _taskLookup (synced via useEffect) to keep these stable
+  const closeTab = useCallback((index: number): void => {
+    const store = useTabStore.getState()
+    const tab = store.tabs[index]
     if (tab?.type === 'task') {
-      const task = tasks.find((t) => t.id === tab.taskId)
+      const task = store._taskLookup.tasks.find((t) => t.id === tab.taskId)
       if (task?.is_temporary) {
-        // Ephemeral: kill PTY + delete from DB + remove from state
         window.api.pty.kill(`${tab.taskId}:${tab.taskId}`)
         window.api.db.deleteTask(tab.taskId)
         setTasks((prev) => prev.filter((t) => t.id !== tab.taskId))
-      } else {
-        closedTabsRef.current.push(tab)
-        if (closedTabsRef.current.length > 20) closedTabsRef.current.shift()
       }
     }
-    const newTabs = tabs.filter((_, i) => i !== index)
-    setTabs(newTabs)
-    if (activeTabIndex >= index) {
-      setActiveTabIndex(Math.max(0, activeTabIndex - 1))
-    }
-  }
+    store.closeTab(index)
+  }, [setTasks])
 
-  const reopenClosedTab = (): void => {
-    const taskIds = new Set(tasks.map((t) => t.id))
-    while (closedTabsRef.current.length > 0) {
-      const tab = closedTabsRef.current.pop()!
-      if (!taskIds.has(tab.taskId)) continue
-      if (tabs.some((t) => t.type === 'task' && t.taskId === tab.taskId)) continue
-      openTask(tab.taskId)
-      return
-    }
-  }
+  const closeTabByTaskId = useCallback((taskId: string): void => {
+    const index = useTabStore.getState().tabs.findIndex((t) => t.type === 'task' && t.taskId === taskId)
+    if (index >= 0) closeTab(index)
+  }, [closeTab])
 
-  const reorderTabs = (fromIndex: number, toIndex: number): void => {
-    const newTabs = [...tabs]
-    const [moved] = newTabs.splice(fromIndex, 1)
-    newTabs.splice(toIndex, 0, moved)
-    setTabs(newTabs)
-    // Update active index if needed
-    if (activeTabIndex === fromIndex) {
-      setActiveTabIndex(toIndex)
-    } else if (fromIndex < activeTabIndex && toIndex >= activeTabIndex) {
-      setActiveTabIndex(activeTabIndex - 1)
-    } else if (fromIndex > activeTabIndex && toIndex <= activeTabIndex) {
-      setActiveTabIndex(activeTabIndex + 1)
-    }
-  }
-
-  const goBack = (): void => {
-    if (activeTabIndex > 0) closeTab(activeTabIndex)
-  }
+  const goBack = useCallback((): void => {
+    const { activeTabIndex: idx } = useTabStore.getState()
+    if (idx > 0) closeTab(idx)
+  }, [closeTab])
 
   const handleTabClick = useCallback((index: number): void => {
     setActiveTabIndex(index)
@@ -631,34 +547,40 @@ function App(): React.JSX.Element {
     }
   }, [activeTabIndex, tabs])
 
-  // Sync tab titles/status and remove tabs for deleted tasks
+  // Track whether task data has loaded at least once.
+  // Before first load, tasks=[] is a loading state — don't remove tabs for "missing" tasks.
+  const tasksLoadedRef = useRef(false)
+  if (tasks.length > 0) tasksLoadedRef.current = true
+
+  // Sync tab titles/status and remove tabs for deleted tasks.
   useEffect(() => {
+    if (!tasksLoadedRef.current) return
     const taskIds = new Set(tasks.map((t) => t.id))
-    setTabs((prev) => {
-      for (const tab of prev) {
-        if (tab.type === 'task' && !taskIds.has(tab.taskId)) {
-          closedTabsRef.current.push(tab)
-          if (closedTabsRef.current.length > 20) closedTabsRef.current.shift()
+    const store = useTabStore.getState()
+    const prev = store.tabs
+    // Push removed task tabs to closed stack
+    const removedTabs = prev.filter((tab): tab is Extract<Tab, { type: 'task' }> => tab.type === 'task' && !taskIds.has(tab.taskId))
+    if (removedTabs.length > 0) {
+      const newClosed = [...store.closedTabs, ...removedTabs]
+      while (newClosed.length > 20) newClosed.shift()
+      useTabStore.setState({ closedTabs: newClosed })
+    }
+    const filtered = prev.filter((tab) => tab.type !== 'task' || taskIds.has(tab.taskId))
+    const newActive = filtered.length < prev.length ? Math.min(store.activeTabIndex, filtered.length - 1) : store.activeTabIndex
+    const updated = filtered.map((tab) => {
+      if (tab.type !== 'task') return tab
+      const task = tasks.find((t) => t.id === tab.taskId)
+      if (task) {
+        const isSubTask = !!task.parent_id
+        const isTemporary = !!task.is_temporary
+        if (task.title !== tab.title || task.status !== tab.status || isSubTask !== tab.isSubTask || isTemporary !== tab.isTemporary) {
+          return { ...tab, title: task.title, status: task.status, isSubTask, isTemporary }
         }
       }
-      const filtered = prev.filter((tab) => tab.type !== 'task' || taskIds.has(tab.taskId))
-      if (filtered.length < prev.length) {
-        setActiveTabIndex((idx) => Math.min(idx, filtered.length - 1))
-      }
-      return filtered.map((tab) => {
-        if (tab.type !== 'task') return tab
-        const task = tasks.find((t) => t.id === tab.taskId)
-        if (task) {
-          const isSubTask = !!task.parent_id
-          const isTemporary = !!task.is_temporary
-          if (task.title !== tab.title || task.status !== tab.status || isSubTask !== tab.isSubTask || isTemporary !== tab.isTemporary) {
-            return { ...tab, title: task.title, status: task.status, isSubTask, isTemporary }
-          }
-        }
-        return tab
-      })
+      return tab
     })
-  }, [tasks, setTabs, setActiveTabIndex])
+    useTabStore.setState({ tabs: updated, activeTabIndex: newActive })
+  }, [tasks])
 
   // Drop stale focus requests for tasks that no longer exist.
   useEffect(() => {
@@ -855,40 +777,22 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     return window.api.app.onCloseTask((taskId) => {
-      setTabs((prev) => {
-        const index = prev.findIndex((t) => t.type === 'task' && t.taskId === taskId)
-        if (index < 1) return prev
-        const tab = prev[index]
-        if (tab?.type === 'task') {
-          closedTabsRef.current.push(tab)
-          if (closedTabsRef.current.length > 20) closedTabsRef.current.shift()
-        }
-        setActiveTabIndex((idx) => idx >= index ? Math.max(0, idx - 1) : idx)
-        return prev.filter((_, i) => i !== index)
-      })
+      useTabStore.getState().closeTabByTaskId(taskId)
     })
-  }, [setTabs, setActiveTabIndex])
+  }, [])
 
   useEffect(() => {
     return window.api.app.onOpenTask((taskId) => {
-      setTabs((prev) => {
-        const existing = prev.findIndex((t) => t.type === 'task' && t.taskId === taskId)
-        if (existing >= 0) {
-          setActiveTabIndex(existing)
-          return prev
-        }
-        setActiveTabIndex(prev.length)
-        return [...prev, { type: 'task' as const, taskId, title: 'Task' }]
-      })
+      useTabStore.getState().openTask(taskId)
     })
-  }, [setTabs, setActiveTabIndex])
+  }, [])
 
   useEffect(() => {
     return window.api.app.onGoHome(() => {
-      const homeIndex = tabs.findIndex((tab) => tab.type === 'home')
+      const homeIndex = useTabStore.getState().tabs.findIndex((tab) => tab.type === 'home')
       if (homeIndex >= 0) setActiveTabIndex(homeIndex)
     })
-  }, [tabs, setActiveTabIndex])
+  }, [])
 
   useEffect(() => {
     return window.api.app.onOpenSettings(() => {
@@ -951,21 +855,19 @@ function App(): React.JSX.Element {
   useHotkeys('ctrl+tab', (e) => {
     e.preventDefault()
     if (tabCycleOrder.length === 0) return
-    setActiveTabIndex((prev) => {
-      const pos = tabCycleOrder.indexOf(prev)
-      const current = pos >= 0 ? pos : 0
-      return tabCycleOrder[(current + 1) % tabCycleOrder.length]
-    })
+    const prev = useTabStore.getState().activeTabIndex
+    const pos = tabCycleOrder.indexOf(prev)
+    const current = pos >= 0 ? pos : 0
+    setActiveTabIndex(tabCycleOrder[(current + 1) % tabCycleOrder.length])
   }, { enableOnFormTags: true })
 
   useHotkeys('ctrl+shift+tab', (e) => {
     e.preventDefault()
     if (tabCycleOrder.length === 0) return
-    setActiveTabIndex((prev) => {
-      const pos = tabCycleOrder.indexOf(prev)
-      const current = pos >= 0 ? pos : 0
-      return tabCycleOrder[(current - 1 + tabCycleOrder.length) % tabCycleOrder.length]
-    })
+    const prev = useTabStore.getState().activeTabIndex
+    const pos = tabCycleOrder.indexOf(prev)
+    const current = pos >= 0 ? pos : 0
+    setActiveTabIndex(tabCycleOrder[(current - 1 + tabCycleOrder.length) % tabCycleOrder.length])
   }, { enableOnFormTags: true })
 
   useHotkeys('mod+shift+t', (e) => {
@@ -1107,6 +1009,9 @@ function App(): React.JSX.Element {
     })
     setTasks((prev) => [task, ...prev])
     setTerminalFocusRequests((prev) => ({ ...prev, [task.id]: (prev[task.id] ?? 0) + 1 }))
+    // Eagerly sync new task into lookup so openTask can resolve title + worktree position
+    const lookup = useTabStore.getState()._taskLookup
+    useTabStore.setState({ _taskLookup: { ...lookup, tasks: [task, ...lookup.tasks] } })
     openTask(task.id)
 
   }, [selectedProjectId, selectedProject, tasks, setTasks, openTask])
@@ -1143,6 +1048,9 @@ function App(): React.JSX.Element {
     setCreateOpen(false)
     setCreateTaskDefaults({})
     setTerminalFocusRequests((prev) => ({ ...prev, [task.id]: (prev[task.id] ?? 0) + 1 }))
+    // Eagerly sync new task into lookup so openTask can resolve title + worktree position
+    const lookup = useTabStore.getState()._taskLookup
+    useTabStore.setState({ _taskLookup: { ...lookup, tasks: [task, ...lookup.tasks] } })
     openTask(task.id)
 
   }
@@ -1189,8 +1097,8 @@ function App(): React.JSX.Element {
     setEditingTask(null)
   }
 
-  const handleConvertTask = async (task: Task): Promise<Task> => {
-    const project = projects.find((item) => item.id === task.project_id)
+  const handleConvertTask = useCallback(async (task: Task): Promise<Task> => {
+    const project = useTabStore.getState()._taskLookup.projects.find((item) => item.id === task.project_id)
     const converted = await window.api.db.updateTask({
       id: task.id,
       title: 'Untitled task',
@@ -1199,7 +1107,7 @@ function App(): React.JSX.Element {
     })
     updateTask(converted)
     return converted
-  }
+  }, [updateTask])
 
   const handleTaskDeleted = (): void => {
     if (deletingTask) {
@@ -1332,6 +1240,27 @@ function App(): React.JSX.Element {
     setSettingsInitialAiConfigSection(null)
     setSettingsOpen(true)
   }
+
+  // Allow any component to open settings via custom events
+  useEffect(() => {
+    const handleGlobal = (e: Event) => {
+      const tab = (e as CustomEvent<string>).detail || 'general'
+      setSettingsInitialTab(tab)
+      setSettingsInitialAiConfigSection(null)
+      setSettingsOpen(true)
+    }
+    const handleProject = (e: Event) => {
+      const { projectId, tab } = (e as CustomEvent<{ projectId: string; tab?: string }>).detail
+      const project = projects.find(p => p.id === projectId)
+      if (project) openProjectSettings(project, { initialTab: (tab ?? 'general') as ProjectSettingsTab })
+    }
+    window.addEventListener('open-settings', handleGlobal)
+    window.addEventListener('open-project-settings', handleProject)
+    return () => {
+      window.removeEventListener('open-settings', handleGlobal)
+      window.removeEventListener('open-project-settings', handleProject)
+    }
+  }, [projects, openProjectSettings])
 
   return (
     <AppearanceProvider settingsRevision={settingsRevision}>
@@ -1616,7 +1545,7 @@ function App(): React.JSX.Element {
                             onDeleteTask={deleteTask}
                             onNavigateToTask={openTask}
                             onConvertTask={handleConvertTask}
-                            onCloseTab={() => closeTab(i)}
+                            onCloseTab={closeTabByTaskId}
                             settingsRevision={settingsRevision}
                             terminalFocusRequestId={terminalFocusRequests[tab.taskId] ?? 0}
                             onTerminalFocusRequestHandled={handleTerminalFocusRequestHandled}
