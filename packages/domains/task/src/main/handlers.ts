@@ -5,7 +5,7 @@ import type { ColumnConfig } from '@slayzone/projects/shared'
 import { getDefaultStatus, isKnownStatus, isTerminalStatus, parseColumnsConfig } from '@slayzone/projects/shared'
 import { DEFAULT_TERMINAL_MODES } from '@slayzone/terminal/shared'
 import path from 'path'
-import { removeWorktree, createWorktree, runWorktreeSetupScript, getCurrentBranch, isGitRepo } from '@slayzone/worktrees/main'
+import { removeWorktree, createWorktree, runWorktreeSetupScript, getCurrentBranch, isGitRepo, copyIgnoredFiles, resolveCopyBehavior } from '@slayzone/worktrees/main'
 
 type DiagnosticLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -235,6 +235,13 @@ async function maybeAutoCreateWorktree(
 
   try {
     await createWorktree(projectRow.path, worktreePath, branch, sourceBranch)
+
+    // Copy ignored files based on settings ('ask' skipped — auto-create can't prompt)
+    const { behavior: copyBehavior, customPaths } = resolveCopyBehavior(db, projectId)
+    if (copyBehavior === 'all' || copyBehavior === 'custom') {
+      await copyIgnoredFiles(projectRow.path, worktreePath, copyBehavior, customPaths)
+    }
+
     // Fire-and-forget: don't block task creation on setup script
     void runWorktreeSetupScript(worktreePath, projectRow.path, sourceBranch)
     db.prepare(`

@@ -189,6 +189,14 @@ export function registerProjectHandlers(ipcMain: IpcMain, db: Database): void {
       fields.push('worktree_source_branch = ?')
       values.push(data.worktreeSourceBranch)
     }
+    if (data.worktreeCopyBehavior !== undefined) {
+      fields.push('worktree_copy_behavior = ?')
+      values.push(data.worktreeCopyBehavior)
+    }
+    if (data.worktreeCopyPaths !== undefined) {
+      fields.push('worktree_copy_paths = ?')
+      values.push(data.worktreeCopyPaths)
+    }
     if (data.executionContext !== undefined) {
       fields.push('execution_context = ?')
       values.push(data.executionContext ? JSON.stringify(data.executionContext) : null)

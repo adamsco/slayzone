@@ -944,7 +944,7 @@ app.whenReady().then(async () => {
 
   registerTerminalTabsHandlers(ipcMain, db)
   registerFilesHandlers(ipcMain)
-  registerWorktreeHandlers(ipcMain)
+  registerWorktreeHandlers(ipcMain, db)
   if (isContextManagerEnabled) {
     registerAiConfigHandlers(ipcMain, db)
   }

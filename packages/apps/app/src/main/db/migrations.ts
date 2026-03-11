@@ -1251,6 +1251,13 @@ const migrations: Migration[] = [
         db.prepare(`UPDATE settings SET value = ? WHERE key = 'panel_config'`).run(JSON.stringify(config))
       } catch { /* malformed JSON, skip */ }
     }
+  },
+  {
+    version: 70,
+    up: (db) => {
+      db.exec(`ALTER TABLE projects ADD COLUMN worktree_copy_behavior TEXT DEFAULT NULL`)
+      db.exec(`ALTER TABLE projects ADD COLUMN worktree_copy_paths TEXT DEFAULT NULL`)
+    }
   }
 ]
 

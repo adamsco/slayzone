@@ -12,6 +12,8 @@ export {
   type ColumnConfig
 } from '@slayzone/workflow'
 
+export type WorktreeCopyBehavior = 'ask' | 'none' | 'all' | 'custom'
+
 export interface Project {
   id: string
   name: string
@@ -19,6 +21,9 @@ export interface Project {
   path: string | null
   auto_create_worktree_on_task_create: number | null
   worktree_source_branch: string | null
+  worktree_copy_behavior: WorktreeCopyBehavior | null
+  /** Comma-separated relative paths (paths must not contain commas) */
+  worktree_copy_paths: string | null
   columns_config: ColumnConfig[] | null
   execution_context: ExecutionContext | null
   created_at: string
@@ -39,6 +44,8 @@ export interface UpdateProjectInput {
   path?: string | null
   autoCreateWorktreeOnTaskCreate?: boolean | null
   worktreeSourceBranch?: string | null
+  worktreeCopyBehavior?: WorktreeCopyBehavior | null
+  worktreeCopyPaths?: string | null
   columnsConfig?: ColumnConfig[] | null
   executionContext?: ExecutionContext | null
 }

@@ -9,6 +9,7 @@ interface CreateWorktreeDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   projectPath: string
+  projectId?: string
   onCreated: (worktreePath: string, parentBranch: string | null) => void
 }
 
@@ -16,6 +17,7 @@ export function CreateWorktreeDialog({
   open,
   onOpenChange,
   projectPath,
+  projectId,
   onCreated
 }: CreateWorktreeDialogProps) {
   const [path, setPath] = useState('')
@@ -45,7 +47,7 @@ export function CreateWorktreeDialog({
       const parentBranch = await window.api.git.getCurrentBranch(projectPath)
 
       // Create git worktree
-      await window.api.git.createWorktree(projectPath, path, branch || undefined)
+      await window.api.git.createWorktree({ repoPath: projectPath, targetPath: path, branch: branch || undefined, projectId })
       onCreated(path.trim(), parentBranch)
       resetForm()
     } catch (err) {
