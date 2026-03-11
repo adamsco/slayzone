@@ -106,10 +106,10 @@ export function AppSidebar({
   const { sidebarBadgeMode } = useAppearance()
 
   return (
-    <Sidebar collapsible="none" className={zenMode ? "!w-0 min-h-svh overflow-hidden" : "w-18 min-h-svh"}>
+    <Sidebar collapsible="none" className={zenMode ? "!w-0 h-svh overflow-hidden" : "w-18 h-svh"}>
       {/* Draggable region for window movement - clears traffic lights */}
       <div className="h-10 window-drag-region" />
-      <SidebarContent className="py-4 pt-0">
+      <SidebarContent className="py-4 pt-0 scrollbar-hide">
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu className="flex flex-col items-center gap-2">
