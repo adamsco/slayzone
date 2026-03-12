@@ -243,8 +243,6 @@ jobs:
           POSTHOG_API_KEY: ${{ needs.resolve.outputs.mode == 'publish' && secrets.POSTHOG_API_KEY || 'dry-run' }}
           POSTHOG_HOST: ${{ needs.resolve.outputs.mode == 'publish' && secrets.POSTHOG_HOST || 'https://app.posthog.com' }}
           VITE_CONVEX_URL: ${{ needs.resolve.outputs.mode == 'publish' && secrets.VITE_CONVEX_URL || 'https://example.invalid' }}
-          VITE_COMMUNITY_DISCORD_URL: ${{ vars.VITE_COMMUNITY_DISCORD_URL || 'https://discord.gg/g7xPHXaU98' }}
-          VITE_UPDATES_X_URL: ${{ vars.VITE_UPDATES_X_URL || 'https://x.com/debuglebowski' }}
 
       - name: Get electron version
         shell: bash

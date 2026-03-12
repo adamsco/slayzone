@@ -79,8 +79,8 @@ type GlobalAiConfigSection = 'providers' | 'instructions' | 'skill' | 'mcp' | 'f
 const HOME_PANEL_ORDER: HomePanel[] = ['kanban', 'git', 'editor', 'processes', 'tests']
 const HOME_PANEL_SIZE_KEY: Record<HomePanel, string> = { kanban: 'kanban', git: 'diff', editor: 'editor', processes: 'processes', tests: 'tests' }
 const HANDLE_WIDTH = 16
-const COMMUNITY_DISCORD_URL = import.meta.env.VITE_COMMUNITY_DISCORD_URL?.trim() || 'https://discord.com'
-const COMMUNITY_X_URL = import.meta.env.VITE_UPDATES_X_URL?.trim() || 'https://x.com'
+const COMMUNITY_DISCORD_URL = 'https://discord.gg/g7xPHXaU98'
+const COMMUNITY_X_URL = 'https://x.com/debuglebowski'
 
 function App(): React.JSX.Element {
   // Core data from domain hook
@@ -120,7 +120,7 @@ function App(): React.JSX.Element {
   const tabs = useTabStore((s) => s.tabs)
   const activeTabIndex = useTabStore((s) => s.activeTabIndex)
   const selectedProjectId = useTabStore((s) => s.selectedProjectId)
-  const { setTabs, setActiveTabIndex, setSelectedProjectId, openTask, openTaskInBackground, reorderTabs, reopenClosedTab } = useTabStore.getState()
+  const { setActiveTabIndex, setSelectedProjectId, openTask, openTaskInBackground, reorderTabs, reopenClosedTab } = useTabStore.getState()
 
   // Expose tab store for e2e tests (same pattern as __slayzone_refreshData)
   if (!(window as any).__slayzone_tabStore) (window as any).__slayzone_tabStore = useTabStore
@@ -145,7 +145,6 @@ function App(): React.JSX.Element {
   const [deletingProject, setDeletingProject] = useState<Project | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsRevision, setSettingsRevision] = useState(0)
-  const [leaderboardEnabled, setLeaderboardEnabled] = useState<boolean | null>(null)
   const [colorTintsEnabled, setColorTintsEnabled] = useState(true)
   const [settingsInitialTab, setSettingsInitialTab] = useState<string>('general')
   const [settingsInitialAiConfigSection, setSettingsInitialAiConfigSection] = useState<GlobalAiConfigSection | null>(null)
@@ -322,23 +321,6 @@ function App(): React.JSX.Element {
   const previousActiveTabRef = useRef<string>('home')
   const previousNotificationLockedRef = useRef(notificationState.isLocked)
   const previousNotificationProjectFilterRef = useRef(notificationState.filterCurrentProject)
-
-  useEffect(() => {
-    if (leaderboardEnabled === null) return
-    const prev = useTabStore.getState().tabs
-    const hasLeaderboard = prev.some((tab) => tab.type === 'leaderboard')
-    if (leaderboardEnabled) {
-      if (hasLeaderboard) return
-      const homeIndex = prev.findIndex((tab) => tab.type === 'home')
-      const insertAt = homeIndex >= 0 ? homeIndex + 1 : 0
-      const next = [...prev]
-      next.splice(insertAt, 0, { type: 'leaderboard', title: 'Leaderboard' })
-      setTabs(next)
-    } else {
-      if (!hasLeaderboard) return
-      setTabs(prev.filter((tab) => tab.type !== 'leaderboard'))
-    }
-  }, [leaderboardEnabled, setTabs])
 
   // Get task IDs from open tabs
   const openTaskIds = useMemo(
@@ -624,7 +606,6 @@ function App(): React.JSX.Element {
   // Read color tints setting on mount and whenever settings change (same trigger as AppearanceProvider)
   useEffect(() => {
     window.api.settings.get('project_color_tints_enabled').then((v) => setColorTintsEnabled(v !== '0'))
-    window.api.settings.get('leaderboard_enabled').then((v) => setLeaderboardEnabled(v === '1'))
   }, [settingsRevision])
 
   // Sync project name value

@@ -53,5 +53,3 @@ jobs:
           POSTHOG_API_KEY: ci
           POSTHOG_HOST: https://app.posthog.com
           VITE_CONVEX_URL: https://example.invalid
-          VITE_COMMUNITY_DISCORD_URL: ${{ vars.VITE_COMMUNITY_DISCORD_URL || 'https://discord.gg/g7xPHXaU98' }}
-          VITE_UPDATES_X_URL: ${{ vars.VITE_UPDATES_X_URL || 'https://x.com/debuglebowski' }}
