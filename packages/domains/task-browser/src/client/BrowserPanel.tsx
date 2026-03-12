@@ -881,7 +881,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
               </TooltipTrigger>
               <TooltipContent>Import URL from another task</TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="end" className="max-h-64 overflow-y-auto w-80">
+            <DropdownMenuContent align="end" className="max-h-64 w-auto max-w-[50vw] overflow-y-auto">
               {otherTaskUrls.length === 0 ? (
                 <div className="px-2 py-1.5 text-sm text-muted-foreground">
                   No URLs from other tasks
