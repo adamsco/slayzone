@@ -27,6 +27,7 @@ type UnifiedGitPanelProps = {
   visible: boolean
   pollIntervalMs?: number
   defaultTab?: GitTabId
+  onTabChange?: (tab: GitTabId) => void
   tasks?: Task[]
   filter?: FilterState
   projects?: Project[]
@@ -76,6 +77,7 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
   visible,
   pollIntervalMs,
   defaultTab = 'general',
+  onTabChange,
   onUpdateTask,
   onTaskUpdated,
   tasks = [],
@@ -84,12 +86,16 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
   onTaskClick,
   onCreateTask
 }, ref) {
-  const [activeTab, setActiveTab] = useState<GitTabId>(defaultTab)
+  const [activeTab, setActiveTabRaw] = useState<GitTabId>(defaultTab)
+  const setActiveTab = useCallback((tab: GitTabId) => {
+    setActiveTabRaw(tab)
+    onTabChange?.(tab)
+  }, [onTabChange])
 
   useImperativeHandle(ref, () => ({
     switchToTab: setActiveTab,
     getActiveTab: () => activeTab
-  }), [activeTab])
+  }), [activeTab, setActiveTab])
   const hasConflicts = !!task && (task.merge_state === 'conflicts' || task.merge_state === 'rebase-conflicts')
   const isUncommitted = !!task && task.merge_state === 'uncommitted'
   const isRebase = !!task && task.merge_state === 'rebase-conflicts'

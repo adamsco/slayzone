@@ -70,6 +70,7 @@ import { UsagePopover } from '@/components/usage/UsagePopover'
 import { useUsage } from '@/components/usage/useUsage'
 import { TutorialAnimationModal } from '@/components/tutorial/TutorialAnimationModal'
 import { useOnboardingChecklist } from '@/hooks/useOnboardingChecklist'
+import { useHomePanelState } from '@/hooks/useHomePanelVisibility'
 
 type HomePanel = 'kanban' | 'git' | 'editor' | 'processes' | 'tests'
 type ProjectSettingsTab = 'general' | 'environment' | 'columns' | 'integrations' | 'ai-config' | 'tests'
@@ -158,17 +159,24 @@ function App(): React.JSX.Element {
   const [explodeMode, setExplodeMode] = useState(false)
   const [panelSizes, updatePanelSizes, resetPanelSize] = usePanelSizes()
   const { isBuiltinEnabled: isHomePanelEnabled } = usePanelConfig()
-  const [homePanelVisibility, setHomePanelVisibilityRaw] = useState<Record<HomePanel, boolean>>({ kanban: true, git: false, editor: false, processes: false, tests: false })
+  const [homePanelState, setHomePanelState] = useHomePanelState(selectedProjectId)
+  const homePanelVisibility = homePanelState.visibility
   const setHomePanelVisibility = useCallback((updater: (prev: Record<HomePanel, boolean>) => Record<HomePanel, boolean>) => {
-    setHomePanelVisibilityRaw(prev => {
-      const next = updater(prev)
-      for (const key of Object.keys(next) as HomePanel[]) {
-        if (next[key] !== prev[key]) track('panel_toggled', { panel: key, active: next[key], context: 'home' })
-      }
-      return next
+    let prev: Record<HomePanel, boolean> | undefined
+    let next: Record<HomePanel, boolean> | undefined
+    setHomePanelState(s => {
+      prev = s.visibility
+      next = updater(s.visibility)
+      return { ...s, visibility: next }
     })
-  }, [])
-  const [homeGitDefaultTab, setHomeGitDefaultTab] = useState<GitTabId>('general')
+    for (const key of Object.keys(next!) as HomePanel[]) {
+      if (next![key] !== prev![key]) track('panel_toggled', { panel: key, active: next![key], context: 'home' })
+    }
+  }, [setHomePanelState])
+  const homeGitDefaultTab = homePanelState.gitTab as GitTabId
+  const setHomeGitDefaultTab = useCallback((tab: GitTabId) => {
+    setHomePanelState(s => ({ ...s, gitTab: tab }))
+  }, [setHomePanelState])
   const homeGitPanelRef = useRef<UnifiedGitPanelHandle>(null)
   const homeEditorRef = useRef<FileEditorViewHandle>(null)
   const pendingHomeEditorFileRef = useRef<string | null>(null)
@@ -1510,6 +1518,7 @@ function App(): React.JSX.Element {
                                           projectPath={projectPath}
                                           visible={true}
                                           defaultTab={homeGitDefaultTab}
+                                          onTabChange={setHomeGitDefaultTab}
                                           tasks={tasks}
                                           filter={filter}
                                           projects={projects}
