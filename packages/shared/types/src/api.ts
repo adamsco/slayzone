@@ -242,6 +242,7 @@ export interface ElectronAPI {
     getMessages: (threadId: string) => Promise<Array<{ id: string; thread_id: string; content: string; created_at: string }>>
     addMessage: (input: { id: string; thread_id: string; content: string }) => Promise<void>
     updateThreadDiscordId: (threadId: string, discordThreadId: string) => Promise<void>
+    deleteThread: (threadId: string) => Promise<void>
   }
   settings: {
     get: (key: string) => Promise<string | null>

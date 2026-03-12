@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAction } from 'convex/react'
-import { MessageSquare, Plus, Send, ArrowLeft } from 'lucide-react'
+import { MessageSquare, Plus, Send, ArrowLeft, Trash2 } from 'lucide-react'
 import {
   Button,
   Dialog,
@@ -62,6 +62,7 @@ export function FeedbackDialog(): React.JSX.Element {
   const [composingNew, setComposingNew] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const submit = useAction(api.feedback.submit)
+  const markDeleted = useAction(api.feedback.markDeleted)
 
   const selectedThread = threads.find((t) => t.id === selectedId) ?? null
 
@@ -110,6 +111,22 @@ export function FeedbackDialog(): React.JSX.Element {
     setComposingNew(false)
     setContent('')
   }, [])
+
+  const handleDelete = useCallback(async () => {
+    if (!selectedThread) return
+    try {
+      if (selectedThread.discord_thread_id) {
+        await markDeleted({ threadId: selectedThread.discord_thread_id }).catch(() => {})
+      }
+      await window.api.feedback.deleteThread(selectedThread.id)
+      setSelectedId(null)
+      setMessages([])
+      await loadThreads()
+      toast.success('Feedback deleted')
+    } catch {
+      toast.error('Failed to delete feedback')
+    }
+  }, [selectedThread, markDeleted, loadThreads])
 
   const handleSend = useCallback(async () => {
     const text = content.trim()
@@ -270,6 +287,22 @@ export function FeedbackDialog(): React.JSX.Element {
                         <p className="text-[11px] text-muted-foreground/60">{formatDate(selectedThread.created_at)}</p>
                       )}
                     </div>
+                    {selectedThread && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <IconButton
+                            aria-label="Delete thread"
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={handleDelete}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </IconButton>
+                        </TooltipTrigger>
+                        <TooltipContent>Delete</TooltipContent>
+                      </Tooltip>
+                    )}
                   </div>
 
                   {/* Messages */}

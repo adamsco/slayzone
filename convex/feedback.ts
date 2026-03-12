@@ -3,6 +3,28 @@ import { action } from './_generated/server'
 
 const DISCORD_MAX_LENGTH = 2000
 
+export const markDeleted = action({
+  args: {
+    threadId: v.string()
+  },
+  handler: async (_ctx, args) => {
+    const webhookUrl = process.env.DISCORD_FEEDBACK_WEBHOOK_URL
+    if (!webhookUrl) throw new Error('Feedback webhook not configured')
+
+    const url = webhookUrl + `?wait=true&thread_id=${args.threadId}`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '*[DELETED by user]*' })
+    })
+
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Discord webhook failed: ${res.status} ${text}`)
+    }
+  }
+})
+
 export const submit = action({
   args: {
     content: v.string(),

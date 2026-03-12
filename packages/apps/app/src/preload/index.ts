@@ -68,6 +68,7 @@ const api: ElectronAPI = {
     getMessages: (threadId) => ipcRenderer.invoke('db:feedback:getMessages', threadId),
     addMessage: (input) => ipcRenderer.invoke('db:feedback:addMessage', input),
     updateThreadDiscordId: (threadId, discordThreadId) => ipcRenderer.invoke('db:feedback:updateThreadDiscordId', threadId, discordThreadId),
+    deleteThread: (threadId) => ipcRenderer.invoke('db:feedback:deleteThread', threadId),
   },
   settings: {
     get: (key) => ipcRenderer.invoke('db:settings:get', key),

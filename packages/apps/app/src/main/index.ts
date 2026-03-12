@@ -920,6 +920,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('db:feedback:updateThreadDiscordId', (_, threadId: string, discordThreadId: string) => {
     db.prepare('UPDATE feedback_threads SET discord_thread_id = ? WHERE id = ?').run(discordThreadId, threadId)
   })
+  ipcMain.handle('db:feedback:deleteThread', (_, threadId: string) => {
+    db.prepare('DELETE FROM feedback_threads WHERE id = ?').run(threadId)
+  })
 
   registerThemeHandlers(ipcMain, db)
   registerUsageHandlers(ipcMain, db)
