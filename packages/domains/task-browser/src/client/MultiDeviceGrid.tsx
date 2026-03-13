@@ -207,7 +207,7 @@ export function MultiDeviceGrid({ config, layout, url, isResizing, reloadTrigger
     <div
       id="grid-container"
       ref={containerRef}
-      className={`flex-1 flex p-8 overflow-hidden ${isHorizontal ? 'flex-row' : 'flex-col'}`}
+      className={`flex-1 flex p-8 overflow-hidden bg-neutral-900 ${isHorizontal ? 'flex-row' : 'flex-col'}`}
     >
       {enabledSlots.map((slot, i) => (
         <React.Fragment key={slot}>
