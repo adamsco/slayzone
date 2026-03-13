@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { RefreshCw, Search, Loader2, Settings2, X } from 'lucide-react'
+import { RefreshCw, Search, Loader2, Settings2, X, Info } from 'lucide-react'
 import {
   IconButton, Input, Switch, cn, toast,
   Popover, PopoverTrigger, PopoverContent,
@@ -161,6 +161,9 @@ export function BranchesTab({ projectPath, visible }: BranchesTabProps) {
             onChange={setConfig}
           />
 
+          {/* Info */}
+          <GraphInfoPopover />
+
           {/* Fetch */}
           <IconButton
             aria-label="Fetch"
@@ -303,6 +306,53 @@ function GraphConfigPopover({ config, effectiveConfig, currentBranch, allBranche
                 ))}
             </SelectContent>
           </Select>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// --- Graph info popover ---
+
+function GraphInfoPopover() {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <IconButton aria-label="Graph info" variant="ghost" className="h-7 w-7" title="Graph legend">
+          <Info className="h-3.5 w-3.5" />
+        </IconButton>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 text-xs space-y-3" side="bottom" align="end">
+        <p className="font-medium text-[11px]">Graph legend</p>
+
+        <div className="flex items-start gap-2">
+          <svg width="28" height="28" className="shrink-0"><line x1="14" y1="0" x2="14" y2="11" stroke="#e2e2e2" strokeWidth="2" opacity="0.35" /><circle cx="14" cy="14" r="3" fill="#e2e2e2" /><line x1="14" y1="17" x2="14" y2="28" stroke="#e2e2e2" strokeWidth="2" opacity="0.35" /></svg>
+          <div><span className="font-medium">Commit</span><p className="text-muted-foreground mt-0.5">A regular commit on a branch.</p></div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <svg width="28" height="28" className="shrink-0"><line x1="14" y1="0" x2="14" y2="7" stroke="#e2e2e2" strokeWidth="2" opacity="0.35" /><circle cx="14" cy="14" r="7" fill="#e2e2e2" opacity="0.15" /><circle cx="14" cy="14" r="4" fill="#e2e2e2" /><line x1="14" y1="21" x2="14" y2="28" stroke="#e2e2e2" strokeWidth="2" opacity="0.35" /></svg>
+          <div><span className="font-medium">Branch tip</span><p className="text-muted-foreground mt-0.5">The latest commit on a branch — where the branch head points.</p></div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <svg width="28" height="28" className="shrink-0"><line x1="14" y1="0" x2="14" y2="9" stroke="#e2e2e2" strokeWidth="2" opacity="0.35" /><circle cx="14" cy="14" r="5" fill="none" stroke="#e2e2e2" strokeWidth="2" /><line x1="14" y1="19" x2="14" y2="28" stroke="#e2e2e2" strokeWidth="2" opacity="0.35" /></svg>
+          <div><span className="font-medium">Merge commit</span><p className="text-muted-foreground mt-0.5">A commit where two branches were joined together.</p></div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <svg width="28" height="28" className="shrink-0"><line x1="14" y1="0" x2="14" y2="28" stroke="#e2e2e2" strokeWidth="2" opacity="0.35" /></svg>
+          <div><span className="font-medium">Solid line</span><p className="text-muted-foreground mt-0.5">Commits that have been pushed to the remote.</p></div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <svg width="28" height="28" className="shrink-0"><line x1="14" y1="0" x2="14" y2="28" stroke="#e2e2e2" strokeWidth="2" opacity="0.35" strokeDasharray="4 3" /></svg>
+          <div><span className="font-medium">Dashed line</span><p className="text-muted-foreground mt-0.5">Local commits not yet pushed. The dashed section ends at the <code className="text-[10px] bg-muted px-0.5 rounded">origin/</code> ref.</p></div>
+        </div>
+
+        <div className="flex items-start gap-2">
+          <svg width="28" height="28" className="shrink-0"><circle cx="7" cy="14" r="3.5" fill="#e2e2e2" /><line x1="19" y1="14" x2="11" y2="14" stroke="#a78bfa" strokeWidth="2" opacity="0.35" /><circle cx="21" cy="14" r="2.5" fill="#a78bfa" /></svg>
+          <div><span className="font-medium">Merged branch</span><p className="text-muted-foreground mt-0.5">A PR branch that was merged and deleted. The colored dot shows which branch the commit came from.</p></div>
         </div>
       </PopoverContent>
     </Popover>

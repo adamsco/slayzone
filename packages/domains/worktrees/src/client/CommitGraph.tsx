@@ -671,10 +671,10 @@ function SvgDot({ cx, cy, color, type, dimmed }: { cx: number; cy: number; color
 
 const DOT_HIT_SIZE = 18
 
-function DotOverlays({ items }: { items: Array<{ key: string; row: number; column: number; color: string; branchName?: string; xOffset?: number; yOffset?: number }> }) {
+function DotOverlays({ items }: { items: Array<{ key: string; row: number; column: number; color: string; branchName?: string; xOffset?: number; yOffset?: number; isSynthetic?: boolean }> }) {
   return (
     <>
-      {items.map(({ key, row, column, color, branchName, xOffset, yOffset }) => {
+      {items.map(({ key, row, column, color, branchName, xOffset, yOffset, isSynthetic }) => {
         if (!branchName) return null
         const cx = colX(column) + (xOffset ?? 0)
         const cy = rowY(row) + (yOffset ?? 0)
@@ -694,7 +694,14 @@ function DotOverlays({ items }: { items: Array<{ key: string; row: number; colum
               onMouseLeave={e => { e.currentTarget.style.boxShadow = `0 0 0 0px ${color}50` }}
               />
             </TooltipTrigger>
-            <TooltipContent side="top">{branchName}</TooltipContent>
+            <TooltipContent side="top" className={isSynthetic ? 'max-w-none' : undefined}>
+              {isSynthetic ? (
+                <div className="text-left whitespace-nowrap">
+                  <div>{branchName}</div>
+                  <div className="text-muted-foreground text-[10px]">Merged branch (deleted). See info (i) in toolbar.</div>
+                </div>
+              ) : branchName}
+            </TooltipContent>
           </Tooltip>
         )
       })}
@@ -878,7 +885,8 @@ export function CommitGraph({ graph, filterQuery, tipsOnly, renderLimit, classNa
         ...visibleNodes.filter(n => n.syntheticBranch).map(node => ({
           key: `${node.commit.hash}-synth`, row: node.row, column: node.column,
           color: getColor(node.syntheticBranch!.colorIndex), branchName: node.syntheticBranch!.branchName,
-          xOffset: (rowOffsets.get(node.row) ?? 0) + MERGED_DOT_OFFSET + 12
+          xOffset: (rowOffsets.get(node.row) ?? 0) + MERGED_DOT_OFFSET + 12,
+          isSynthetic: true
         }))
       ]} />
       {visibleNodes.map((node) => {
