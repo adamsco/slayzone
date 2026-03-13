@@ -35,7 +35,7 @@ const COLUMN_COLORS = [
   '#8b5cf6', // purple
   '#14b8a6', // teal
   '#f97316', // orange
-  'var(--color-primary)',
+  '#22d3ee', // sky
 ]
 
 function getColor(index: number): string {
@@ -136,7 +136,7 @@ function computeTipsLayout(commits: ResolvedCommit[], baseBranch: string): DagLa
 
 // --- Full DAG topology algorithm ---
 
-interface LayoutNode {
+export interface LayoutNode {
   commit: ResolvedCommit
   column: number
   row: number
@@ -145,7 +145,7 @@ interface LayoutNode {
   colorIndex: number
 }
 
-interface LayoutEdge {
+export interface LayoutEdge {
   fromRow: number
   fromCol: number
   toRow: number
@@ -153,15 +153,16 @@ interface LayoutEdge {
   color: string
   type: 'straight' | 'curve'
   targetHash?: string
+  dashed?: boolean
 }
 
-interface DagLayout {
+export interface DagLayout {
   nodes: LayoutNode[]
   edges: LayoutEdge[]
   maxColumn: number
 }
 
-function computeDagLayout(commits: ResolvedCommit[], baseBranch: string): DagLayout {
+export function computeDagLayout(commits: ResolvedCommit[], baseBranch: string): DagLayout {
   if (commits.length === 0) return { nodes: [], edges: [], maxColumn: 0 }
 
   const hashToRow = new Map<string, number>()
@@ -176,6 +177,7 @@ function computeDagLayout(commits: ResolvedCommit[], baseBranch: string): DagLay
 
   // Branch ownership is already resolved — just read commit.branch
   function getCommitColorIndex(commit: ResolvedCommit): number {
+    if (commit.mergedFrom) return hashBranchColor(commit.mergedFrom)
     if (commit.branch === baseBranch) return BASE_BRANCH_COLOR_INDEX
     if (commit.branch) return hashBranchColor(commit.branch)
     return nextFallbackColor++
@@ -205,10 +207,14 @@ function computeDagLayout(commits: ResolvedCommit[], baseBranch: string): DagLay
     hashToRow.set(commit.hash, row)
 
     let col = findColumnReservedFor(commit.hash)
+    // Track if this commit was reserved on the base branch column (first-parent chain).
+    // Behind-branch tips on main's trunk should not be ejected to a new column.
+    const reservedOnBaseLine = col !== null && columnBranch[col] === baseBranch
 
     if (col !== null) {
       // Base branch commits should always stay in column 0
-      const isBase = commit.branch === baseBranch
+      // Exception: merge second-parents (mergedFrom) stay on their reserved side column
+      const isBase = commit.branch === baseBranch && !commit.mergedFrom
       if (isBase && col !== 0) {
         if (activeColumns[0] === commit.hash) {
           // Column 0 also reserved for this commit — just pick column 0
@@ -233,7 +239,7 @@ function computeDagLayout(commits: ResolvedCommit[], baseBranch: string): DagLay
 
     // Branch-aware split: if this column was serving a different branch, move to a new column
     const prevBranch = columnBranch[col]
-    if (prevBranch && commit.branch !== prevBranch && commit.branch !== baseBranch) {
+    if (prevBranch && commit.branch !== prevBranch && commit.branch !== baseBranch && !reservedOnBaseLine) {
       const prevRow = nodes.findLast(n => n.column === col)?.row
       const newCol = findFreeColumn()   // find before releasing — otherwise gets same column
       activeColumns[col] = null
@@ -265,8 +271,11 @@ function computeDagLayout(commits: ResolvedCommit[], baseBranch: string): DagLay
     } else {
       const firstParent = commit.parents[0]
       const existingCol = findColumnReservedFor(firstParent)
+      let deferredRelease: number | null = null
       if (existingCol !== null && existingCol !== col) {
-        activeColumns[col] = null
+        // Delay release until after all parent reservations so findFreeColumn
+        // doesn't immediately reuse the base branch column for merge parents
+        deferredRelease = col
         edges.push({
           fromRow: row, fromCol: col, toRow: -1, toCol: existingCol,
           color: getColor(ci), type: 'curve', targetHash: firstParent
@@ -296,6 +305,8 @@ function computeDagLayout(commits: ResolvedCommit[], baseBranch: string): DagLay
           })
         }
       }
+
+      if (deferredRelease !== null) activeColumns[deferredRelease] = null
     }
   }
 
@@ -311,18 +322,44 @@ function computeDagLayout(commits: ResolvedCommit[], baseBranch: string): DagLay
     }
   }
 
-  // Straight edges for same-column parent links
+  // Guarantee: every parent link has an edge (straight if same column, curve otherwise)
   for (let row = 0; row < commits.length; row++) {
     const commit = commits[row]
     const col = hashToCol.get(commit.hash)!
-    const firstParent = commit.parents[0]
-    if (!firstParent) continue
-    const parentRow = hashToRow.get(firstParent)
-    if (parentRow !== undefined && hashToCol.get(firstParent) === col) {
+    const color = getColor(hashToColorIndex.get(commit.hash) ?? col)
+    for (const parentHash of commit.parents) {
+      const parentRow = hashToRow.get(parentHash)
+      if (parentRow === undefined) continue
+      const parentCol = hashToCol.get(parentHash)!
+      // Skip if an edge already exists for this link
+      const hasEdge = edges.some(e =>
+        (e.fromRow === row && e.fromCol === col && e.toRow === parentRow && e.toCol === parentCol) ||
+        (e.fromRow === row && e.fromCol === col && e.targetHash === parentHash)
+      )
+      if (hasEdge) continue
       edges.push({
-        fromRow: row, fromCol: col, toRow: parentRow, toCol: col,
-        color: getColor(hashToColorIndex.get(commit.hash) ?? col), type: 'straight'
+        fromRow: row, fromCol: col, toRow: parentRow, toCol: parentCol,
+        color, type: parentCol === col ? 'straight' : 'curve'
       })
+    }
+  }
+
+  // Mark edges from local-only commits as dashed.
+  // A commit is "local only" if it's above the origin/ ref on its column.
+  const originRowByCol = new Map<number, number>()
+  for (const node of nodes) {
+    if (node.commit.branchRefs.some(r => r.startsWith('origin/'))) {
+      const prev = originRowByCol.get(node.column)
+      if (prev === undefined || node.row < prev) originRowByCol.set(node.column, node.row)
+    }
+  }
+  const isLocalOnly = (row: number, col: number) => {
+    const originRow = originRowByCol.get(col)
+    return originRow !== undefined && row < originRow
+  }
+  for (const edge of edges) {
+    if (isLocalOnly(edge.fromRow, edge.fromCol)) {
+      edge.dashed = true
     }
   }
 
@@ -570,6 +607,7 @@ function SvgStraightEdge({ edge }: { edge: LayoutEdge }) {
       x1={colX(edge.fromCol)} y1={rowY(edge.fromRow)}
       x2={colX(edge.toCol)} y2={rowY(edge.toRow)}
       stroke={edge.color} strokeWidth={2} opacity={0.35}
+      strokeDasharray={edge.dashed ? '4 3' : undefined}
     />
   )
 }
@@ -577,14 +615,15 @@ function SvgStraightEdge({ edge }: { edge: LayoutEdge }) {
 function SvgCurveEdge({ edge }: { edge: LayoutEdge }) {
   const x1 = colX(edge.fromCol), y1 = rowY(edge.fromRow)
   const x2 = colX(edge.toCol), y2 = rowY(edge.toRow)
+  const dash = edge.dashed ? '4 3' : undefined
 
   if (edge.fromRow === edge.toRow) {
-    return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={edge.color} strokeWidth={2} opacity={0.35} />
+    return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={edge.color} strokeWidth={2} opacity={0.35} strokeDasharray={dash} />
   }
 
   const dy = y2 - y1
   const d = `M${x1},${y1} C${x1},${y1 + dy * 0.4} ${x2},${y2 - dy * 0.4} ${x2},${y2}`
-  return <path d={d} stroke={edge.color} strokeWidth={2} fill="none" opacity={0.35} />
+  return <path d={d} stroke={edge.color} strokeWidth={2} fill="none" opacity={0.35} strokeDasharray={dash} />
 }
 
 function SvgDot({ cx, cy, color, type, dimmed }: { cx: number; cy: number; color: string; type: 'tip' | 'merge' | 'regular'; dimmed?: boolean }) {
@@ -646,10 +685,10 @@ function DotOverlays({ items }: { items: Array<{ key: string; row: number; colum
 // --- Row renderers ---
 
 function CommitRow({
-  shortHash, message, author, relativeDate, refs, color, gutterWidth, copiedHash, onCopy, dimmed
+  shortHash, message, author, relativeDate, refs, mergedFrom, color, gutterWidth, copiedHash, onCopy, dimmed
 }: {
   shortHash: string; message: string; author: string; relativeDate: string
-  refs?: string[]; color: string; gutterWidth: number
+  refs?: string[]; mergedFrom?: string; color: string; gutterWidth: number
   copiedHash: string | null; onCopy: (hash: string) => void; dimmed?: boolean
 }) {
   return (
@@ -662,16 +701,20 @@ function CommitRow({
         style={{ backgroundColor: `${color}12` }}>
         <div className="flex-1 min-w-0">
           <div className="text-xs truncate">
-            {refs && refs.map(ref => (
-              <span key={ref} className="inline-block px-1.5 py-0 rounded text-[10px] font-medium mr-1.5"
-                style={{ backgroundColor: `${color}20`, color }}>{ref}</span>
-            ))}
             {message}
           </div>
           <div className="text-[10px] text-muted-foreground">
             <span className="font-mono">{shortHash}</span>{' · '}{author}{' · '}{relativeDate}
           </div>
         </div>
+        {refs && refs.map(ref => (
+          <span key={ref} className="shrink-0 px-1.5 py-0 rounded text-[10px] font-medium"
+            style={{ backgroundColor: `${color}20`, color }}>{ref}</span>
+        ))}
+        {mergedFrom && (
+          <span className="shrink-0 px-1.5 py-0 rounded text-[10px] font-medium opacity-60 border border-current"
+            style={{ color: 'var(--color-muted-foreground)' }}>{mergedFrom}</span>
+        )}
         {copiedHash === shortHash
           ? <Check className="h-3 w-3 text-green-500 shrink-0" />
           : <Copy className="h-3 w-3 text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -796,6 +839,7 @@ export function CommitGraph({ graph, filterQuery, tipsOnly, renderLimit, classNa
             shortHash={node.commit.shortHash} message={node.commit.message}
             author={node.commit.author} relativeDate={node.commit.relativeDate}
             refs={refs.length > 0 ? refs : undefined}
+            mergedFrom={node.commit.mergedFrom}
             color={getColor(node.colorIndex)} gutterWidth={gutterWidth}
             copiedHash={copiedHash} onCopy={handleCopy} dimmed={dimmed} />
         )

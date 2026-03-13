@@ -1,11 +1,13 @@
 /**
- * Tests for resolveCommitGraph + resolveForkGraph
- * Ensures correct translation from raw git data → ResolvedGraph
+ * Tests for resolveCommitGraph + resolveForkGraph + computeDagLayout
+ * Ensures correct translation from raw git data → ResolvedGraph → DagLayout
  *
  * Run with: npx tsx packages/domains/worktrees/src/main/resolve-graph.test.ts
  */
-import type { DagCommit, CommitInfo, ResolvedGraph } from '../shared/types'
+import type { DagCommit, CommitInfo, ResolvedGraph, ResolvedCommit } from '../shared/types'
 import { resolveCommitGraph, resolveForkGraph } from './git-worktree'
+import { computeDagLayout } from '../client/CommitGraph'
+import type { DagLayout } from '../client/CommitGraph'
 
 let passed = 0
 let failed = 0
@@ -134,7 +136,7 @@ describe('resolveCommitGraph — single branch, linear history', () => {
   })
 })
 
-describe('resolveCommitGraph — origin/main collapsed when local main exists', () => {
+describe('resolveCommitGraph — origin/main shown as display ref when local main exists', () => {
   const c1Hash = makeHash()
   const c2Hash = makeHash()
   const commits: DagCommit[] = [
@@ -144,12 +146,11 @@ describe('resolveCommitGraph — origin/main collapsed when local main exists', 
 
   const g = resolveCommitGraph(commits, 'main')
 
-  test('origin/main ref is collapsed — not in branchRefs', () => {
-    // origin/main should be dropped since local "main" exists
-    expect(g.commits[1].branchRefs).toHaveLength(0)
+  test('origin/main appears in branchRefs as display ref', () => {
+    expect(g.commits[1].branchRefs).toEqual(['origin/main'])
   })
 
-  test('both commits owned by main', () => {
+  test('both commits owned by main (origin/ does not affect ownership)', () => {
     expect(g.commits[0].branch).toBe('main')
     expect(g.commits[1].branch).toBe('main')
   })
@@ -230,8 +231,9 @@ describe('resolveCommitGraph — merge commit with synthetic branch name', () =>
 
   const g = resolveCommitGraph(commits, 'main')
 
-  test('second parent gets synthetic branch name from merge message', () => {
-    expect(g.commits[2].branch).toBe('hotfix')
+  test('second parent stays on main with mergedFrom set', () => {
+    expect(g.commits[2].branch).toBe('main')
+    expect(g.commits[2].mergedFrom).toBe('hotfix')
   })
 
   test('first parent inherits main', () => {
@@ -273,8 +275,8 @@ describe('resolveCommitGraph — multiple remote refs collapsed correctly', () =
 
   const g = resolveCommitGraph(commits, 'main')
 
-  test('only local main in branchRefs (remotes collapsed)', () => {
-    expect(g.commits[0].branchRefs).toEqual(['main'])
+  test('local main and origin/main in branchRefs (origin/HEAD skipped)', () => {
+    expect(g.commits[0].branchRefs).toEqual(['main', 'origin/main'])
   })
 })
 
@@ -431,9 +433,9 @@ describe('resolveForkGraph — empty on both sides', () => {
 
 // ─── resolveCommitGraph — branch behind main (linear, no divergence) ──
 
-describe('resolveCommitGraph — feature branch behind main on linear history', () => {
-  // main is 4 commits ahead of worktree-test, all linear (no divergence)
+describe('resolveCommitGraph — behind branch requested: visible in graph', () => {
   //   main tip → A → B → C → worktree-test tip → D → E
+  // Both main and worktree-test requested (e.g. showMergedBranches on)
   const eHash = makeHash()
   const dHash = makeHash()
   const wtHash = makeHash()
@@ -452,7 +454,7 @@ describe('resolveCommitGraph — feature branch behind main on linear history', 
     dag({ hash: eHash, message: 'E', refs: [], parents: [] }),
   ]
 
-  const g = resolveCommitGraph(commits, 'main')
+  const g = resolveCommitGraph(commits, 'main', ['main', 'worktree-test'])
 
   test('main tip through C owned by main', () => {
     expect(g.commits[0].branch).toBe('main')
@@ -461,10 +463,13 @@ describe('resolveCommitGraph — feature branch behind main on linear history', 
     expect(g.commits[3].branch).toBe('main')
   })
 
-  test('worktree-test tip and below owned by worktree-test', () => {
+  test('worktree-test tip owned by worktree-test', () => {
     expect(g.commits[4].branch).toBe('worktree-test')
-    expect(g.commits[5].branch).toBe('worktree-test')
-    expect(g.commits[6].branch).toBe('worktree-test')
+  })
+
+  test('commits below worktree-test tip owned by main (shared ancestry)', () => {
+    expect(g.commits[5].branch).toBe('main')
+    expect(g.commits[6].branch).toBe('main')
   })
 
   test('worktree-test commit is a branch tip', () => {
@@ -472,13 +477,50 @@ describe('resolveCommitGraph — feature branch behind main on linear history', 
     expect(g.commits[4].branchRefs).toContain('worktree-test')
   })
 
-  test('only 2 branches — no synthetic names', () => {
+  test('only 2 branches', () => {
     expect(g.branches).toEqual(['main', 'worktree-test'])
   })
 })
 
-describe('resolveCommitGraph — feature behind main + merge commits inflating branches', () => {
-  // main has a merge commit in history, creating a synthetic branch name
+describe('resolveCommitGraph — behind branch NOT requested: invisible in graph', () => {
+  //   Same topology, but only main requested (default — showMergedBranches off)
+  const eHash = makeHash()
+  const dHash = makeHash()
+  const wtHash = makeHash()
+  const cHash = makeHash()
+  const bHash = makeHash()
+  const aHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: DagCommit[] = [
+    dag({ hash: mainHash, message: 'main latest', refs: ['HEAD -> main'], parents: [aHash] }),
+    dag({ hash: aHash, message: 'A', refs: [], parents: [bHash] }),
+    dag({ hash: bHash, message: 'B', refs: [], parents: [cHash] }),
+    dag({ hash: cHash, message: 'C', refs: [], parents: [wtHash] }),
+    dag({ hash: wtHash, message: 'worktree work', refs: ['worktree-test'], parents: [dHash] }),
+    dag({ hash: dHash, message: 'D', refs: [], parents: [eHash] }),
+    dag({ hash: eHash, message: 'E', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main'])
+
+  test('ALL commits owned by main — worktree-test ref filtered out', () => {
+    for (const c of g.commits) {
+      expect(c.branch).toBe('main')
+    }
+  })
+
+  test('worktree-test commit has no branchRefs', () => {
+    expect(g.commits[4].branchRefs).toHaveLength(0)
+    expect(g.commits[4].isBranchTip).toBe(false)
+  })
+
+  test('only 1 branch', () => {
+    expect(g.branches).toEqual(['main'])
+  })
+})
+
+describe('resolveCommitGraph — merge + behind branch requested', () => {
   //   main tip → merge → [parent1, parent2] → ... → worktree-test tip → D
   const dHash = makeHash()
   const wtHash = makeHash()
@@ -496,19 +538,685 @@ describe('resolveCommitGraph — feature behind main + merge commits inflating b
     dag({ hash: dHash, message: 'old', refs: [], parents: [] }),
   ]
 
-  const g = resolveCommitGraph(commits, 'main')
+  const g = resolveCommitGraph(commits, 'main', ['main', 'worktree-test'])
 
-  test('synthetic branch name from merge inflates branches beyond 2', () => {
-    // This is the bug: merge creates "hotfix" synthetic → branches.length > 2
-    // which causes computeDagLayout (topology-only columns) instead of computeTipsLayout
-    expect(g.branches.length).toBe(3)
-    expect(g.branches).toContain('hotfix')
+  test('no synthetic branch — hotfix is mergedFrom, not a branch', () => {
+    expect(g.branches.length).toBe(2)
+    expect(g.branches).toContain('main')
+    expect(g.branches).toContain('worktree-test')
   })
 
   test('worktree-test still correctly owned', () => {
     expect(g.commits[4].branch).toBe('worktree-test')
     expect(g.commits[4].isBranchTip).toBe(true)
   })
+
+  test('commit below worktree-test owned by main (shared ancestry)', () => {
+    expect(g.commits[5].branch).toBe('main')
+  })
+})
+
+describe('resolveCommitGraph — merge + behind branch NOT requested', () => {
+  const dHash = makeHash()
+  const wtHash = makeHash()
+  const parent1 = makeHash()
+  const parent2 = makeHash()
+  const mergeHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: DagCommit[] = [
+    dag({ hash: mainHash, message: 'main latest', refs: ['HEAD -> main'], parents: [mergeHash] }),
+    dag({ hash: mergeHash, message: "Merge branch 'hotfix'", refs: [], parents: [parent1, parent2] }),
+    dag({ hash: parent1, message: 'pre-merge', refs: [], parents: [wtHash] }),
+    dag({ hash: parent2, message: 'hotfix work', refs: [], parents: [wtHash] }),
+    dag({ hash: wtHash, message: 'worktree base', refs: ['worktree-test'], parents: [dHash] }),
+    dag({ hash: dHash, message: 'old', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main'])
+
+  test('worktree-test ref filtered — commit owned by main', () => {
+    expect(g.commits[4].branch).toBe('main')
+    expect(g.commits[4].branchRefs).toHaveLength(0)
+  })
+
+  test('hotfix second parent stays on main with mergedFrom', () => {
+    expect(g.branches).toEqual(['main'])
+    expect(g.commits[3].branch).toBe('main')
+    expect(g.commits[3].mergedFrom).toBe('hotfix')
+  })
+})
+
+describe('resolveCommitGraph — merge synthetic name included when requested', () => {
+  const dHash = makeHash()
+  const parent1 = makeHash()
+  const parent2 = makeHash()
+  const mergeHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: DagCommit[] = [
+    dag({ hash: mainHash, message: 'main latest', refs: ['HEAD -> main'], parents: [mergeHash] }),
+    dag({ hash: mergeHash, message: "Merge branch 'hotfix'", refs: [], parents: [parent1, parent2] }),
+    dag({ hash: parent1, message: 'pre-merge', refs: [], parents: [dHash] }),
+    dag({ hash: parent2, message: 'hotfix work', refs: [], parents: [dHash] }),
+    dag({ hash: dHash, message: 'old', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main', 'hotfix'])
+
+  test('hotfix second parent stays on main with mergedFrom even when hotfix requested', () => {
+    expect(g.branches.length).toBe(1)
+    expect(g.branches).toEqual(['main'])
+    expect(g.commits[3].branch).toBe('main')
+    expect(g.commits[3].mergedFrom).toBe('hotfix')
+  })
+})
+
+describe('resolveCommitGraph — PR merge synthetic name preserved', () => {
+  // Merge commit message gives the second parent a synthetic branch name
+  // even when that branch is not in requestedBranches (it's from the merge message, not %D)
+  const baseHash = makeHash()
+  const parent1 = makeHash()
+  const parent2 = makeHash()
+  const mergeHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: DagCommit[] = [
+    dag({ hash: mainHash, message: 'latest', refs: ['HEAD -> main'], parents: [mergeHash] }),
+    dag({ hash: mergeHash, message: 'Merge pull request #30 from jimmystridh/fix/worktree-remove-missing-path', refs: [], parents: [parent1, parent2] }),
+    dag({ hash: parent1, message: 'pre-merge', refs: [], parents: [baseHash] }),
+    dag({ hash: parent2, message: 'fix worktree path', refs: [], parents: [baseHash] }),
+    dag({ hash: baseHash, message: 'old', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main'])
+
+  test('PR merge second parent stays on main with mergedFrom', () => {
+    expect(g.branches).toEqual(['main'])
+    expect(g.commits[3].branch).toBe('main')
+    expect(g.commits[3].mergedFrom).toBe('worktree-remove-missing-path')
+  })
+
+  test('all commits preserved (merge second parent kept)', () => {
+    expect(g.commits).toHaveLength(5)
+  })
+
+  test('merge commit still has 2 parents', () => {
+    const mergeCommit = g.commits.find(c => c.hash === mergeHash)!
+    expect(mergeCommit.parents).toHaveLength(2)
+  })
+})
+
+describe('resolveCommitGraph — diverged feature with shared ancestry below fork', () => {
+  // feature diverged from main at fork point, both have unique commits
+  //   main tip → M1 → fork ← F1 ← feature tip
+  //                     ↓
+  //                   old1 → old2
+  const old2Hash = makeHash()
+  const old1Hash = makeHash()
+  const forkHash = makeHash()
+  const m1Hash = makeHash()
+  const mainHash = makeHash()
+  const f1Hash = makeHash()
+  const featHash = makeHash()
+
+  const commits: DagCommit[] = [
+    dag({ hash: mainHash, message: 'main tip', refs: ['HEAD -> main'], parents: [m1Hash] }),
+    dag({ hash: featHash, message: 'feat tip', refs: ['feature'], parents: [f1Hash] }),
+    dag({ hash: m1Hash, message: 'main work', refs: [], parents: [forkHash] }),
+    dag({ hash: f1Hash, message: 'feat work', refs: [], parents: [forkHash] }),
+    dag({ hash: forkHash, message: 'fork point', refs: [], parents: [old1Hash] }),
+    dag({ hash: old1Hash, message: 'old 1', refs: [], parents: [old2Hash] }),
+    dag({ hash: old2Hash, message: 'old 2', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main', 'feature'])
+
+  test('main commits owned by main', () => {
+    expect(g.commits[0].branch).toBe('main')
+    expect(g.commits[2].branch).toBe('main')
+  })
+
+  test('feature commits owned by feature', () => {
+    expect(g.commits[1].branch).toBe('feature')
+    expect(g.commits[3].branch).toBe('feature')
+  })
+
+  test('fork point and ancestors owned by main (shared ancestry)', () => {
+    expect(g.commits[4].branch).toBe('main')
+    expect(g.commits[5].branch).toBe('main')
+    expect(g.commits[6].branch).toBe('main')
+  })
+})
+
+describe('resolveCommitGraph — two feature branches behind main (stacked tips)', () => {
+  //   main tip → A → feat-a tip → B → feat-b tip → C
+  const cHash = makeHash()
+  const featBHash = makeHash()
+  const bHash = makeHash()
+  const featAHash = makeHash()
+  const aHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: DagCommit[] = [
+    dag({ hash: mainHash, message: 'main tip', refs: ['HEAD -> main'], parents: [aHash] }),
+    dag({ hash: aHash, message: 'A', refs: [], parents: [featAHash] }),
+    dag({ hash: featAHash, message: 'feat-a work', refs: ['feat-a'], parents: [bHash] }),
+    dag({ hash: bHash, message: 'B', refs: [], parents: [featBHash] }),
+    dag({ hash: featBHash, message: 'feat-b work', refs: ['feat-b'], parents: [cHash] }),
+    dag({ hash: cHash, message: 'C initial', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main', 'feat-a', 'feat-b'])
+
+  test('main tip and A owned by main', () => {
+    expect(g.commits[0].branch).toBe('main')
+    expect(g.commits[1].branch).toBe('main')
+  })
+
+  test('feat-a tip owned by feat-a', () => {
+    expect(g.commits[2].branch).toBe('feat-a')
+  })
+
+  test('B between feat-a and feat-b owned by main (shared ancestry)', () => {
+    expect(g.commits[3].branch).toBe('main')
+  })
+
+  test('feat-b tip owned by feat-b', () => {
+    expect(g.commits[4].branch).toBe('feat-b')
+  })
+
+  test('C (initial) owned by main', () => {
+    expect(g.commits[5].branch).toBe('main')
+  })
+
+  test('branches list has all three', () => {
+    expect(g.branches).toContain('main')
+    expect(g.branches).toContain('feat-a')
+    expect(g.branches).toContain('feat-b')
+  })
+})
+
+describe('resolveCommitGraph — feature ahead of main (main is behind)', () => {
+  //   feature tip → F1 → main tip → old
+  const oldHash = makeHash()
+  const mainHash = makeHash()
+  const f1Hash = makeHash()
+  const featHash = makeHash()
+
+  const commits: DagCommit[] = [
+    dag({ hash: featHash, message: 'feat tip', refs: ['feature'], parents: [f1Hash] }),
+    dag({ hash: f1Hash, message: 'feat work', refs: [], parents: [mainHash] }),
+    dag({ hash: mainHash, message: 'main tip', refs: ['HEAD -> main'], parents: [oldHash] }),
+    dag({ hash: oldHash, message: 'old', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main', 'feature'])
+
+  test('feature tip and F1 owned by feature', () => {
+    expect(g.commits[0].branch).toBe('feature')
+    expect(g.commits[1].branch).toBe('feature')
+  })
+
+  test('main tip owned by main', () => {
+    expect(g.commits[2].branch).toBe('main')
+  })
+
+  test('commits below main tip owned by main', () => {
+    expect(g.commits[3].branch).toBe('main')
+  })
+})
+
+// ─── computeDagLayout ──────────────────────────────────────────
+
+// Helper: build ResolvedCommit for layout tests
+function resolved(overrides: Partial<ResolvedCommit> & { hash: string; message: string; branch: string }): ResolvedCommit {
+  return {
+    shortHash: overrides.hash.slice(0, 7),
+    author: 'test',
+    relativeDate: '1 min ago',
+    parents: [],
+    branchRefs: [],
+    tags: [],
+    isBranchTip: false,
+    isHead: false,
+    ...overrides,
+  }
+}
+
+/** Assert every commit has an edge to every parent in the graph */
+function assertNoOrphans(layout: DagLayout, commits: ResolvedCommit[]) {
+  const hashToRow = new Map<string, number>()
+  for (const n of layout.nodes) hashToRow.set(n.commit.hash, n.row)
+
+  for (const c of commits) {
+    for (const parentHash of c.parents) {
+      if (!hashToRow.has(parentHash)) continue // parent not in graph
+      const row = hashToRow.get(c.hash)!
+      const parentRow = hashToRow.get(parentHash)!
+      const hasEdge = layout.edges.some(e =>
+        (e.fromRow === row && e.toRow === parentRow) ||
+        (e.fromRow === row && e.targetHash === parentHash)
+      )
+      if (!hasEdge) {
+        throw new Error(`Missing edge: ${c.hash.slice(0, 7)} (row ${row}) → ${parentHash.slice(0, 7)} (row ${parentRow})`)
+      }
+    }
+  }
+}
+
+describe('computeDagLayout — no orphaned nodes (every parent link has an edge)', () => {
+  // linear: main tip → A → worktree-test tip → B → C
+  const cHash = makeHash()
+  const bHash = makeHash()
+  const wtHash = makeHash()
+  const aHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: ResolvedCommit[] = [
+    resolved({ hash: mainHash, message: 'main tip', branch: 'main', parents: [aHash], branchRefs: ['main'], isBranchTip: true, isHead: true }),
+    resolved({ hash: aHash, message: 'A', branch: 'main', parents: [wtHash] }),
+    resolved({ hash: wtHash, message: 'wt work', branch: 'worktree-test', parents: [bHash], branchRefs: ['worktree-test'], isBranchTip: true }),
+    resolved({ hash: bHash, message: 'B', branch: 'main', parents: [cHash] }),
+    resolved({ hash: cHash, message: 'C', branch: 'main', parents: [] }),
+  ]
+
+  const layout = computeDagLayout(commits, 'main')
+
+  test('all commits present', () => {
+    expect(layout.nodes).toHaveLength(5)
+  })
+
+  test('no orphans — every parent link has an edge', () => {
+    assertNoOrphans(layout, commits)
+  })
+})
+
+describe('computeDagLayout — behind-branch tip stays in base column', () => {
+  const bHash = makeHash()
+  const wtHash = makeHash()
+  const aHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: ResolvedCommit[] = [
+    resolved({ hash: mainHash, message: 'main tip', branch: 'main', parents: [aHash], branchRefs: ['main'], isBranchTip: true, isHead: true }),
+    resolved({ hash: aHash, message: 'A', branch: 'main', parents: [wtHash] }),
+    resolved({ hash: wtHash, message: 'wt', branch: 'worktree-test', parents: [bHash], branchRefs: ['worktree-test'], isBranchTip: true }),
+    resolved({ hash: bHash, message: 'B', branch: 'main', parents: [] }),
+  ]
+
+  const layout = computeDagLayout(commits, 'main')
+  const nodeByHash = new Map(layout.nodes.map(n => [n.commit.hash, n]))
+
+  test('worktree-test tip in same column as main (no gap)', () => {
+    const mainCol = nodeByHash.get(mainHash)!.column
+    const wtCol = nodeByHash.get(wtHash)!.column
+    expect(wtCol).toBe(mainCol)
+  })
+
+  test('no orphans', () => {
+    assertNoOrphans(layout, commits)
+  })
+})
+
+describe('computeDagLayout — merge second parent gets own column', () => {
+  // main tip → merge → [first-parent, second-parent] → base
+  const baseHash = makeHash()
+  const p1Hash = makeHash()
+  const p2Hash = makeHash()
+  const mergeHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: ResolvedCommit[] = [
+    resolved({ hash: mainHash, message: 'main tip', branch: 'main', parents: [mergeHash], branchRefs: ['main'], isBranchTip: true, isHead: true }),
+    resolved({ hash: mergeHash, message: "Merge branch 'fix'", branch: 'main', parents: [p1Hash, p2Hash] }),
+    resolved({ hash: p1Hash, message: 'pre-merge', branch: 'main', parents: [baseHash] }),
+    resolved({ hash: p2Hash, message: 'fix work', branch: 'fix', parents: [baseHash], branchRefs: ['fix'], isBranchTip: true }),
+    resolved({ hash: baseHash, message: 'base', branch: 'main', parents: [] }),
+  ]
+
+  const layout = computeDagLayout(commits, 'main')
+  const nodeByHash = new Map(layout.nodes.map(n => [n.commit.hash, n]))
+
+  test('second parent in different column from main', () => {
+    const mainCol = nodeByHash.get(mainHash)!.column
+    const p2Col = nodeByHash.get(p2Hash)!.column
+    expect(p2Col).toBe(mainCol ? 0 : 1) // just not the same
+    if (p2Col === mainCol) throw new Error('merge second parent should not be in main column')
+  })
+
+  test('no orphans', () => {
+    assertNoOrphans(layout, commits)
+  })
+})
+
+describe('computeDagLayout — merge parent column not stolen by releasing base column', () => {
+  // Regression: merge releases col 0 for first-parent, then second parent grabs col 0
+  // merge → [first-parent (reserved elsewhere), second-parent]
+  const baseHash = makeHash()
+  const fpHash = makeHash()  // first parent, already in another column
+  const spHash = makeHash()  // second parent
+  const mergeHash = makeHash()
+  const tipHash = makeHash()
+
+  // Simulate: tip → merge, first parent was reserved in col 1 by a prior merge
+  const commits: ResolvedCommit[] = [
+    resolved({ hash: tipHash, message: 'tip', branch: 'main', parents: [mergeHash], branchRefs: ['main'], isBranchTip: true, isHead: true }),
+    resolved({ hash: mergeHash, message: "Merge branch 'feat'", branch: 'main', parents: [fpHash, spHash] }),
+    resolved({ hash: fpHash, message: 'first parent', branch: 'main', parents: [baseHash] }),
+    resolved({ hash: spHash, message: 'feat work', branch: 'feat', parents: [baseHash], branchRefs: ['feat'], isBranchTip: true }),
+    resolved({ hash: baseHash, message: 'base', branch: 'main', parents: [] }),
+  ]
+
+  const layout = computeDagLayout(commits, 'main')
+  const nodeByHash = new Map(layout.nodes.map(n => [n.commit.hash, n]))
+
+  test('second parent not in base column', () => {
+    const mainCol = nodeByHash.get(tipHash)!.column
+    const spCol = nodeByHash.get(spHash)!.column
+    if (spCol === mainCol) throw new Error('second parent should not steal base column')
+  })
+
+  test('no orphans', () => {
+    assertNoOrphans(layout, commits)
+  })
+})
+
+describe('computeDagLayout — two stacked behind-branch tips stay in base column', () => {
+  // main tip → A → feat-a tip → B → feat-b tip → C
+  const cHash = makeHash()
+  const featBHash = makeHash()
+  const bHash = makeHash()
+  const featAHash = makeHash()
+  const aHash = makeHash()
+  const mainHash = makeHash()
+
+  const commits: ResolvedCommit[] = [
+    resolved({ hash: mainHash, message: 'main tip', branch: 'main', parents: [aHash], branchRefs: ['main'], isBranchTip: true, isHead: true }),
+    resolved({ hash: aHash, message: 'A', branch: 'main', parents: [featAHash] }),
+    resolved({ hash: featAHash, message: 'feat-a', branch: 'feat-a', parents: [bHash], branchRefs: ['feat-a'], isBranchTip: true }),
+    resolved({ hash: bHash, message: 'B', branch: 'main', parents: [featBHash] }),
+    resolved({ hash: featBHash, message: 'feat-b', branch: 'feat-b', parents: [cHash], branchRefs: ['feat-b'], isBranchTip: true }),
+    resolved({ hash: cHash, message: 'C', branch: 'main', parents: [] }),
+  ]
+
+  const layout = computeDagLayout(commits, 'main')
+  const nodeByHash = new Map(layout.nodes.map(n => [n.commit.hash, n]))
+
+  test('both behind-branch tips in same column as main', () => {
+    const mainCol = nodeByHash.get(mainHash)!.column
+    expect(nodeByHash.get(featAHash)!.column).toBe(mainCol)
+    expect(nodeByHash.get(featBHash)!.column).toBe(mainCol)
+  })
+
+  test('no orphans', () => {
+    assertNoOrphans(layout, commits)
+  })
+})
+
+describe('end-to-end: unrequested branch refs are filtered out', () => {
+  // git %D shows ALL refs, but only requested branches should affect ownership
+  //   main tip → A → B → commit with [origin/main, origin/HEAD, worktree-test] → C → D
+  // Only 'main' was requested — worktree-test should be invisible
+  const dHash = makeHash()
+  const cHash = makeHash()
+  const wtHash = makeHash()
+  const bHash = makeHash()
+  const aHash = makeHash()
+  const mainHash = makeHash()
+
+  const rawCommits: DagCommit[] = [
+    dag({ hash: mainHash, message: 'main tip', refs: ['HEAD -> main'], parents: [aHash] }),
+    dag({ hash: aHash, message: 'A', refs: [], parents: [bHash] }),
+    dag({ hash: bHash, message: 'B', refs: [], parents: [wtHash] }),
+    dag({ hash: wtHash, message: 'wt', refs: ['origin/main', 'origin/HEAD', 'worktree-test'], parents: [cHash] }),
+    dag({ hash: cHash, message: 'C', refs: [], parents: [dHash] }),
+    dag({ hash: dHash, message: 'D', refs: [], parents: [] }),
+  ]
+
+  const graph = resolveCommitGraph(rawCommits, 'main', ['main'])
+
+  test('commit with unrequested worktree-test ref is owned by main', () => {
+    expect(graph.commits[3].branch).toBe('main')
+    // origin/main passes through as display ref, worktree-test filtered out
+    expect(graph.commits[3].branchRefs).toEqual(['origin/main'])
+  })
+
+  test('all commits owned by main', () => {
+    for (const c of graph.commits) {
+      expect(c.branch).toBe('main')
+    }
+  })
+
+  test('only one branch in graph', () => {
+    expect(graph.branches).toEqual(['main'])
+  })
+})
+
+describe('end-to-end: requested branch refs are preserved', () => {
+  // Same data, but worktree-test IS requested
+  const dHash = makeHash()
+  const cHash = makeHash()
+  const wtHash = makeHash()
+  const bHash = makeHash()
+  const aHash = makeHash()
+  const mainHash = makeHash()
+
+  const rawCommits: DagCommit[] = [
+    dag({ hash: mainHash, message: 'main tip', refs: ['HEAD -> main'], parents: [aHash] }),
+    dag({ hash: aHash, message: 'A', refs: [], parents: [bHash] }),
+    dag({ hash: bHash, message: 'B', refs: [], parents: [wtHash] }),
+    dag({ hash: wtHash, message: 'wt', refs: ['origin/main', 'origin/HEAD', 'worktree-test'], parents: [cHash] }),
+    dag({ hash: cHash, message: 'C', refs: [], parents: [dHash] }),
+    dag({ hash: dHash, message: 'D', refs: [], parents: [] }),
+  ]
+
+  const graph = resolveCommitGraph(rawCommits, 'main', ['main', 'worktree-test'])
+
+  test('worktree-test commit owned by worktree-test when requested', () => {
+    expect(graph.commits[3].branch).toBe('worktree-test')
+    expect(graph.commits[3].branchRefs).toContain('worktree-test')
+    expect(graph.commits[3].branchRefs).toContain('origin/main')
+  })
+
+  test('commits below worktree-test owned by main (shared ancestry)', () => {
+    expect(graph.commits[4].branch).toBe('main')
+    expect(graph.commits[5].branch).toBe('main')
+  })
+})
+
+// ─── Real-world repro: PR merge second parents appear as orphan dots ────────
+
+describe('real-world: PR merge second parents get synthetic branch names', () => {
+  // Exact topology from slayzone repo: 3 chained PR merges where git log
+  // includes second-parent commits (935968d, 81eefa1, 7d1ff27).
+  // These get synthetic branch names from merge commit messages.
+  const commits: DagCommit[] = [
+    dag({ hash: '512265a', message: 'feat: double git panel commit count', refs: ['HEAD -> main'], parents: ['a4be17b'] }),
+    dag({ hash: 'a4be17b', message: 'Merge pull request #30 from jimmystridh/fix/worktree-remove-missing-path', refs: [], parents: ['caa4377', '935968d'] }),
+    dag({ hash: '935968d', message: 'fix(worktrees): handle already-deleted worktree path', refs: [], parents: ['fd05813'] }),
+    dag({ hash: 'caa4377', message: 'release: v0.2.6', refs: ['tag: v0.2.6'], parents: ['28ac5b8'] }),
+    dag({ hash: '28ac5b8', message: 'chore(settings): rename theme labels', refs: [], parents: ['1eefed1'] }),
+    dag({ hash: '1eefed1', message: 'fix(usage): add caching', refs: [], parents: ['b448b61'] }),
+    dag({ hash: 'b448b61', message: 'feat(integrations): add repo selector', refs: [], parents: ['d7eab12'] }),
+    dag({ hash: 'd7eab12', message: 'docs: add e2e test isolation notes', refs: [], parents: ['3037874'] }),
+    dag({ hash: '3037874', message: 'Merge pull request #27 from jimmystridh/fix/postinstall-electron-rebuild', refs: [], parents: ['ad1c3b7', '81eefa1'] }),
+    dag({ hash: '81eefa1', message: 'fix: use scoped electron-rebuild in postinstall', refs: [], parents: ['fd05813'] }),
+    dag({ hash: 'ad1c3b7', message: 'Merge pull request #31 from zggf-zggf/fix/terminal-copy-paste-linux', refs: [], parents: ['783008c', '7d1ff27'] }),
+    dag({ hash: '7d1ff27', message: 'fix(terminal): add Ctrl+Shift+C/V for copy/paste', refs: [], parents: ['363d1ea'] }),
+    dag({ hash: '783008c', message: 'refactor(test-panel): stacked card layout', refs: [], parents: ['8078e51'] }),
+    dag({ hash: '8078e51', message: 'feat(integrations): bidirectional sync', refs: [], parents: ['5c141ab'] }),
+    dag({ hash: '5c141ab', message: 'feat(test-panel): add file notes', refs: [], parents: ['3d22d44'] }),
+    dag({ hash: '3d22d44', message: 'feat(nix): add flake', refs: [], parents: ['363d1ea'] }),
+    dag({ hash: '363d1ea', message: 'fix(ci): merge multi-arch manifests', refs: [], parents: ['f971f0e'] }),
+    dag({ hash: 'f971f0e', message: 'some commit', refs: [], parents: ['996d4ee'] }),
+    dag({ hash: '996d4ee', message: 'fix(ai-config): enforce frontmatter', refs: [], parents: ['fd05813'] }),
+    dag({ hash: 'fd05813', message: 'refactor(ai-config): unify context sync', refs: [], parents: ['af40784'] }),
+    dag({ hash: 'af40784', message: 'some old commit', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main'])
+
+  test('merge second-parent commits stay on main with mergedFrom', () => {
+    const c935 = g.commits.find(c => c.hash === '935968d')!
+    const c81e = g.commits.find(c => c.hash === '81eefa1')!
+    const c7d1 = g.commits.find(c => c.hash === '7d1ff27')!
+    expect(c935.branch).toBe('main')
+    expect(c935.mergedFrom).toBe('worktree-remove-missing-path')
+    expect(c81e.branch).toBe('main')
+    expect(c81e.mergedFrom).toBe('postinstall-electron-rebuild')
+    expect(c7d1.branch).toBe('main')
+    expect(c7d1.mergedFrom).toBe('terminal-copy-paste-linux')
+  })
+
+  test('merge commits still have 2 parents', () => {
+    const merge30 = g.commits.find(c => c.hash === 'a4be17b')!
+    const merge27 = g.commits.find(c => c.hash === '3037874')!
+    const merge31 = g.commits.find(c => c.hash === 'ad1c3b7')!
+    expect(merge30.parents).toHaveLength(2)
+    expect(merge27.parents).toHaveLength(2)
+    expect(merge31.parents).toHaveLength(2)
+  })
+
+  test('worktree-test ref NOT in output (filtered by requestedBranches)', () => {
+    // Even though worktree-test is not in this dataset, verify the filtering
+    // principle: only %D refs in requestedBranches survive
+    for (const c of g.commits) {
+      expect(c.branchRefs.includes('worktree-test')).toBe(false)
+    }
+  })
+
+  test('all 21 commits preserved', () => {
+    expect(g.commits).toHaveLength(21)
+  })
+})
+
+// ─── Real git history: PR merge second parents ─────────────────
+// Exact topo-order from `git log --topo-order main` around the 3 PR merges.
+// Rows 5-28 from the real log. requestedBranches=['main'].
+
+describe('real git history: resolveCommitGraph + computeDagLayout', () => {
+  // Trimmed to rows 5-28: covers 3 PR merges + their second parents + surrounding main commits
+  const commits: DagCommit[] = [
+    dag({ hash: '512265a', message: 'feat: double git panel commit count', refs: [], parents: ['a4be17b'] }),
+    dag({ hash: 'a4be17b', message: 'Merge pull request #30 from jimmystridh/fix/worktree-remove-missing-path', refs: [], parents: ['caa4377', '935968d'] }),
+    dag({ hash: '935968d', message: 'fix(worktrees): handle already-deleted worktree path', refs: [], parents: ['fd05813'] }),
+    dag({ hash: 'caa4377', message: 'release: v0.2.6', refs: ['tag: v0.2.6'], parents: ['28ac5b8'] }),
+    dag({ hash: '28ac5b8', message: 'chore(settings): rename theme labels', refs: [], parents: ['1eefed1'] }),
+    dag({ hash: '1eefed1', message: 'fix(usage): add caching', refs: [], parents: ['b448b61'] }),
+    dag({ hash: 'b448b61', message: 'feat(integrations): add repo selector', refs: [], parents: ['d7eab12'] }),
+    dag({ hash: 'd7eab12', message: 'docs: add e2e test isolation notes', refs: [], parents: ['3037874'] }),
+    dag({ hash: '3037874', message: 'Merge pull request #27 from jimmystridh/fix/postinstall-electron-rebuild', refs: [], parents: ['ad1c3b7', '81eefa1'] }),
+    dag({ hash: '81eefa1', message: 'fix: use scoped electron-rebuild in postinstall', refs: [], parents: ['fd05813'] }),
+    dag({ hash: 'ad1c3b7', message: 'Merge pull request #31 from zggf-zggf/fix/terminal-copy-paste-linux', refs: [], parents: ['783008c', '7d1ff27'] }),
+    dag({ hash: '7d1ff27', message: 'fix(terminal): add Ctrl+Shift+C/V', refs: [], parents: ['363d1ea'] }),
+    dag({ hash: '783008c', message: 'refactor(test-panel): stacked card layout', refs: [], parents: ['8078e51'] }),
+    dag({ hash: '8078e51', message: 'feat(integrations): bidirectional sync', refs: [], parents: ['5c141ab'] }),
+    dag({ hash: '5c141ab', message: 'feat(test-panel): add file notes', refs: [], parents: ['847ffc2'] }),
+    dag({ hash: '847ffc2', message: 'refactor(test-panel): merge label mgmt', refs: [], parents: ['04fa80d'] }),
+    dag({ hash: '04fa80d', message: 'feat(test-panel): multi-label support', refs: [], parents: ['977c091'] }),
+    dag({ hash: '977c091', message: 'feat(terminal): theme picker', refs: [], parents: ['573dc08'] }),
+    dag({ hash: '573dc08', message: 'feat: SQLite database backup', refs: [], parents: ['70686d2'] }),
+    dag({ hash: '70686d2', message: 'feat(test-panel): test file discovery', refs: [], parents: ['51bb2e1'] }),
+    dag({ hash: '51bb2e1', message: 'docs: update install instructions', refs: [], parents: ['972131e'] }),
+    dag({ hash: '972131e', message: 'fix(terminal): sync query responses', refs: [], parents: ['3d22d44'] }),
+    dag({ hash: '3d22d44', message: 'feat(nix): add flake', refs: [], parents: ['363d1ea'] }),
+    dag({ hash: '363d1ea', message: 'fix(ci): merge multi-arch manifests', refs: [], parents: ['f971f0e'] }),
+    dag({ hash: 'f971f0e', message: 'fix(ci): only include installer exe', refs: [], parents: ['fd05813'] }),
+    dag({ hash: 'fd05813', message: 'refactor(ai-config): unify context sync', refs: [], parents: [] }),
+  ]
+
+  // Add HEAD -> main to first commit in the full set (512265a is not the actual HEAD,
+  // but for this slice it's the topmost commit visible)
+  commits[0].refs = ['HEAD -> main']
+
+  const g = resolveCommitGraph(commits, 'main', ['main'])
+  const layout = computeDagLayout(g.commits, g.baseBranch)
+
+  test('935968d stays on main with mergedFrom from merge #30', () => {
+    const c = g.commits.find(c => c.hash === '935968d')!
+    expect(c.branch).toBe('main')
+    expect(c.mergedFrom).toBe('worktree-remove-missing-path')
+    // Parents empty — dead-end dot, no downward edge
+    expect(c.parents).toEqual([])
+  })
+
+  test('81eefa1 stays on main with mergedFrom from merge #27', () => {
+    const c = g.commits.find(c => c.hash === '81eefa1')!
+    expect(c.branch).toBe('main')
+    expect(c.mergedFrom).toBe('postinstall-electron-rebuild')
+  })
+
+  test('7d1ff27 stays on main with mergedFrom from merge #31', () => {
+    const c = g.commits.find(c => c.hash === '7d1ff27')!
+    expect(c.branch).toBe('main')
+    expect(c.mergedFrom).toBe('terminal-copy-paste-linux')
+  })
+
+  test('merge commits are on main', () => {
+    const m30 = g.commits.find(c => c.hash === 'a4be17b')!
+    const m27 = g.commits.find(c => c.hash === '3037874')!
+    const m31 = g.commits.find(c => c.hash === 'ad1c3b7')!
+    expect(m30.branch).toBe('main')
+    expect(m27.branch).toBe('main')
+    expect(m31.branch).toBe('main')
+  })
+
+  test('935968d is on a side column (blob for merged branch)', () => {
+    const node = layout.nodes.find(n => n.commit.hash === '935968d')
+    expect(node !== undefined).toBe(true)
+    expect(node!.column > 0).toBe(true)
+  })
+
+  test('7d1ff27 is on a side column (blob for merged branch)', () => {
+    const node = layout.nodes.find(n => n.commit.hash === '7d1ff27')
+    expect(node !== undefined).toBe(true)
+    expect(node!.column > 0).toBe(true)
+  })
+
+  test('935968d has an edge from merge a4be17b', () => {
+    const mergeRow = layout.nodes.findIndex(n => n.commit.hash === 'a4be17b')
+    const targetCol = layout.nodes.find(n => n.commit.hash === '935968d')!.column
+    const edge = layout.edges.find(e =>
+      e.fromRow === mergeRow && e.toCol === targetCol
+    )
+    expect(edge !== undefined).toBe(true)
+  })
+
+  test('935968d has no downward edge (dead-end dot)', () => {
+    const srcRow = layout.nodes.findIndex(n => n.commit.hash === '935968d')
+    const srcCol = layout.nodes.find(n => n.commit.hash === '935968d')!.column
+    const outEdges = layout.edges.filter(e => e.fromRow === srcRow && e.fromCol === srcCol)
+    expect(outEdges.length).toBe(0)
+  })
+
+  test('no commit has empty/undefined branch', () => {
+    for (const c of g.commits) {
+      expect(c.branch !== '' && c.branch !== undefined).toBe(true)
+    }
+  })
+
+  test('935968d has different colorIndex than main (colored by mergedFrom)', () => {
+    const mainNode = layout.nodes.find(n => n.commit.hash === '512265a')
+    const prNode = layout.nodes.find(n => n.commit.hash === '935968d')
+    if (!mainNode || !prNode) throw new Error(`mainNode=${!!mainNode} prNode=${!!prNode} total=${layout.nodes.length}`)
+    expect(prNode.colorIndex !== mainNode.colorIndex).toBe(true)
+  })
+
+  test('7d1ff27 has different colorIndex than main (colored by mergedFrom)', () => {
+    const mainNode = layout.nodes.find(n => n.commit.hash === '512265a')
+    const prNode = layout.nodes.find(n => n.commit.hash === '7d1ff27')
+    if (!mainNode || !prNode) throw new Error(`mainNode=${!!mainNode} prNode=${!!prNode} total=${layout.nodes.length}`)
+    expect(prNode.colorIndex !== mainNode.colorIndex).toBe(true)
+  })
+
+  // Print layout for visual inspection
+  console.log('  [layout debug]')
+  for (const node of layout.nodes) {
+    const pad = '  '.repeat(node.column)
+    const marker = node.isMerge ? 'M' : node.isBranchTip ? 'T' : '·'
+    console.log(`    col=${node.column} ${pad}${marker} ${node.commit.hash.slice(0,7)} [${node.commit.branch}] ${node.commit.message.slice(0,50)}`)
+  }
 })
 
 // ─── Summary ───────────────────────────────────────────────────

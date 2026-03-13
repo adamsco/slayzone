@@ -248,6 +248,8 @@ export interface ResolvedCommit {
   tags: string[]
   isBranchTip: boolean
   isHead: boolean
+  /** Branch name this commit came from, extracted from merge commit message (deleted PR branches) */
+  mergedFrom?: string
 }
 
 export interface ResolvedGraph {

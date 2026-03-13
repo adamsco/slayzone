@@ -1175,7 +1175,7 @@ function parseRef(raw: string): { type: 'branch' | 'remote' | 'tag' | 'head'; na
  * Resolve raw DagCommit[] into a ResolvedGraph with all git-ref semantics pre-processed.
  * Pure function — no git calls.
  */
-export function resolveCommitGraph(commits: DagCommit[], baseBranch: string): ResolvedGraph {
+export function resolveCommitGraph(commits: DagCommit[], baseBranch: string, requestedBranches?: string[]): ResolvedGraph {
   if (commits.length === 0) return { commits: [], baseBranch, branches: [] }
 
   // Collect all known local branch names (from refs)
@@ -1199,56 +1199,85 @@ export function resolveCommitGraph(commits: DagCommit[], baseBranch: string): Re
       if (parsed.type === 'branch') {
         branchRefs.push(parsed.name)
       } else if (parsed.type === 'remote') {
-        // Collapse origin/X → X if local X exists, otherwise show collapsed name
         const parts = parsed.name.split('/')
         const localName = parts.slice(1).join('/')
         if (localName === 'HEAD') {
           // Skip origin/HEAD — it's not a real branch
         } else if (!localBranchNames.has(localName)) {
+          // No local branch — show as the local name
           branchRefs.push(localName)
+        } else {
+          // Local exists — show origin/X so user can see remote tip position
+          branchRefs.push(`origin/${localName}`)
         }
-        // If local exists, skip — the local ref already covers it
       } else if (parsed.type === 'tag') {
         tags.push(parsed.name)
       }
     }
-    commitParsedRefs.set(c.hash, { branchRefs, tags, isHead })
+    // Filter out branch refs not in the requested set (git %D shows ALL refs)
+    const filteredRefs = requestedBranches
+      ? branchRefs.filter(r => requestedBranches.includes(r) || requestedBranches.includes(r.replace(/^origin\//, '')))
+      : branchRefs
+    commitParsedRefs.set(c.hash, { branchRefs: filteredRefs, tags, isHead })
   }
 
   // --- 3-pass branch ownership ---
   const commitBranchName = new Map<string, string>()
 
-  // Pass 1: map branch-tip commits to their branch name
+  // Pass 1: map branch-tip commits to their branch name (skip origin/ display refs)
   for (const c of commits) {
     const parsed = commitParsedRefs.get(c.hash)!
-    if (parsed.branchRefs.length > 0) {
-      commitBranchName.set(c.hash, parsed.branchRefs[0])
+    const ownerRef = parsed.branchRefs.find(r => !r.startsWith('origin/'))
+    if (ownerRef) {
+      commitBranchName.set(c.hash, ownerRef)
     }
   }
 
-  // Pass 2: for merge commits, assign synthetic branch names to second+ parents
+  // Pass 2: for merge commits, extract source branch name for display (mergedFrom).
+  // These are NOT real branches — just metadata for the commit row label.
+  // mergedFrom commits get their parents overridden to the merge's first parent
+  // so they render as a simple bump (merge → side dot → back to main) with no long edges.
   const hashToCommit = new Map<string, DagCommit>()
   for (const c of commits) hashToCommit.set(c.hash, c)
+  const mergedFromMap = new Map<string, string>()
+  const mergedFromParentOverride = new Map<string, string[]>()
   for (const c of commits) {
     if (c.parents.length < 2) continue
+    const mergeMatch = c.message.match(/from\s+\S+\/(.+)$/) ?? c.message.match(/Merge branch '([^']+)'/)
+    if (!mergeMatch) continue
     for (let p = 1; p < c.parents.length; p++) {
       const parentHash = c.parents[p]
-      if (commitBranchName.has(parentHash)) continue
-      const mergeMatch = c.message.match(/from\s+\S+\/(.+)$/) ?? c.message.match(/Merge branch '([^']+)'/)
-      const syntheticName = mergeMatch ? mergeMatch[1] : `merged-${c.hash.slice(0, 7)}-p${p}`
-      commitBranchName.set(parentHash, syntheticName)
+      if (!commitBranchName.has(parentHash)) {
+        mergedFromMap.set(parentHash, mergeMatch[1])
+        // No parents — the dot is a dead-end, no downward edge
+        mergedFromParentOverride.set(parentHash, [])
+      }
     }
   }
 
   // Pass 3: propagate branch name down through first-parent chain
+  // Base branch gets priority: it skips past other branch tips to claim shared ancestry
   for (const c of commits) {
     if (!commitBranchName.has(c.hash)) continue
     const name = commitBranchName.get(c.hash)!
+    const isBase = name === baseBranch
     let current = c
     while (current.parents.length > 0) {
       const parent = hashToCommit.get(current.parents[0])
       if (!parent) break
-      if (commitBranchName.has(parent.hash) && commitBranchName.get(parent.hash) !== name) break
+      const existing = commitBranchName.get(parent.hash)
+      if (existing && existing !== name) {
+        if (isBase) {
+          // Base branch: skip explicit branch tips but keep claiming ancestors
+          const parentParsed = commitParsedRefs.get(parent.hash)
+          if (parentParsed && parentParsed.branchRefs.length > 0) {
+            current = parent
+            continue
+          }
+        } else {
+          break
+        }
+      }
       commitBranchName.set(parent.hash, name)
       current = parent
     }
@@ -1269,18 +1298,20 @@ export function resolveCommitGraph(commits: DagCommit[], baseBranch: string): Re
   // Build resolved commits
   const resolved: ResolvedCommit[] = commits.map(c => {
     const parsed = commitParsedRefs.get(c.hash)!
+    const commitBranch = commitBranchName.get(c.hash) ?? baseBranch
     return {
       hash: c.hash,
       shortHash: c.shortHash,
       message: c.message,
       author: c.author,
       relativeDate: c.relativeDate,
-      parents: c.parents,
-      branch: commitBranchName.get(c.hash) ?? baseBranch,
+      parents: mergedFromParentOverride.get(c.hash) ?? c.parents,
+      branch: commitBranch,
       branchRefs: parsed.branchRefs,
       tags: parsed.tags,
-      isBranchTip: parsed.branchRefs.length > 0,
-      isHead: parsed.isHead
+      isBranchTip: parsed.branchRefs.some(r => !r.startsWith('origin/')),
+      isHead: parsed.isHead,
+      ...(mergedFromMap.has(c.hash) ? { mergedFrom: mergedFromMap.get(c.hash) } : {})
     }
   })
 
@@ -1371,7 +1402,7 @@ export async function getResolvedCommitDag(
   repoPath: string, limit: number, branches: string[] | undefined, baseBranch: string
 ): Promise<ResolvedGraph> {
   const raw = await getCommitDag(repoPath, limit, branches)
-  return resolveCommitGraph(raw, baseBranch)
+  return resolveCommitGraph(raw, baseBranch, branches)
 }
 
 /** IPC-ready: fetch fork comparison data + resolve in one call */
