@@ -279,6 +279,16 @@
   flex: 1;
 }
 
+/* Prevent Tailwind .visible/.invisible class names from colliding with xterm's
+   identically-named scrollbar classes. Tailwind's .visible adds
+   `visibility: visible` which overrides a parent's `visibility: hidden`,
+   making xterm scrollbars punch through hidden tabs. Force inheritance so
+   scrollbar visibility always follows the container. */
+.xterm .xterm-scrollable-element > .visible,
+.xterm .xterm-scrollable-element > .invisible {
+  visibility: inherit;
+}
+
 /* Hide scrollbar but keep scrolling */
 .scrollbar-hide {
   -ms-overflow-style: none;
