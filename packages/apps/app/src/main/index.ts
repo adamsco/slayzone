@@ -988,8 +988,9 @@ app.whenReady().then(async () => {
     console.error('[MCP] Failed to start server:', err)
   })
 
-  linearSyncPoller = startSyncPoller(db)
-  discoveryPoller = startDiscoveryPoller(db)
+  const notifyTasksChanged = () => { mainWindow?.webContents.send('tasks:changed') }
+  linearSyncPoller = startSyncPoller(db, notifyTasksChanged)
+  discoveryPoller = startDiscoveryPoller(db, notifyTasksChanged)
   logBoot('integration pollers started (sync 10s, discovery 60s)')
 
   // Push to providers immediately after local task edits (skip in E2E — tests exercise push explicitly)
@@ -1004,7 +1005,7 @@ app.whenReady().then(async () => {
   if (!isPlaywright) {
     // Push new tasks to providers (two_way sync)
     ipcMain.on('db:tasks:create:done', (_event, taskId: string, projectId: string) => {
-      void pushNewTaskToProviders(db, taskId, projectId)
+      void pushNewTaskToProviders(db, taskId, projectId).then(notifyTasksChanged)
     })
 
     // Archive/unarchive sync to providers
