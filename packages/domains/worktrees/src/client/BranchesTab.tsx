@@ -14,9 +14,8 @@ const RENDER_LIMIT = 500   // cap DOM nodes for performance
 const DEFAULT_CONFIG: CommitGraphConfig = {
   baseBranch: '',  // resolved at runtime
   collapsed: false,
-  includeChildBranches: true,
-  includeMergedBranches: false,
-  includeTags: true,
+  showBranches: true,
+  showTags: true,
 }
 
 // --- Shared hook: all branch graph state + data fetching ---
@@ -62,14 +61,10 @@ export function useBranchGraph(
 
       const branchSet = new Set<string>([baseBranch])
 
-      if (config.includeChildBranches || config.includeMergedBranches) {
+      if (config.showBranches) {
         const result = await window.api.git.resolveChildBranches(projectPath, baseBranch)
-        if (config.includeChildBranches) {
-          for (const child of result.children) branchSet.add(child)
-        }
-        if (config.includeMergedBranches) {
-          for (const merged of result.merged) branchSet.add(merged)
-        }
+        for (const child of result.children) branchSet.add(child)
+        for (const merged of result.merged) branchSet.add(merged)
       }
 
       const graph = await window.api.git.getResolvedCommitDag(
@@ -176,7 +171,7 @@ export function BranchesTab({ projectPath, visible, defaultBaseBranch, embedded 
       graph={state.dagGraph}
       filterQuery={state.filter || undefined}
       tipsOnly={state.config.collapsed}
-      includeTags={state.config.includeTags}
+      includeTags={state.config.showTags}
       renderLimit={RENDER_LIMIT}
     />
   ) : (
@@ -190,7 +185,7 @@ export function BranchesTab({ projectPath, visible, defaultBaseBranch, embedded 
       <div className="h-full flex flex-col p-3">
         <div className="flex-1 min-h-0 rounded-lg border bg-muted/30 p-2 flex flex-col">
           <div className="shrink-0 pb-2">{toolbar}</div>
-          <div className="flex-1 min-h-0 overflow-y-auto">{graphContent}</div>
+          <div className="flex-1 min-h-0">{graphContent}</div>
         </div>
       </div>
     )
@@ -200,7 +195,7 @@ export function BranchesTab({ projectPath, visible, defaultBaseBranch, embedded 
     <div className="h-full flex flex-col">
       <div className="shrink-0 p-3 pb-0">{toolbar}</div>
       <div className="flex-1 min-h-0 p-3">
-        <div className="rounded-lg border bg-muted/30 p-2 h-full overflow-y-auto">
+        <div className="rounded-lg border bg-muted/30 p-2 h-full">
           {graphContent}
         </div>
       </div>
@@ -220,7 +215,7 @@ export function BranchGraphCard({ state, className }: { state: BranchGraphState;
       graph={state.dagGraph}
       filterQuery={state.filter || undefined}
       tipsOnly={state.config.collapsed}
-      includeTags={state.config.includeTags}
+      includeTags={state.config.showTags}
       renderLimit={RENDER_LIMIT}
     />
   ) : (
@@ -230,7 +225,7 @@ export function BranchGraphCard({ state, className }: { state: BranchGraphState;
   )
 
   return (
-    <div className={cn('rounded-lg border bg-muted/30 p-2 h-full overflow-y-auto', className)}>
+    <div className={cn('rounded-lg border bg-muted/30 p-2 h-full', className)}>
       {graphContent}
     </div>
   )
@@ -293,17 +288,13 @@ function DisplayPopover({ config, effectiveBaseBranch, onChange }: {
 
           {/* Toggle switches */}
           <div className="flex items-center justify-between">
-            <Label htmlFor="display-child-branches" className="text-sm cursor-pointer">Include child branches</Label>
-            <Switch id="display-child-branches" checked={config.includeChildBranches} onCheckedChange={(v) => onChange(c => ({ ...c, includeChildBranches: v }))} />
-          </div>
-          <div className="flex items-center justify-between">
-            <Label htmlFor="display-merged-branches" className="text-sm cursor-pointer">Include merged branches</Label>
-            <Switch id="display-merged-branches" checked={config.includeMergedBranches} onCheckedChange={(v) => onChange(c => ({ ...c, includeMergedBranches: v }))} />
+            <Label htmlFor="display-branches" className="text-sm cursor-pointer">Show branches</Label>
+            <Switch id="display-branches" checked={config.showBranches} onCheckedChange={(v) => onChange(c => ({ ...c, showBranches: v }))} />
           </div>
           {config.collapsed && (
             <div className="flex items-center justify-between">
-              <Label htmlFor="display-tags" className="text-sm cursor-pointer">Include tags</Label>
-              <Switch id="display-tags" checked={config.includeTags} onCheckedChange={(v) => onChange(c => ({ ...c, includeTags: v }))} />
+              <Label htmlFor="display-tags" className="text-sm cursor-pointer">Show tags</Label>
+              <Switch id="display-tags" checked={config.showTags} onCheckedChange={(v) => onChange(c => ({ ...c, showTags: v }))} />
             </div>
           )}
         </div>

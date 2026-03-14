@@ -1,6 +1,7 @@
 import { cn, Tooltip, TooltipTrigger, TooltipContent } from '@slayzone/ui'
 import { Copy, Check } from 'lucide-react'
 import { useState, useRef, useCallback, useMemo } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { ResolvedCommit, ResolvedGraph } from '../shared/types'
 
 // --- Public interface ---
@@ -147,6 +148,8 @@ export interface LayoutNode {
   colorIndex: number
   /** Synthetic branch indicator — extra dot on a side column */
   syntheticBranch?: { column: number; colorIndex: number; branchName: string }
+  /** Behind-branch indicator — small dot to upper-right, no main dot displacement */
+  behindBranch?: { colorIndex: number; branchName: string }
 }
 
 export interface LayoutEdge {
@@ -234,6 +237,7 @@ export function computeDagLayout(commits: ResolvedCommit[], baseBranch: string):
   }
 
   // BFS from base branch to assign columns (lowest free column > parent)
+  const behindBranches = new Set<string>()
   const branchCol = new Map<string, number>()
   branchCol.set(baseBranch, 0)
   const baseRange = branchRowRange.get(baseBranch)
@@ -252,6 +256,7 @@ export function computeDagLayout(commits: ResolvedCommit[], baseBranch: string):
       const childTip = branchTipHash.get(child)
       if (childTip && baseFirstParentChain.has(childTip)) {
         branchCol.set(child, 0)
+        behindBranches.add(child)
       } else {
         const range = branchRowRange.get(child)!
         let col = parentCol + 1
@@ -361,7 +366,11 @@ export function computeDagLayout(commits: ResolvedCommit[], baseBranch: string):
     const isMerge = commit.parents.length >= 2
     const isBranchTip = commit.isBranchTip
 
-    nodes.push({ commit, column: col, row, isMerge, isBranchTip, colorIndex: ci })
+    const node: LayoutNode = { commit, column: col, row, isMerge, isBranchTip, colorIndex: ci }
+    if (isBranchTip && behindBranches.has(commit.branch)) {
+      node.behindBranch = { colorIndex: hashBranchColor(commit.branch), branchName: commit.branch }
+    }
+    nodes.push(node)
 
     if (commit.parents.length === 0) {
       activeColumns[col] = null
@@ -756,8 +765,11 @@ function CommitGroupRow({ count, color, gutterWidth }: {
 
 // --- Main component ---
 
+const OVERSCAN = 10
+
 export function CommitGraph({ graph, filterQuery, tipsOnly, includeTags, renderLimit, className }: CommitGraphProps) {
   const { copiedHash, handleCopy } = useCopyHash()
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   const hasTopology = useMemo(() => graph.commits.some(c => c.parents.length > 0), [graph])
   const fullLayout = useMemo(
@@ -811,23 +823,24 @@ export function CommitGraph({ graph, filterQuery, tipsOnly, includeTags, renderL
   const layout = collapsed ?? fullLayout
   const activeRowOffsets = collapsed ? collapsed.rowOffsets : rowOffsets
   const groups = collapsed?.groups ?? []
-  // Layout uses all commits for accurate topology; rendering is capped
   const maxRow = renderLimit != null ? renderLimit : layout.nodes.length + groups.length
-  const visibleNodes = layout.nodes.filter(n => n.row < maxRow)
-  const visibleGroups = groups.filter(g => g.row < maxRow)
-  const visibleEdges = layout.edges.filter(e => e.toRow !== -1 && e.fromRow < maxRow)
 
   const gutterWidth = (layout.maxColumn + 1) * COLUMN_WIDTH + GUTTER_PAD
-  const totalRowCount = collapsed ? collapsed.totalRows : visibleNodes.length
+  const totalRowCount = Math.min(
+    collapsed ? collapsed.totalRows : layout.nodes.length,
+    maxRow
+  )
   const totalHeight = totalRowCount * ROW_HEIGHT
 
   // Build ordered list of rows for rendering content (commits + groups interleaved)
   const rowItems = useMemo(() => {
+    const allNodes = layout.nodes.filter(n => n.row < maxRow)
+    const allGroups = groups.filter(g => g.row < maxRow)
     const items: Array<{ type: 'commit'; node: LayoutNode } | { type: 'group'; group: CollapsedGroup }> = []
     const nodesByRow = new Map<number, LayoutNode>()
-    for (const n of visibleNodes) nodesByRow.set(n.row, n)
+    for (const n of allNodes) nodesByRow.set(n.row, n)
     const groupsByRow = new Map<number, CollapsedGroup>()
-    for (const g of visibleGroups) groupsByRow.set(g.row, g)
+    for (const g of allGroups) groupsByRow.set(g.row, g)
     for (let r = 0; r < totalRowCount; r++) {
       const node = nodesByRow.get(r)
       const group = groupsByRow.get(r)
@@ -835,85 +848,159 @@ export function CommitGraph({ graph, filterQuery, tipsOnly, includeTags, renderL
       else if (group) items.push({ type: 'group', group })
     }
     return items
-  }, [visibleNodes, visibleGroups, totalRowCount])
+  }, [layout.nodes, groups, totalRowCount, maxRow])
+
+  // Virtualizer — only render visible rows + overscan buffer
+  const virtualizer = useVirtualizer({
+    count: rowItems.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: OVERSCAN,
+  })
+
+  const virtualItems = virtualizer.getVirtualItems()
+
+  // Compute visible row range for filtering SVG/overlays
+  function itemRow(item: (typeof rowItems)[number]): number {
+    return item.type === 'commit' ? item.node.row : item.group.row
+  }
+  const startRow = virtualItems.length > 0 && rowItems[virtualItems[0].index]
+    ? itemRow(rowItems[virtualItems[0].index])
+    : 0
+  const endRow = virtualItems.length > 0 && rowItems[virtualItems[virtualItems.length - 1].index]
+    ? itemRow(rowItems[virtualItems[virtualItems.length - 1].index])
+    : totalRowCount
+
+  // Expand range for edge visibility (edges can span many rows)
+  const edgeBufferRows = 5
+  const visStartRow = Math.max(0, startRow - edgeBufferRows)
+  const visEndRow = Math.min(totalRowCount, endRow + edgeBufferRows)
+
+  // Filter nodes, groups, edges to visible range
+  const visibleNodes = useMemo(() =>
+    layout.nodes.filter(n => n.row >= visStartRow && n.row <= visEndRow && n.row < maxRow),
+    [layout.nodes, visStartRow, visEndRow, maxRow]
+  )
+  const visibleGroups = useMemo(() =>
+    groups.filter(g => g.row >= visStartRow && g.row <= visEndRow && g.row < maxRow),
+    [groups, visStartRow, visEndRow, maxRow]
+  )
+  const visibleEdges = useMemo(() =>
+    layout.edges.filter(e => {
+      if (e.toRow === -1 || e.fromRow >= maxRow) return false
+      const eMin = Math.min(e.fromRow, e.toRow)
+      const eMax = Math.max(e.fromRow, e.toRow)
+      return eMax >= visStartRow && eMin <= visEndRow
+    }),
+    [layout.edges, visStartRow, visEndRow, maxRow]
+  )
 
   const noMatches = matchSet !== null && matchSet.size === 0
 
   return (
-    <div className={cn('relative', className)}>
+    <div ref={scrollContainerRef} className={cn('h-full overflow-y-auto', className)}>
       {noMatches && (
         <div className="flex items-center justify-center h-16 text-xs text-muted-foreground">No matches</div>
       )}
-      <svg className="absolute top-0 left-0 pointer-events-none" width={gutterWidth} height={totalHeight} style={{ zIndex: 0 }}>
-        {visibleEdges.map((edge, i) => {
-          const clampedEdge = edge.toRow >= maxRow
-            ? { ...edge, toRow: maxRow - 1 }
-            : edge
-          return clampedEdge.type === 'straight'
-            ? <SvgStraightEdge key={`e-${i}`} edge={clampedEdge} rowOffsets={activeRowOffsets} />
-            : <SvgCurveEdge key={`e-${i}`} edge={clampedEdge} rowOffsets={activeRowOffsets} />
-        })}
-        {visibleNodes.map((node) => {
-          const offset = activeRowOffsets.get(node.row) ?? 0
-          const cx = colX(node.column) + (node.column === 0 ? offset : 0)
-          const cy = rowY(node.row)
-          const color = getColor(node.colorIndex)
-          const dotType = node.isMerge ? 'merge' : 'regular'
-          const dimmed = matchSet !== null && !matchSet.has(node.commit.hash)
-          return <g key={node.commit.hash}>
-            <SvgDot cx={cx} cy={cy} color={color} type={dotType} dimmed={dimmed} />
-            {node.syntheticBranch && (() => {
-              const bx = cx + MERGED_DOT_OFFSET + 12
-              const sc = getColor(node.syntheticBranch.colorIndex)
-              return <g opacity={dimmed ? 0.2 : undefined}>
-                <line x1={bx} y1={cy} x2={cx + DOT_RADIUS} y2={cy} stroke={sc} strokeWidth={2} opacity={0.35} />
-                <circle cx={bx} cy={cy} r={DOT_RADIUS} fill={sc} />
-              </g>
-            })()}
-          </g>
-        })}
-        {/* Dots for collapsed group rows */}
-        {visibleGroups.map((group) => {
-          const cy = rowY(group.row)
-          return <g key={`grp-${group.row}`}>
-            {group.columns.map(({ col, colorIndex }) => (
-              <SvgDot key={col} cx={colX(col)} cy={cy} color={getColor(colorIndex)} type="regular" dimmed />
-            ))}
-          </g>
-        })}
-      </svg>
-      <DotOverlays items={[
-        ...visibleNodes.map(node => ({
-          key: node.commit.hash, row: node.row, column: node.column,
-          color: getColor(node.colorIndex), branchName: colorBranch.get(node.colorIndex),
-          xOffset: node.column === 0 ? (activeRowOffsets.get(node.row) ?? 0) : 0
-        })),
-        ...visibleNodes.filter(n => n.syntheticBranch).map(node => ({
-          key: `${node.commit.hash}-synth`, row: node.row, column: node.column,
-          color: getColor(node.syntheticBranch!.colorIndex), branchName: node.syntheticBranch!.branchName,
-          xOffset: (activeRowOffsets.get(node.row) ?? 0) + MERGED_DOT_OFFSET + 12,
-          isSynthetic: true
-        }))
-      ]} />
-      {rowItems.map((item) => {
-        if (item.type === 'commit') {
-          const node = item.node
-          const dimmed = matchSet !== null && !matchSet.has(node.commit.hash)
-          const refs = [...node.commit.branchRefs, ...node.commit.tags.map(t => `🏷 ${t}`)]
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <svg className="absolute top-0 left-0 pointer-events-none" width={gutterWidth} height={totalHeight} style={{ zIndex: 0 }}>
+          {visibleEdges.map((edge, i) => {
+            const clampedEdge = edge.toRow >= maxRow
+              ? { ...edge, toRow: maxRow - 1 }
+              : edge
+            return clampedEdge.type === 'straight'
+              ? <SvgStraightEdge key={`e-${i}`} edge={clampedEdge} rowOffsets={activeRowOffsets} />
+              : <SvgCurveEdge key={`e-${i}`} edge={clampedEdge} rowOffsets={activeRowOffsets} />
+          })}
+          {visibleNodes.map((node) => {
+            const offset = activeRowOffsets.get(node.row) ?? 0
+            const cx = colX(node.column) + (node.column === 0 ? offset : 0)
+            const cy = rowY(node.row)
+            const color = getColor(node.colorIndex)
+            const dotType = node.isMerge ? 'merge' : 'regular'
+            const dimmed = matchSet !== null && !matchSet.has(node.commit.hash)
+            return <g key={node.commit.hash}>
+              <SvgDot cx={cx} cy={cy} color={color} type={dotType} dimmed={dimmed} />
+              {node.syntheticBranch && (() => {
+                const bx = cx + MERGED_DOT_OFFSET + 12
+                const sc = getColor(node.syntheticBranch.colorIndex)
+                return <g opacity={dimmed ? 0.2 : undefined}>
+                  <line x1={bx} y1={cy} x2={cx + DOT_RADIUS} y2={cy} stroke={sc} strokeWidth={2} opacity={0.35} />
+                  <circle cx={bx} cy={cy} r={DOT_RADIUS} fill={sc} />
+                </g>
+              })()}
+              {node.behindBranch && (() => {
+                const bx = cx + DOT_RADIUS + 6
+                const by = cy - 6
+                const sc = getColor(node.behindBranch.colorIndex)
+                return <g opacity={dimmed ? 0.2 : undefined}>
+                  <circle cx={bx} cy={by} r={3} fill={sc} />
+                </g>
+              })()}
+            </g>
+          })}
+          {visibleGroups.map((group) => {
+            const cy = rowY(group.row)
+            return <g key={`grp-${group.row}`}>
+              {group.columns.map(({ col, colorIndex }) => (
+                <SvgDot key={col} cx={colX(col)} cy={cy} color={getColor(colorIndex)} type="regular" dimmed />
+              ))}
+            </g>
+          })}
+        </svg>
+        <DotOverlays items={[
+          ...visibleNodes.map(node => ({
+            key: node.commit.hash, row: node.row, column: node.column,
+            color: getColor(node.colorIndex), branchName: colorBranch.get(node.colorIndex),
+            xOffset: node.column === 0 ? (activeRowOffsets.get(node.row) ?? 0) : 0
+          })),
+          ...visibleNodes.filter(n => n.syntheticBranch).map(node => ({
+            key: `${node.commit.hash}-synth`, row: node.row, column: node.column,
+            color: getColor(node.syntheticBranch!.colorIndex), branchName: node.syntheticBranch!.branchName,
+            xOffset: (activeRowOffsets.get(node.row) ?? 0) + MERGED_DOT_OFFSET + 12,
+            isSynthetic: true
+          })),
+          ...visibleNodes.filter(n => n.behindBranch).map(node => ({
+            key: `${node.commit.hash}-behind`, row: node.row, column: node.column,
+            color: getColor(node.behindBranch!.colorIndex), branchName: node.behindBranch!.branchName,
+            xOffset: DOT_RADIUS + 6,
+            yOffset: -6
+          }))
+        ]} />
+        {virtualItems.map((virtualRow) => {
+          const item = rowItems[virtualRow.index]
+          if (!item) return null
+          if (item.type === 'commit') {
+            const node = item.node
+            const dimmed = matchSet !== null && !matchSet.has(node.commit.hash)
+            const refs = [...node.commit.branchRefs, ...node.commit.tags.map(t => `🏷 ${t}`)]
+            return (
+              <div key={virtualRow.key} style={{
+                position: 'absolute', top: 0, left: 0, width: '100%',
+                height: ROW_HEIGHT, transform: `translateY(${virtualRow.start}px)`,
+              }}>
+                <CommitRow
+                  shortHash={node.commit.shortHash} message={node.commit.message}
+                  author={node.commit.author} relativeDate={node.commit.relativeDate}
+                  refs={refs.length > 0 ? refs : undefined}
+                  mergedFrom={node.commit.mergedFrom}
+                  color={getColor(node.colorIndex)} gutterWidth={gutterWidth}
+                  copiedHash={copiedHash} onCopy={handleCopy} dimmed={dimmed} />
+              </div>
+            )
+          }
+          const group = item.group
+          const primaryColor = group.columns[0] ? getColor(group.columns[0].colorIndex) : getColor(0)
           return (
-            <CommitRow key={node.commit.hash}
-              shortHash={node.commit.shortHash} message={node.commit.message}
-              author={node.commit.author} relativeDate={node.commit.relativeDate}
-              refs={refs.length > 0 ? refs : undefined}
-              mergedFrom={node.commit.mergedFrom}
-              color={getColor(node.colorIndex)} gutterWidth={gutterWidth}
-              copiedHash={copiedHash} onCopy={handleCopy} dimmed={dimmed} />
+            <div key={virtualRow.key} style={{
+              position: 'absolute', top: 0, left: 0, width: '100%',
+              height: ROW_HEIGHT, transform: `translateY(${virtualRow.start}px)`,
+            }}>
+              <CommitGroupRow count={group.count} color={primaryColor} gutterWidth={gutterWidth} />
+            </div>
           )
-        }
-        const group = item.group
-        const primaryColor = group.columns[0] ? getColor(group.columns[0].colorIndex) : getColor(0)
-        return <CommitGroupRow key={`grp-${group.row}`} count={group.count} color={primaryColor} gutterWidth={gutterWidth} />
-      })}
+        })}
+      </div>
     </div>
   )
 }
