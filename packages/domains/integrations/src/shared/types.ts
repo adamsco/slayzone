@@ -380,3 +380,13 @@ export interface StatusResyncPreview {
   diff: StatusDiff
   providerStatuses: ProviderStatus[]
 }
+
+export interface PushUnlinkedTasksInput {
+  projectId: string
+  provider: IntegrationProvider
+}
+
+export interface PushUnlinkedTasksResult {
+  pushed: number
+  errors: string[]
+}

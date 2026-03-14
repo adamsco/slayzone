@@ -6,7 +6,8 @@ import {
   listProjects,
   listTeams,
   listWorkflowStates,
-  getViewer as getLinearViewer
+  getViewer as getLinearViewer,
+  updateIssue as updateLinearIssue
 } from './linear-client'
 import {
   getViewer as getGitHubViewer,
@@ -56,9 +57,11 @@ import type {
   FetchProviderStatusesInput,
   ApplyStatusSyncInput,
   ProviderStatus,
-  StatusResyncPreview
+  StatusResyncPreview,
+  PushUnlinkedTasksInput,
+  PushUnlinkedTasksResult
 } from '../shared'
-import { runSyncNow } from './sync'
+import { runSyncNow, runGithubSyncNow, pushNewTaskToProviders, getDesiredLinearStateId } from './sync'
 import { providerStatusesToColumns, computeStatusDiff } from './status-sync'
 import { htmlToMarkdown, markdownToHtml } from './markdown'
 import {
@@ -70,7 +73,8 @@ import {
   parseGitHubExternalKey,
   upsertFieldState,
   linearStateToTaskStatus,
-  linearPriorityToLocal
+  linearPriorityToLocal,
+  localPriorityToLinear
 } from './sync-helpers'
 import {
   getDefaultStatus,
@@ -207,6 +211,7 @@ type TaskRow = {
   title: string
   description: string | null
   status: string
+  priority: number
   updated_at: string
 }
 
@@ -494,7 +499,7 @@ function persistGitHubBaseline(
 
 function getTaskById(db: Database, taskId: string): TaskRow {
   const row = db.prepare(`
-    SELECT id, project_id, title, description, status, updated_at
+    SELECT id, project_id, title, description, status, priority, updated_at
     FROM tasks
     WHERE id = ?
   `).get(taskId) as TaskRow | undefined
@@ -806,6 +811,15 @@ function clearProjectProviderData(db: Database, projectId: string, provider: Int
     DELETE FROM integration_project_mappings
     WHERE project_id = ? AND provider = ?
   `).run(projectId, provider)
+
+  db.prepare(`
+    DELETE FROM external_field_state
+    WHERE external_link_id IN (
+      SELECT el.id FROM external_links el
+      JOIN tasks t ON t.id = el.task_id
+      WHERE el.provider = ? AND t.project_id = ?
+    )
+  `).run(provider, projectId)
 
   db.prepare(`
     DELETE FROM external_links
@@ -1640,16 +1654,12 @@ export function registerIntegrationHandlers(
   })
 
   ipcMain.handle('integrations:push-task', async (_event, input: PushTaskInput) => {
-    if (input.provider !== 'github') {
-      throw new Error(`Manual push is not supported for provider: ${input.provider}`)
-    }
-
     const link = db.prepare(`
       SELECT * FROM external_links
-      WHERE task_id = ? AND provider = 'github'
-    `).get(input.taskId) as ExternalLink | undefined
+      WHERE task_id = ? AND provider = ?
+    `).get(input.taskId, input.provider) as ExternalLink | undefined
     if (!link) {
-      throw new Error('Task is not linked to GitHub')
+      throw new Error(`Task is not linked to ${input.provider}`)
     }
 
     const pushTaskRow = getTaskById(db, input.taskId)
@@ -1661,41 +1671,69 @@ export function registerIntegrationHandlers(
       throw new Error('Status setup must be completed before pushing')
     }
 
+    const connection = getConnection(db, link.connection_id)
+    assertConnectionProvider(connection, input.provider)
+    const credential = readCredential(db, connection.credential_ref)
+    const task = getTaskById(db, input.taskId)
+    const providerName = input.provider === 'linear' ? 'Linear' : 'GitHub'
+
+    if (input.provider === 'linear') {
+      const remoteIssue = await getIssue(credential, link.external_id)
+      if (!remoteIssue) {
+        throw new Error('Linked Linear issue no longer exists')
+      }
+
+      const statusBefore = buildLinearTaskSyncStatus(db, link, task, remoteIssue)
+      if (statusBefore.state === 'in_sync') {
+        return { pushed: false, status: statusBefore, message: `Task is already in sync with ${providerName}` } as PushTaskResult
+      }
+      if (!input.force && (statusBefore.state === 'remote_ahead' || statusBefore.state === 'conflict')) {
+        return { pushed: false, status: statusBefore, message: 'Remote changes detected. Refresh diff and resolve before pushing.' } as PushTaskResult
+      }
+
+      const stateId = getDesiredLinearStateId(db, pushMapping, task.project_id, task.status)
+      const updatedIssue = await updateLinearIssue(credential, link.external_id, {
+        title: task.title,
+        description: task.description ? htmlToMarkdown(task.description) : null,
+        priority: localPriorityToLinear(task.priority),
+        stateId
+      })
+      if (!updatedIssue) {
+        throw new Error('Failed to update Linear issue')
+      }
+
+      upsertFieldState(db, link.id, 'title', task.title, updatedIssue.title, task.updated_at, updatedIssue.updatedAt)
+      upsertFieldState(db, link.id, 'description', normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null), normalizeMarkdown(updatedIssue.description), task.updated_at, updatedIssue.updatedAt)
+      upsertFieldState(db, link.id, 'status', task.status, updatedIssue.state.type, task.updated_at, updatedIssue.updatedAt)
+
+      db.prepare(`UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(link.id)
+      db.prepare(`UPDATE integration_connections SET last_synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(connection.id)
+
+      const statusAfter = buildLinearTaskSyncStatus(db, link, task, updatedIssue)
+      return { pushed: true, status: statusAfter, message: `Pushed local changes to ${providerName}` } as PushTaskResult
+    }
+
+    // GitHub
     const key = parseGitHubExternalKey(link.external_key)
     if (!key) {
       throw new Error('Linked GitHub issue key is invalid')
     }
 
-    const connection = getConnection(db, link.connection_id)
-    assertConnectionProvider(connection, 'github')
-    const token = readCredential(db, connection.credential_ref)
-    const task = getTaskById(db, input.taskId)
-    const remoteBefore = await getGithubIssueWithMocks(token, key)
+    const remoteBefore = await getGithubIssueWithMocks(credential, key)
     if (!remoteBefore) {
       throw new Error('Linked GitHub issue no longer exists or is not an issue')
     }
 
     const statusBefore = buildGitHubTaskSyncStatus(db, link, task, remoteBefore)
     if (statusBefore.state === 'in_sync') {
-      const result: PushTaskResult = {
-        pushed: false,
-        status: statusBefore,
-        message: 'Task is already in sync with GitHub'
-      }
-      return result
+      return { pushed: false, status: statusBefore, message: `Task is already in sync with ${providerName}` } as PushTaskResult
     }
-
     if (!input.force && (statusBefore.state === 'remote_ahead' || statusBefore.state === 'conflict')) {
-      const result: PushTaskResult = {
-        pushed: false,
-        status: statusBefore,
-        message: 'Remote changes detected. Refresh diff and resolve before pushing.'
-      }
-      return result
+      return { pushed: false, status: statusBefore, message: 'Remote changes detected. Refresh diff and resolve before pushing.' } as PushTaskResult
     }
 
     const columns = getProjectColumns(db, task.project_id)
-    const updatedIssue = await updateGithubIssueWithMocks(token, {
+    const updatedIssue = await updateGithubIssueWithMocks(credential, {
       owner: key.owner,
       repo: key.repo,
       number: key.number,
@@ -1708,87 +1746,95 @@ export function registerIntegrationHandlers(
     }
 
     persistGitHubBaseline(db, link.id, task, updatedIssue)
-    db.prepare(`
-      UPDATE external_links
-      SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now')
-      WHERE id = ?
-    `).run(link.id)
-    db.prepare(`
-      UPDATE integration_connections
-      SET last_synced_at = datetime('now'), updated_at = datetime('now')
-      WHERE id = ?
-    `).run(connection.id)
+    db.prepare(`UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(link.id)
+    db.prepare(`UPDATE integration_connections SET last_synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(connection.id)
 
     const statusAfter = buildGitHubTaskSyncStatus(db, link, task, updatedIssue)
-    const result: PushTaskResult = {
-      pushed: true,
-      status: statusAfter,
-      message: 'Pushed local changes to GitHub'
-    }
-    return result
+    return { pushed: true, status: statusAfter, message: `Pushed local changes to ${providerName}` } as PushTaskResult
   })
 
   ipcMain.handle('integrations:pull-task', async (_event, input: PullTaskInput) => {
-    if (input.provider !== 'github') {
-      throw new Error(`Manual pull is not supported for provider: ${input.provider}`)
-    }
-
     const link = db.prepare(`
       SELECT * FROM external_links
-      WHERE task_id = ? AND provider = 'github'
-    `).get(input.taskId) as ExternalLink | undefined
+      WHERE task_id = ? AND provider = ?
+    `).get(input.taskId, input.provider) as ExternalLink | undefined
     if (!link) {
-      throw new Error('Task is not linked to GitHub')
+      throw new Error(`Task is not linked to ${input.provider}`)
     }
 
-    const pullTask = getTaskById(db, input.taskId)
+    const pullTaskRow = getTaskById(db, input.taskId)
     const pullMapping = db.prepare(`
       SELECT * FROM integration_project_mappings
       WHERE project_id = ? AND provider = ?
-    `).get(pullTask.project_id, input.provider) as IntegrationProjectMapping | undefined
+    `).get(pullTaskRow.project_id, input.provider) as IntegrationProjectMapping | undefined
     if (pullMapping && !pullMapping.status_setup_complete) {
       throw new Error('Status setup must be completed before pulling')
     }
 
+    const connection = getConnection(db, link.connection_id)
+    assertConnectionProvider(connection, input.provider)
+    const credential = readCredential(db, connection.credential_ref)
+    const task = getTaskById(db, input.taskId)
+    const providerName = input.provider === 'linear' ? 'Linear' : 'GitHub'
+
+    if (input.provider === 'linear') {
+      const remoteIssue = await getIssue(credential, link.external_id)
+      if (!remoteIssue) {
+        throw new Error('Linked Linear issue no longer exists')
+      }
+
+      const statusBefore = buildLinearTaskSyncStatus(db, link, task, remoteIssue)
+      if (statusBefore.state === 'in_sync') {
+        return { pulled: false, status: statusBefore, message: `Task is already in sync with ${providerName}` } as PullTaskResult
+      }
+      if (!input.force && (statusBefore.state === 'local_ahead' || statusBefore.state === 'conflict')) {
+        return { pulled: false, status: statusBefore, message: 'Local changes detected. Push local changes or force pull to overwrite local fields.' } as PullTaskResult
+      }
+
+      const projectColumns = getProjectColumns(db, task.project_id)
+      const localStatus = linearStateToTaskStatus(remoteIssue.state.type, projectColumns)
+      db.prepare(`UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, assignee = ?, updated_at = ? WHERE id = ?`).run(
+        remoteIssue.title,
+        remoteIssue.description ? markdownToHtml(remoteIssue.description) : null,
+        localStatus,
+        linearPriorityToLocal(remoteIssue.priority),
+        remoteIssue.assignee?.name ?? null,
+        remoteIssue.updatedAt,
+        task.id
+      )
+      const updatedTask = getTaskById(db, task.id)
+      upsertFieldState(db, link.id, 'title', updatedTask.title, remoteIssue.title, updatedTask.updated_at, remoteIssue.updatedAt)
+      upsertFieldState(db, link.id, 'description', normalizeMarkdown(updatedTask.description ? htmlToMarkdown(updatedTask.description) : null), normalizeMarkdown(remoteIssue.description), updatedTask.updated_at, remoteIssue.updatedAt)
+      upsertFieldState(db, link.id, 'status', updatedTask.status, remoteIssue.state.type, updatedTask.updated_at, remoteIssue.updatedAt)
+
+      db.prepare(`UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(link.id)
+      db.prepare(`UPDATE integration_connections SET last_synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(connection.id)
+
+      const statusAfter = buildLinearTaskSyncStatus(db, link, updatedTask, remoteIssue)
+      return { pulled: true, status: statusAfter, message: `Pulled remote changes from ${providerName}` } as PullTaskResult
+    }
+
+    // GitHub
     const key = parseGitHubExternalKey(link.external_key)
     if (!key) {
       throw new Error('Linked GitHub issue key is invalid')
     }
 
-    const connection = getConnection(db, link.connection_id)
-    assertConnectionProvider(connection, 'github')
-    const token = readCredential(db, connection.credential_ref)
-    const task = getTaskById(db, input.taskId)
-    const remoteIssue = await getGithubIssueWithMocks(token, key)
+    const remoteIssue = await getGithubIssueWithMocks(credential, key)
     if (!remoteIssue) {
       throw new Error('Linked GitHub issue no longer exists or is not an issue')
     }
 
     const statusBefore = buildGitHubTaskSyncStatus(db, link, task, remoteIssue)
     if (statusBefore.state === 'in_sync') {
-      const result: PullTaskResult = {
-        pulled: false,
-        status: statusBefore,
-        message: 'Task is already in sync with GitHub'
-      }
-      return result
+      return { pulled: false, status: statusBefore, message: `Task is already in sync with ${providerName}` } as PullTaskResult
     }
-
     if (!input.force && (statusBefore.state === 'local_ahead' || statusBefore.state === 'conflict')) {
-      const result: PullTaskResult = {
-        pulled: false,
-        status: statusBefore,
-        message: 'Local changes detected. Push local changes or force pull to overwrite local fields.'
-      }
-      return result
+      return { pulled: false, status: statusBefore, message: 'Local changes detected. Push local changes or force pull to overwrite local fields.' } as PullTaskResult
     }
 
     const projectColumns = getProjectColumns(db, task.project_id)
-    db.prepare(`
-      UPDATE tasks
-      SET title = ?, description = ?, status = ?, assignee = ?, updated_at = ?
-      WHERE id = ?
-    `).run(
+    db.prepare(`UPDATE tasks SET title = ?, description = ?, status = ?, assignee = ?, updated_at = ? WHERE id = ?`).run(
       remoteIssue.title,
       remoteIssue.body ? markdownToHtml(remoteIssue.body) : null,
       githubStateToLocal(remoteIssue.state, projectColumns),
@@ -1799,28 +1845,26 @@ export function registerIntegrationHandlers(
     const updatedTask = getTaskById(db, task.id)
     persistGitHubBaseline(db, link.id, updatedTask, remoteIssue)
 
-    db.prepare(`
-      UPDATE external_links
-      SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now')
-      WHERE id = ?
-    `).run(link.id)
-    db.prepare(`
-      UPDATE integration_connections
-      SET last_synced_at = datetime('now'), updated_at = datetime('now')
-      WHERE id = ?
-    `).run(connection.id)
+    db.prepare(`UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(link.id)
+    db.prepare(`UPDATE integration_connections SET last_synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(connection.id)
 
     const statusAfter = buildGitHubTaskSyncStatus(db, link, updatedTask, remoteIssue)
-    const result: PullTaskResult = {
-      pulled: true,
-      status: statusAfter,
-      message: 'Pulled remote changes from GitHub'
-    }
-    return result
+    return { pulled: true, status: statusAfter, message: `Pulled remote changes from ${providerName}` } as PullTaskResult
   })
 
   ipcMain.handle('integrations:sync-now', async (_event, input: SyncNowInput) => {
-    return runSyncNow(db, input)
+    const [linear, github] = await Promise.all([
+      runSyncNow(db, input),
+      runGithubSyncNow(db, input)
+    ])
+    return {
+      scanned: linear.scanned + github.scanned,
+      pushed: linear.pushed + github.pushed,
+      pulled: linear.pulled + github.pulled,
+      conflictsResolved: linear.conflictsResolved + github.conflictsResolved,
+      errors: [...linear.errors, ...github.errors],
+      at: linear.at
+    }
   })
 
   ipcMain.handle('integrations:get-link', (_event, taskId: string, provider: IntegrationProvider) => {
@@ -1841,6 +1885,36 @@ export function registerIntegrationHandlers(
 
     const res = db.prepare('DELETE FROM external_links WHERE task_id = ? AND provider = ?').run(taskId, provider)
     return res.changes > 0
+  })
+
+  ipcMain.handle('integrations:push-unlinked-tasks', async (_event, input: PushUnlinkedTasksInput): Promise<PushUnlinkedTasksResult> => {
+    const unlinkedTasks = db.prepare(`
+      SELECT t.id, t.project_id FROM tasks t
+      WHERE t.project_id = ?
+        AND t.is_temporary = 0
+        AND NOT EXISTS (
+          SELECT 1 FROM external_links el WHERE el.task_id = t.id AND el.provider = ?
+        )
+    `).all(input.projectId, input.provider) as Array<{ id: string; project_id: string }>
+
+    let pushed = 0
+    const errors: string[] = []
+    for (const task of unlinkedTasks) {
+      try {
+        // Re-check right before push to prevent duplicate creation from concurrent calls
+        const alreadyLinked = db.prepare('SELECT id FROM external_links WHERE task_id = ? AND provider = ?')
+          .get(task.id, input.provider)
+        if (alreadyLinked) continue
+
+        await pushNewTaskToProviders(db, task.id, task.project_id)
+        const link = db.prepare('SELECT id FROM external_links WHERE task_id = ? AND provider = ?')
+          .get(task.id, input.provider)
+        if (link) pushed++
+      } catch (err) {
+        errors.push(`${task.id}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    return { pushed, errors }
   })
 
   // --- Status Sync Handlers ---

@@ -77,7 +77,7 @@ function applyRemoteTaskUpdate(
   )
 }
 
-function getDesiredLinearStateId(
+export function getDesiredLinearStateId(
   db: Database,
   mapping: IntegrationProjectMapping | undefined,
   projectId: string,
@@ -512,14 +512,18 @@ export function resetSyncFlags(): void {
   discoveryRunning = false
 }
 
-export function startSyncPoller(db: Database): NodeJS.Timeout {
+export function startSyncPoller(db: Database, onChanged?: () => void): NodeJS.Timeout {
   return setInterval(() => {
     if (syncRunning) return
     syncRunning = true
     void Promise.all([
       runSyncNow(db, {}),
       runGithubSyncNow(db, {})
-    ]).catch((err) => {
+    ]).then(([linear, github]) => {
+      if ((linear.pulled + github.pulled + linear.pushed + github.pushed) > 0) {
+        onChanged?.()
+      }
+    }).catch((err) => {
       console.error('Periodic sync failed:', err)
     }).finally(() => {
       syncRunning = false
@@ -760,7 +764,7 @@ export async function pushUnarchiveToProviders(db: Database, taskId: string): Pr
   }
 }
 
-export async function runDiscovery(db: Database): Promise<void> {
+export async function runDiscovery(db: Database): Promise<number> {
   const mappings = db.prepare(`
     SELECT pm.*, c.credential_ref
     FROM integration_project_mappings pm
@@ -770,26 +774,28 @@ export async function runDiscovery(db: Database): Promise<void> {
 
   console.log(`[discovery] found ${mappings.length} active mappings`)
 
+  let totalDiscovered = 0
   for (const mapping of mappings) {
     try {
       const credential = readCredential(db, mapping.credential_ref)
 
       if (mapping.provider === 'linear') {
-        await discoverLinearIssues(db, mapping, credential)
+        totalDiscovered += await discoverLinearIssues(db, mapping, credential)
       } else if (mapping.provider === 'github') {
-        await discoverGithubIssues(db, mapping, credential)
+        totalDiscovered += await discoverGithubIssues(db, mapping, credential)
       }
     } catch (err) {
       console.error(`[discovery] failed for mapping ${mapping.id} (${mapping.provider}):`, err)
     }
   }
+  return totalDiscovered
 }
 
 async function discoverLinearIssues(
   db: Database,
   mapping: IntegrationProjectMapping & { credential_ref: string },
   apiKey: string
-): Promise<void> {
+): Promise<number> {
   let cursor: string | null = null
   let discovered = 0
 
@@ -833,16 +839,17 @@ async function discoverLinearIssues(
   if (discovered > 0) {
     console.log(`[discovery] Linear: discovered ${discovered} new issues for project ${mapping.project_id}`)
   }
+  return discovered
 }
 
 async function discoverGithubIssues(
   db: Database,
   mapping: IntegrationProjectMapping & { credential_ref: string },
   token: string
-): Promise<void> {
+): Promise<number> {
   if (!mapping.external_repo_owner || !mapping.external_repo_name) {
     console.log(`[discovery] GitHub: skipping mapping ${mapping.id} — no repo configured (owner=${mapping.external_repo_owner}, name=${mapping.external_repo_name})`)
-    return
+    return 0
   }
 
   let cursor: string | null = null
@@ -886,19 +893,24 @@ async function discoverGithubIssues(
   if (discovered > 0) {
     console.log(`[discovery] GitHub: discovered ${discovered} new issues for project ${mapping.project_id}`)
   }
+  return discovered
 }
 
 let discoveryRunning = false
 
-export function startDiscoveryPoller(db: Database): NodeJS.Timeout {
+export function startDiscoveryPoller(db: Database, onChanged?: () => void): NodeJS.Timeout {
   // Run immediately on startup, then every 60s
-  void runDiscovery(db).catch((err) => {
+  void runDiscovery(db).then((discovered) => {
+    if (discovered && discovered > 0) onChanged?.()
+  }).catch((err) => {
     console.error('Initial discovery failed:', err)
   })
   return setInterval(() => {
     if (discoveryRunning) return
     discoveryRunning = true
-    void runDiscovery(db).catch((err) => {
+    void runDiscovery(db).then((discovered) => {
+      if (discovered && discovered > 0) onChanged?.()
+    }).catch((err) => {
       console.error('Discovery poll failed:', err)
     }).finally(() => {
       discoveryRunning = false
