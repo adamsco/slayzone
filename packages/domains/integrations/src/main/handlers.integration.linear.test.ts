@@ -343,13 +343,14 @@ if (createdIssueId) {
     ok('fetch-provider-statuses returns workflow states')
 
     const freshProjectId = `proj-status-test-${Date.now()}`
+    const freshMappingId = `map-status-${Date.now()}`
     h.db.prepare(`INSERT INTO projects (id, name, color, path, created_at, updated_at)
       VALUES (?, 'Status Test', '#888888', '/tmp/status-test', datetime('now'), datetime('now'))`)
       .run(freshProjectId)
     h.db.prepare(`INSERT INTO integration_project_mappings
       (id, project_id, provider, connection_id, external_team_id, external_team_key, sync_mode, status_setup_complete)
       VALUES (?, ?, 'linear', ?, ?, ?, 'two_way', 0)`)
-      .run(`map-status-${Date.now()}`, freshProjectId, connectionId, LINEAR_TEST_TEAM_ID, teamKey)
+      .run(freshMappingId, freshProjectId, connectionId, LINEAR_TEST_TEAM_ID, teamKey)
 
     await h.invoke('integrations:apply-status-sync', {
       projectId: freshProjectId,
@@ -362,6 +363,17 @@ if (createdIssueId) {
     const columns = JSON.parse(project.columns_config)
     expect(columns.length).toBeGreaterThan(0)
     ok('apply-status-sync creates columns from workflow states')
+
+    // resync-provider-statuses — should show no diff after fresh apply
+    try {
+      const preview = await h.invoke('integrations:resync-provider-statuses', {
+        projectId: freshProjectId,
+        provider: 'linear'
+      }) as any
+      expect(preview.diff.added.length).toBe(0)
+      expect(preview.diff.removed.length).toBe(0)
+      ok('resync-provider-statuses shows no diff after fresh apply')
+    } catch (e) { no('resync-provider-statuses shows no diff after fresh apply', e) }
   } catch (e) { no('fetch/apply-status-sync', e) }
 
   // ── Discovery (scoped) ────────────────────────────────────────────────
@@ -483,6 +495,53 @@ if (createdIssueId) {
       ok('push-task returns false when in sync (skipped)')
     }
   } catch (e) { no('push-task returns false when in sync', e) }
+
+  // push-task guard: remote ahead without force
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    const link = h.db.prepare("SELECT * FROM external_links WHERE task_id = ? AND provider = 'linear'").get(task.id) as any
+    if (task && link) {
+      // Establish baseline
+      await h.invoke('integrations:push-task', { taskId: task.id, provider: 'linear', force: true })
+
+      // Change remote
+      await linearClient.updateIssue(LINEAR_API_KEY, link.external_id, {
+        title: `[test] remote changed ${Date.now()}`
+      })
+      // Change local
+      h.db.prepare("UPDATE tasks SET title = '[test] local changed', updated_at = datetime('now') WHERE id = ?").run(task.id)
+
+      const result = await h.invoke('integrations:push-task', {
+        taskId: task.id, provider: 'linear'
+      }) as any
+      expect(result.pushed).toBe(false)
+      expect(result.message.includes('Remote changes detected')).toBe(true)
+      ok('push-task refuses when remote ahead without force')
+    } else {
+      ok('push-task refuses when remote ahead without force (skipped)')
+    }
+  } catch (e) { no('push-task refuses when remote ahead without force', e) }
+
+  // pull-task guard: local ahead without force
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    if (task) {
+      // Establish baseline
+      await h.invoke('integrations:pull-task', { taskId: task.id, provider: 'linear', force: true })
+
+      // Change local only
+      h.db.prepare("UPDATE tasks SET title = '[test] local only', updated_at = datetime('now') WHERE id = ?").run(task.id)
+
+      const result = await h.invoke('integrations:pull-task', {
+        taskId: task.id, provider: 'linear'
+      }) as any
+      expect(result.pulled).toBe(false)
+      expect(result.message.includes('Local changes detected')).toBe(true)
+      ok('pull-task refuses when local ahead without force')
+    } else {
+      ok('pull-task refuses when local ahead without force (skipped)')
+    }
+  } catch (e) { no('pull-task refuses when local ahead without force', e) }
 
   // ── push-unlinked-tasks ───────────────────────────────────────────────
   console.log('\nLinear: Push unlinked tasks')

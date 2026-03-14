@@ -576,6 +576,64 @@ if (createdIssueNumber) {
     expect(threw).toBe(true)
     ok('nonexistent repo throws')
   } catch (e) { no('nonexistent repo throws', e) }
+
+  // ── Status mapping ────────────────────────────────────────────────────
+  console.log('\nGitHub: Status mapping')
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    // Close remote → sync → verify local status maps to done
+    await githubClient.updateIssue(GITHUB_TOKEN, {
+      owner: REPO_OWNER, repo: REPO_NAME, number: createdIssueNumber,
+      title: task.title, body: null, state: 'closed'
+    })
+    h.db.prepare("UPDATE tasks SET updated_at = '2020-01-01 00:00:00' WHERE id = ?").run(task.id)
+    h.db.prepare('DELETE FROM external_field_state').run()
+
+    await h.invoke('integrations:sync-now', { taskId: task.id })
+    const updatedTask = h.db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as any
+    expect(updatedTask.status).toBe('done')
+    ok('closed remote → done status')
+
+    // Reopen remote → sync → verify local status maps back to open status
+    await githubClient.updateIssue(GITHUB_TOKEN, {
+      owner: REPO_OWNER, repo: REPO_NAME, number: createdIssueNumber,
+      title: task.title, body: null, state: 'open'
+    })
+    h.db.prepare("UPDATE tasks SET updated_at = '2020-01-01 00:00:00' WHERE id = ?").run(task.id)
+    h.db.prepare('DELETE FROM external_field_state').run()
+
+    await h.invoke('integrations:sync-now', { taskId: task.id })
+    const reopenedTask = h.db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as any
+    expect(reopenedTask.status !== 'done').toBe(true)
+    ok('reopened remote → non-done status')
+  } catch (e) { no('status mapping', e) }
+
+  // ── Batch fetch ───────────────────────────────────────────────────────
+  console.log('\nGitHub: Batch fetch')
+  try {
+    // Collect a few linked issues for batch test
+    const links = h.db.prepare(
+      "SELECT external_id, external_key FROM external_links WHERE connection_id = ? AND provider = 'github' LIMIT 3"
+    ).all(connectionId) as Array<{ external_id: string; external_key: string }>
+
+    if (links.length > 0) {
+      const batchInput = links.map(l => {
+        const parsed = parseGitHubExternalKey(l.external_key)!
+        return { id: l.external_id, owner: parsed.owner, repo: parsed.repo, number: parsed.number }
+      })
+      const batchResult = await githubClient.getIssuesBatch(GITHUB_TOKEN, batchInput)
+      expect(batchResult.size).toBe(links.length)
+      ok('getIssuesBatch returns all requested issues')
+    } else {
+      ok('getIssuesBatch returns all requested issues (skipped: no links)')
+    }
+  } catch (e) { no('getIssuesBatch returns all requested issues', e) }
+
+  try {
+    const emptyResult = await githubClient.getIssuesBatch(GITHUB_TOKEN, [])
+    expect(emptyResult.size).toBe(0)
+    ok('getIssuesBatch with empty array returns empty map')
+  } catch (e) { no('getIssuesBatch with empty array returns empty map', e) }
 }
 
 // ── Projects V2: Status sync ─────────────────────────────────────────────
