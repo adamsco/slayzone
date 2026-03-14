@@ -979,12 +979,8 @@ app.whenReady().then(async () => {
   logBoot('domain IPC handlers registered')
 
   // Start MCP server (use port 0 in Playwright to avoid conflict with dev instance)
-  const mcpPort = (() => {
-    if (isPlaywright) return 0
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('mcp_server_port') as { value: string } | undefined
-    const defaultPort = is.dev ? 45679 : 45678 // keep in sync with packages/apps/cli/src/db.ts
-    return parseInt(row?.value || String(defaultPort), 10) || defaultPort
-  })()
+  // keep in sync with packages/apps/cli/src/db.ts
+  const mcpPort = isPlaywright ? 0 : is.dev ? 45679 : 45678
   import('./mcp-server').then((mod) => {
     mod.startMcpServer(db, mcpPort)
     mcpCleanup = () => mod.stopMcpServer()
