@@ -85,7 +85,7 @@ export function UserSettingsDialog({
         { key: 'panels/terminal', label: 'Terminal' },
         { key: 'panels/browser', label: 'Browser' },
         { key: 'panels/editor', label: 'Editor' },
-        { key: 'panels/diff', label: 'Diff' },
+        { key: 'panels/git', label: 'Git' },
       ]
     },
     ...(contextManagerEnabled ? [{ key: 'ai-config', label: 'Context Manager' }] : []),

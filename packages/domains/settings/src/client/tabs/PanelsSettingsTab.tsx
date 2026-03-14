@@ -31,6 +31,12 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
   // Diff
   const [diffContextLines, setDiffContextLines] = useState<'0' | '3' | '5' | 'all'>('3')
   const [diffIgnoreWhitespace, setDiffIgnoreWhitespace] = useState(false)
+
+  // Commit graph defaults
+  const [graphCollapsed, setGraphCollapsed] = useState(false)
+  const [graphShowBranches, setGraphShowBranches] = useState(true)
+  const [graphBreakOnTags, setGraphBreakOnTags] = useState(true)
+  const [graphBreakOnMerges, setGraphBreakOnMerges] = useState(true)
   
   // Browser
   const [devServerToastEnabled, setDevServerToastEnabled] = useState(true)
@@ -78,7 +84,8 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
       window.api.settings.get('browser_default_url'),
       window.api.settings.get('browser_default_zoom'),
       window.api.settings.get('browser_default_devices'),
-    ]).then(([pc, tm, tff, ts, eww, erw, ets, eit, dcl, diw, dste, dsaob, bdu, bdz, bdd]) => {
+      window.api.settings.get('commit_graph_config'),
+    ]).then(([pc, tm, tff, ts, eww, erw, ets, eit, dcl, diw, dste, dsaob, bdu, bdz, bdd, cgc]) => {
       if (pc) setPanelConfig(mergePredefinedWebPanels(JSON.parse(pc) as PanelConfig))
       if (tm) setDefaultTerminalMode(tm as TerminalMode)
       if (tff) setTerminalFontFamily(tff)
@@ -101,6 +108,15 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
             tablet: d.tablet ? { enabled: d.tablet.enabled !== false, width: String(d.tablet.width), height: String(d.tablet.height) } : { enabled: true, width: '744', height: '1133' },
             mobile: d.mobile ? { enabled: d.mobile.enabled !== false, width: String(d.mobile.width), height: String(d.mobile.height) } : { enabled: true, width: '393', height: '852' },
           })
+        } catch { /* ignore */ }
+      }
+      if (cgc) {
+        try {
+          const g = JSON.parse(cgc)
+          if (g.collapsed !== undefined) setGraphCollapsed(g.collapsed)
+          if (g.showBranches !== undefined) setGraphShowBranches(g.showBranches)
+          if (g.breakOnTags !== undefined) setGraphBreakOnTags(g.breakOnTags)
+          if (g.breakOnMerges !== undefined) setGraphBreakOnMerges(g.breakOnMerges)
         } catch { /* ignore */ }
       }
     })
@@ -280,7 +296,7 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
                 <ChevronRight className="size-3.5 shrink-0" />
               </button>
               {/* Git — shared (home='git', task='diff') */}
-              <button type="button" className="flex items-center gap-3 h-11 rounded-lg border px-4 w-full text-left hover:bg-accent/30 transition-colors" onClick={() => navigateTo('panels/diff')}>
+              <button type="button" className="flex items-center gap-3 h-11 rounded-lg border px-4 w-full text-left hover:bg-accent/30 transition-colors" onClick={() => navigateTo('panels/git')}>
                 <GitCompare className="size-4 shrink-0" />
                 <span className="text-sm font-medium flex-1">Git</span>
 
@@ -490,6 +506,94 @@ export function PanelsSettingsTab({ activeTab, navigateTo, modes }: PanelsSettin
           </div>
         </div>
       )}
+
+      {activeTab === 'panels/git' && (() => {
+        const saveGraphConfig = (patch: Record<string, unknown>) => {
+          const next = { collapsed: graphCollapsed, showBranches: graphShowBranches, breakOnTags: graphBreakOnTags, breakOnMerges: graphBreakOnMerges, ...patch }
+          if ('collapsed' in patch) setGraphCollapsed(next.collapsed as boolean)
+          if ('showBranches' in patch) setGraphShowBranches(next.showBranches as boolean)
+          if ('breakOnTags' in patch) setGraphBreakOnTags(next.breakOnTags as boolean)
+          if ('breakOnMerges' in patch) setGraphBreakOnMerges(next.breakOnMerges as boolean)
+          window.api.settings.set('commit_graph_config', JSON.stringify(next))
+        }
+        return (
+          <div className="rounded-lg border p-5 space-y-6">
+            <PanelBreadcrumb label="Git" onBack={() => navigateTo('panels')} />
+
+            {/* Diff settings */}
+            <div>
+              <Label className="text-base font-semibold">Diff</Label>
+              <div className="mt-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Enabled</span>
+                  <Switch checked={isPanelEnabled(panelConfig, 'diff', 'task')} onCheckedChange={(c) => togglePanel('diff', 'task', c)} />
+                </div>
+                <div className="grid grid-cols-[180px_minmax(0,1fr)] items-center gap-3">
+                  <span className="text-sm text-muted-foreground">Context lines</span>
+                  <Select value={diffContextLines} onValueChange={(v) => { setDiffContextLines(v as any); window.api.settings.set('diff_context_lines', v) }}>
+                    <SelectTrigger className="max-w-32"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="0">0</SelectItem><SelectItem value="3">3</SelectItem><SelectItem value="5">5</SelectItem><SelectItem value="all">All</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Ignore whitespace</span>
+                  <Switch checked={diffIgnoreWhitespace} onCheckedChange={(c) => { setDiffIgnoreWhitespace(c); window.api.settings.set('diff_ignore_whitespace', c ? '1' : '0') }} />
+                </div>
+              </div>
+            </div>
+
+            <div className="h-px bg-border" />
+
+            {/* Commit graph defaults — matches DisplayPopover layout */}
+            <div>
+              <Label className="text-base font-semibold">Commit graph</Label>
+              <p className="text-xs text-muted-foreground mt-1">Default display settings. Each task and project can override these.</p>
+              <div className="mt-3 space-y-3">
+                {/* View mode toggle — same as popover */}
+                <div className="grid grid-cols-2 rounded-md border border-border/50 p-0.5 gap-0.5">
+                  {([
+                    { value: false, label: 'All commits' },
+                    { value: true, label: 'Collapsed' }
+                  ] as const).map(({ value, label }) => {
+                    const isActive = graphCollapsed === value
+                    return (
+                      <button
+                        key={label}
+                        type="button"
+                        className={`flex items-center justify-center gap-1.5 py-2 text-xs font-medium rounded transition-colors ${
+                          isActive
+                            ? 'bg-foreground text-background'
+                            : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                        }`}
+                        onClick={() => saveGraphConfig({ collapsed: value })}
+                      >
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div className="h-px bg-border" />
+
+                <div className="flex items-center justify-between">
+                  <span className="text-sm">Show branches</span>
+                  <Switch checked={graphShowBranches} onCheckedChange={(c) => saveGraphConfig({ showBranches: c })} />
+                </div>
+                {graphCollapsed && (<>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Break on tags</span>
+                    <Switch checked={graphBreakOnTags} onCheckedChange={(c) => saveGraphConfig({ breakOnTags: c })} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Break on merges</span>
+                    <Switch checked={graphBreakOnMerges} onCheckedChange={(c) => saveGraphConfig({ breakOnMerges: c })} />
+                  </div>
+                </>)}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {panelDetailId && panelDetailId.startsWith('web:') && (() => {
         const wp = panelConfig.webPanels.find(p => p.id === panelDetailId)
