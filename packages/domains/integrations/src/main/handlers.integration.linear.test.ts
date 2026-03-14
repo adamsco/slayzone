@@ -419,6 +419,184 @@ if (createdIssueId) {
     expect(remote!.title.startsWith('[test] push-created')).toBe(true)
     ok('pushNewTaskToProviders creates remote issue')
   } catch (e) { no('pushNewTaskToProviders creates remote issue', e) }
+
+  // ── push-task Linear (manual force push) ──────────────────────────────
+  console.log('\nLinear: Manual push/pull')
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    const link = h.db.prepare("SELECT * FROM external_links WHERE task_id = ? AND provider = 'linear'").get(task.id) as any
+    if (task && link) {
+      const forcePushTitle = `[test] force pushed ${Date.now()}`
+      h.db.prepare("UPDATE tasks SET title = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(forcePushTitle, task.id)
+
+      const result = await h.invoke('integrations:push-task', {
+        taskId: task.id, provider: 'linear', force: true
+      }) as any
+      expect(result.pushed).toBe(true)
+
+      const remote = await linearClient.getIssue(LINEAR_API_KEY, link.external_id)
+      expect(remote!.title).toBe(forcePushTitle)
+      ok('push-task force pushes local → remote')
+    } else {
+      ok('push-task force pushes local → remote (skipped: no linked task)')
+    }
+  } catch (e) { no('push-task force pushes local → remote', e) }
+
+  // ── pull-task Linear (manual force pull) ──────────────────────────────
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    const link = h.db.prepare("SELECT * FROM external_links WHERE task_id = ? AND provider = 'linear'").get(task.id) as any
+    if (task && link) {
+      const forcePullTitle = `[test] force pulled ${Date.now()}`
+      await linearClient.updateIssue(LINEAR_API_KEY, link.external_id, { title: forcePullTitle })
+
+      const result = await h.invoke('integrations:pull-task', {
+        taskId: task.id, provider: 'linear', force: true
+      }) as any
+      expect(result.pulled).toBe(true)
+
+      const updatedTask = h.db.prepare('SELECT title FROM tasks WHERE id = ?').get(task.id) as any
+      expect(updatedTask.title).toBe(forcePullTitle)
+      ok('pull-task force pulls remote → local')
+    } else {
+      ok('pull-task force pulls remote → local (skipped: no linked task)')
+    }
+  } catch (e) { no('pull-task force pulls remote → local', e) }
+
+  // ── push-task guards ──────────────────────────────────────────────────
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    const link = h.db.prepare("SELECT * FROM external_links WHERE task_id = ? AND provider = 'linear'").get(task.id) as any
+    if (task && link) {
+      // Sync first to establish baseline
+      await h.invoke('integrations:pull-task', { taskId: task.id, provider: 'linear', force: true })
+
+      // In-sync → should return pushed=false
+      const result = await h.invoke('integrations:push-task', {
+        taskId: task.id, provider: 'linear'
+      }) as any
+      expect(result.pushed).toBe(false)
+      expect(result.message.includes('already in sync')).toBe(true)
+      ok('push-task returns false when in sync')
+    } else {
+      ok('push-task returns false when in sync (skipped)')
+    }
+  } catch (e) { no('push-task returns false when in sync', e) }
+
+  // ── push-unlinked-tasks ───────────────────────────────────────────────
+  console.log('\nLinear: Push unlinked tasks')
+  try {
+    // Create unlinked tasks
+    const unlinkedIds: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const id = crypto.randomUUID()
+      h.db.prepare(`INSERT INTO tasks
+        (id, project_id, title, description, status, priority, terminal_mode, provider_config, claude_flags, codex_flags, created_at, updated_at)
+        VALUES (?, ?, ?, null, 'todo', 3, 'claude-code', '{}', '', '', datetime('now'), datetime('now'))`)
+        .run(id, projectId, `[test] unlinked ${i} ${Date.now()}`)
+      unlinkedIds.push(id)
+    }
+
+    const result = await h.invoke('integrations:push-unlinked-tasks', {
+      projectId, provider: 'linear'
+    }) as any
+    expect(result.pushed).toBeGreaterThan(0)
+
+    // Verify each task now has a link
+    for (const id of unlinkedIds) {
+      const link = h.db.prepare("SELECT * FROM external_links WHERE task_id = ? AND provider = 'linear'").get(id) as any
+      expect(link).toBeTruthy()
+      createdIssueIds.push(link.external_id)
+    }
+    ok('push-unlinked-tasks creates remote issues + links')
+  } catch (e) { no('push-unlinked-tasks creates remote issues + links', e) }
+
+  // Race guard: calling again should push 0 (all already linked)
+  try {
+    const result = await h.invoke('integrations:push-unlinked-tasks', {
+      projectId, provider: 'linear'
+    }) as any
+    expect(result.pushed).toBe(0)
+    ok('push-unlinked-tasks skips already-linked tasks')
+  } catch (e) { no('push-unlinked-tasks skips already-linked tasks', e) }
+
+  // Temporary tasks should be excluded
+  try {
+    const tempId = crypto.randomUUID()
+    h.db.prepare(`INSERT INTO tasks
+      (id, project_id, title, description, status, priority, terminal_mode, provider_config, claude_flags, codex_flags, is_temporary, created_at, updated_at)
+      VALUES (?, ?, ?, null, 'todo', 3, 'claude-code', '{}', '', '', 1, datetime('now'), datetime('now'))`)
+      .run(tempId, projectId, `[test] temporary ${Date.now()}`)
+
+    const result = await h.invoke('integrations:push-unlinked-tasks', {
+      projectId, provider: 'linear'
+    }) as any
+    expect(result.pushed).toBe(0)
+
+    const link = h.db.prepare("SELECT * FROM external_links WHERE task_id = ? AND provider = 'linear'").get(tempId) as any
+    expect(link).toBeUndefined()
+    ok('push-unlinked-tasks excludes temporary tasks')
+  } catch (e) { no('push-unlinked-tasks excludes temporary tasks', e) }
+
+  // ── Pagination ────────────────────────────────────────────────────────
+  console.log('\nLinear: Pagination')
+  try {
+    const { issues, nextCursor } = await linearClient.listIssues(LINEAR_API_KEY, {
+      teamId: LINEAR_TEST_TEAM_ID, first: 2
+    })
+    expect(issues.length).toBeGreaterThan(0)
+    if (nextCursor) {
+      const page2 = await linearClient.listIssues(LINEAR_API_KEY, {
+        teamId: LINEAR_TEST_TEAM_ID, first: 2, after: nextCursor
+      })
+      expect(page2.issues.length).toBeGreaterThan(0)
+      const page1Ids = new Set(issues.map(i => i.id))
+      const overlap = page2.issues.filter(i => page1Ids.has(i.id))
+      expect(overlap.length).toBe(0)
+      ok('listIssues pagination returns distinct pages')
+    } else {
+      ok('listIssues pagination returns distinct pages (skipped: only 1 page)')
+    }
+  } catch (e) { no('listIssues pagination returns distinct pages', e) }
+
+  // ── Error handling ────────────────────────────────────────────────────
+  console.log('\nLinear: Error handling')
+  try {
+    let threw = false
+    try { await linearClient.getViewer('lin_invalid_key_xxxxx') } catch { threw = true }
+    expect(threw).toBe(true)
+    ok('invalid API key throws')
+  } catch (e) { no('invalid API key throws', e) }
+
+  try {
+    let threw = false
+    try { await linearClient.getIssue(LINEAR_API_KEY, 'nonexistent-issue-id-xxxxx') } catch { threw = true }
+    expect(threw).toBe(true)
+    ok('nonexistent issue throws')
+  } catch (e) { no('nonexistent issue throws', e) }
+
+  // ── Batch fetch ───────────────────────────────────────────────────────
+  console.log('\nLinear: Batch fetch')
+  try {
+    const batchIds = createdIssueIds.slice(0, 3)
+    if (batchIds.length > 0) {
+      const batchResult = await linearClient.getIssuesBatch(LINEAR_API_KEY, batchIds)
+      expect(batchResult.size).toBe(batchIds.length)
+      for (const id of batchIds) {
+        expect(batchResult.has(id)).toBe(true)
+      }
+      ok('getIssuesBatch returns all requested issues')
+    } else {
+      ok('getIssuesBatch returns all requested issues (skipped: no issues)')
+    }
+  } catch (e) { no('getIssuesBatch returns all requested issues', e) }
+
+  try {
+    const emptyResult = await linearClient.getIssuesBatch(LINEAR_API_KEY, [])
+    expect(emptyResult.size).toBe(0)
+    ok('getIssuesBatch with empty array returns empty map')
+  } catch (e) { no('getIssuesBatch with empty array returns empty map', e) }
 }
 
 // ── Cleanup ───────────────────────────────────────────────────────────────

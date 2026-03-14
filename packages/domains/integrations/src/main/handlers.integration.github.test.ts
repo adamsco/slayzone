@@ -413,6 +413,169 @@ if (createdIssueNumber) {
     expect(remote!.title.startsWith('[test] push-created')).toBe(true)
     ok('pushNewTaskToProviders creates remote issue')
   } catch (e) { no('pushNewTaskToProviders creates remote issue', e) }
+
+  // ── push-task guards ──────────────────────────────────────────────────
+  console.log('\nGitHub: Push/pull guards')
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    // Force pull to establish baseline + in-sync state
+    await h.invoke('integrations:pull-task', { taskId: task.id, provider: 'github', force: true })
+
+    // In-sync → should return pushed=false
+    const result = await h.invoke('integrations:push-task', {
+      taskId: task.id, provider: 'github'
+    }) as any
+    expect(result.pushed).toBe(false)
+    expect(result.message.includes('already in sync')).toBe(true)
+    ok('push-task returns false when in sync')
+  } catch (e) { no('push-task returns false when in sync', e) }
+
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    // Force push to establish baseline
+    h.db.prepare("UPDATE tasks SET title = '[test] baseline', updated_at = datetime('now') WHERE id = ?").run(task.id)
+    await h.invoke('integrations:push-task', { taskId: task.id, provider: 'github', force: true })
+
+    // Update remote, then try non-force push → should refuse
+    await githubClient.updateIssue(GITHUB_TOKEN, {
+      owner: REPO_OWNER, repo: REPO_NAME, number: createdIssueNumber,
+      title: `[test] remote changed ${Date.now()}`, body: null, state: 'open'
+    })
+    h.db.prepare("UPDATE tasks SET title = '[test] local changed', updated_at = datetime('now') WHERE id = ?").run(task.id)
+
+    const result = await h.invoke('integrations:push-task', {
+      taskId: task.id, provider: 'github'
+    }) as any
+    expect(result.pushed).toBe(false)
+    expect(result.message.includes('Remote changes detected')).toBe(true)
+    ok('push-task refuses when remote ahead without force')
+  } catch (e) { no('push-task refuses when remote ahead without force', e) }
+
+  try {
+    const task = (h.db.prepare('SELECT * FROM tasks WHERE project_id = ? LIMIT 1').get(projectId) as any)
+    // Force pull to establish baseline
+    await h.invoke('integrations:pull-task', { taskId: task.id, provider: 'github', force: true })
+
+    // Update local, then try non-force pull → should refuse
+    h.db.prepare("UPDATE tasks SET title = '[test] local only', updated_at = datetime('now') WHERE id = ?").run(task.id)
+
+    const result = await h.invoke('integrations:pull-task', {
+      taskId: task.id, provider: 'github'
+    }) as any
+    expect(result.pulled).toBe(false)
+    expect(result.message.includes('Local changes detected')).toBe(true)
+    ok('pull-task refuses when local ahead without force')
+  } catch (e) { no('pull-task refuses when local ahead without force', e) }
+
+  // ── push-unlinked-tasks ───────────────────────────────────────────────
+  console.log('\nGitHub: Push unlinked tasks')
+  try {
+    const unlinkedIds: string[] = []
+    for (let i = 0; i < 2; i++) {
+      const id = crypto.randomUUID()
+      h.db.prepare(`INSERT INTO tasks
+        (id, project_id, title, description, status, priority, terminal_mode, provider_config, claude_flags, codex_flags, created_at, updated_at)
+        VALUES (?, ?, ?, null, 'todo', 3, 'claude-code', '{}', '', '', datetime('now'), datetime('now'))`)
+        .run(id, projectId, `[test] unlinked ${i} ${Date.now()}`)
+      unlinkedIds.push(id)
+    }
+
+    const result = await h.invoke('integrations:push-unlinked-tasks', {
+      projectId, provider: 'github'
+    }) as any
+    expect(result.pushed).toBeGreaterThan(0)
+
+    for (const id of unlinkedIds) {
+      const link = h.db.prepare("SELECT * FROM external_links WHERE task_id = ? AND provider = 'github'").get(id) as any
+      expect(link).toBeTruthy()
+      const parsed = parseGitHubExternalKey(link.external_key)
+      if (parsed) createdIssues.push({ owner: parsed.owner, repo: parsed.repo, number: parsed.number })
+    }
+    ok('push-unlinked-tasks creates remote issues + links')
+  } catch (e) { no('push-unlinked-tasks creates remote issues + links', e) }
+
+  // Race guard: calling again should push 0
+  try {
+    const result = await h.invoke('integrations:push-unlinked-tasks', {
+      projectId, provider: 'github'
+    }) as any
+    expect(result.pushed).toBe(0)
+    ok('push-unlinked-tasks skips already-linked tasks')
+  } catch (e) { no('push-unlinked-tasks skips already-linked tasks', e) }
+
+  // Temporary tasks should be excluded
+  try {
+    const tempId = crypto.randomUUID()
+    h.db.prepare(`INSERT INTO tasks
+      (id, project_id, title, description, status, priority, terminal_mode, provider_config, claude_flags, codex_flags, is_temporary, created_at, updated_at)
+      VALUES (?, ?, ?, null, 'todo', 3, 'claude-code', '{}', '', '', 1, datetime('now'), datetime('now'))`)
+      .run(tempId, projectId, `[test] temporary ${Date.now()}`)
+
+    const result = await h.invoke('integrations:push-unlinked-tasks', {
+      projectId, provider: 'github'
+    }) as any
+    expect(result.pushed).toBe(0)
+
+    const link = h.db.prepare("SELECT * FROM external_links WHERE task_id = ? AND provider = 'github'").get(tempId) as any
+    expect(link).toBeUndefined()
+    ok('push-unlinked-tasks excludes temporary tasks')
+  } catch (e) { no('push-unlinked-tasks excludes temporary tasks', e) }
+
+  // ── Pagination ────────────────────────────────────────────────────────
+  console.log('\nGitHub: Pagination')
+  try {
+    const { issues, nextCursor } = await githubClient.listIssues(GITHUB_TOKEN, {
+      owner: REPO_OWNER, repo: REPO_NAME, limit: 2
+    })
+    expect(issues.length).toBeGreaterThan(0)
+    // With many test issues created, page 2 should exist
+    if (nextCursor) {
+      const page2 = await githubClient.listIssues(GITHUB_TOKEN, {
+        owner: REPO_OWNER, repo: REPO_NAME, limit: 2, cursor: nextCursor
+      })
+      expect(page2.issues.length).toBeGreaterThan(0)
+      // No overlap between pages
+      const page1Ids = new Set(issues.map(i => i.id))
+      const overlap = page2.issues.filter(i => page1Ids.has(i.id))
+      expect(overlap.length).toBe(0)
+      ok('listIssues pagination returns distinct pages')
+    } else {
+      ok('listIssues pagination returns distinct pages (skipped: only 1 page)')
+    }
+  } catch (e) { no('listIssues pagination returns distinct pages', e) }
+
+  // ── Error handling ────────────────────────────────────────────────────
+  console.log('\nGitHub: Error handling')
+  try {
+    let threw = false
+    try {
+      await githubClient.getViewer('ghp_invalid_token_xxxxx')
+    } catch { threw = true }
+    expect(threw).toBe(true)
+    ok('invalid token throws')
+  } catch (e) { no('invalid token throws', e) }
+
+  try {
+    let threw = false
+    try {
+      await githubClient.getIssue(GITHUB_TOKEN, {
+        owner: REPO_OWNER, repo: REPO_NAME, number: 999999
+      })
+    } catch { threw = true }
+    expect(threw).toBe(true)
+    ok('nonexistent issue throws')
+  } catch (e) { no('nonexistent issue throws', e) }
+
+  try {
+    let threw = false
+    try {
+      await githubClient.listIssues(GITHUB_TOKEN, {
+        owner: 'nonexistent-owner-xyz', repo: 'nonexistent-repo', limit: 10
+      })
+    } catch { threw = true }
+    expect(threw).toBe(true)
+    ok('nonexistent repo throws')
+  } catch (e) { no('nonexistent repo throws', e) }
 }
 
 // ── Projects V2: Status sync ─────────────────────────────────────────────
