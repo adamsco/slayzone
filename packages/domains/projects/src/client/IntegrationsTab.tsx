@@ -38,20 +38,21 @@ import type {
 import { ProjectIntegrationConnectionModal } from './ProjectIntegrationConnectionModal'
 import { providerDisplayName, SettingsTabIntro } from './project-settings-shared'
 
-type GithubTaskSyncRow = {
+type TaskSyncRow = {
   taskId: string
-  link: ExternalLink
-  status: TaskSyncStatus
+  link: ExternalLink | null
+  status: TaskSyncStatus | null
   error?: string
 }
 
-type GithubProjectSyncSummary = {
+type ProjectSyncSummary = {
   total: number
   in_sync: number
   local_ahead: number
   remote_ahead: number
   conflict: number
   unknown: number
+  unlinked: number
   errors: number
   checkedAt: string
 }
@@ -59,9 +60,9 @@ type GithubProjectSyncSummary = {
 type IntegrationSetupEntry = 'github_projects' | 'linear' | 'github_issues'
 type ImportIssueSort = 'updated_desc' | 'updated_asc' | 'title_asc' | 'title_desc'
 
-function createUnknownGithubStatus(taskId: string): TaskSyncStatus {
+function createUnknownStatus(provider: IntegrationProvider, taskId: string): TaskSyncStatus {
   return {
-    provider: 'github',
+    provider,
     taskId,
     state: 'unknown',
     fields: [],
@@ -69,19 +70,24 @@ function createUnknownGithubStatus(taskId: string): TaskSyncStatus {
   }
 }
 
-function summarizeGithubRows(rows: GithubTaskSyncRow[]): GithubProjectSyncSummary {
-  const summary: GithubProjectSyncSummary = {
+function summarizeSyncRows(rows: TaskSyncRow[]): ProjectSyncSummary {
+  const summary: ProjectSyncSummary = {
     total: rows.length,
     in_sync: 0,
     local_ahead: 0,
     remote_ahead: 0,
     conflict: 0,
     unknown: 0,
+    unlinked: 0,
     errors: rows.filter((row) => Boolean(row.error)).length,
     checkedAt: new Date().toISOString()
   }
   for (const row of rows) {
-    summary[row.status.state] += 1
+    if (!row.link) {
+      summary.unlinked += 1
+    } else if (row.status) {
+      summary[row.status.state] += 1
+    }
   }
   return summary
 }
@@ -150,12 +156,12 @@ export function IntegrationsTab({
   const [loadingGithubRepoIssues, setLoadingGithubRepoIssues] = useState(false)
   const [importingGithubRepoIssues, setImportingGithubRepoIssues] = useState(false)
   const [githubRepoImportMessage, setGithubRepoImportMessage] = useState('')
-  const [githubSyncRows, setGithubSyncRows] = useState<GithubTaskSyncRow[]>([])
-  const [githubSyncSummary, setGithubSyncSummary] = useState<GithubProjectSyncSummary | null>(null)
-  const [checkingGithubSync, setCheckingGithubSync] = useState(false)
-  const [pushingGithubSync, setPushingGithubSync] = useState(false)
-  const [pullingGithubSync, setPullingGithubSync] = useState(false)
-  const [githubSyncMessage, setGithubSyncMessage] = useState('')
+  const [syncRows, setSyncRows] = useState<TaskSyncRow[]>([])
+  const [syncSummary, setSyncSummary] = useState<ProjectSyncSummary | null>(null)
+  const [checkingSync, setCheckingSync] = useState(false)
+  const [pushingSync, setPushingSync] = useState(false)
+  const [pullingSync, setPullingSync] = useState(false)
+  const [syncMessage, setSyncMessage] = useState('')
   const [selectedIntegrationEntry, setSelectedIntegrationEntry] = useState<IntegrationSetupEntry | null>(
     null
   )
@@ -179,7 +185,6 @@ export function IntegrationsTab({
   const [linearSyncMode, setLinearSyncMode] = useState<IntegrationSyncMode>('one_way')
   const [syncSettingsMessage, setSyncSettingsMessage] = useState('')
   const [savingSyncProvider, setSavingSyncProvider] = useState<IntegrationProvider | null>(null)
-  const [pullingLinearSyncNow, setPullingLinearSyncNow] = useState(false)
   const [linearImportTeamId, setLinearImportTeamId] = useState('')
   const [linearImportProjectId, setLinearImportProjectId] = useState('')
   const [linearImportTeams, setLinearImportTeams] = useState<LinearTeam[]>([])
@@ -278,9 +283,9 @@ export function IntegrationsTab({
     setSelectedGithubRepoIssueIds(new Set())
     setGithubRepoIssueQuery('')
     setGithubRepoImportMessage('')
-    setGithubSyncRows([])
-    setGithubSyncSummary(null)
-    setGithubSyncMessage('')
+    setSyncRows([])
+    setSyncSummary(null)
+    setSyncMessage('')
   }, [open, project])
 
   useEffect(() => {
@@ -621,53 +626,6 @@ export function IntegrationsTab({
     }
   }
 
-  const handleManualLinearPull = async () => {
-    if (!linearSyncEnabled) {
-      toast.error('Enable Linear sync first')
-      return
-    }
-    const connectionId = mapping?.connection_id ?? linearProjectConnectionId
-    const teamId = mapping?.external_team_id ?? linearSyncTeamId
-    const linearProjectId = mapping?.external_project_id ?? (linearSyncProjectId || undefined)
-    if (!connectionId || !teamId) {
-      toast.error('Save Linear sync settings first')
-      return
-    }
-
-    setPullingLinearSyncNow(true)
-    try {
-      let cursor: string | null = null
-      let totalImported = 0
-      let totalLinked = 0
-      let pages = 0
-      const maxPages = 20
-
-      do {
-        const result = await window.api.integrations.importLinearIssues({
-          projectId: project.id,
-          connectionId,
-          teamId,
-          linearProjectId,
-          limit: 50,
-          cursor
-        })
-        totalImported += result.imported
-        totalLinked += result.linked
-        cursor = result.nextCursor
-        pages += 1
-      } while (cursor && pages < maxPages)
-
-      const truncated = cursor ? ' (partial: reached page limit)' : ''
-      toast.success(`Pull complete: ${totalImported} imported/updated, ${totalLinked} linked${truncated}`)
-      if (totalImported > 0) {
-        ;(window as any).__slayzone_refreshData?.()
-      }
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error))
-    } finally {
-      setPullingLinearSyncNow(false)
-    }
-  }
 
   const handleSyncStepSetupContinue = async () => {
     const provider = syncSetupProvider
@@ -881,7 +839,7 @@ export function IntegrationsTab({
         ;(window as any).__slayzone_refreshData?.()
         await Promise.all([
           handleLoadGithubRepositoryIssues(),
-          collectGithubSyncRows()
+          collectSyncRows()
         ])
       }
     } catch (error) {
@@ -891,63 +849,72 @@ export function IntegrationsTab({
     }
   }
 
-  const collectGithubSyncRows = useCallback(async (): Promise<GithubTaskSyncRow[]> => {
+  const syncSetupProvider: IntegrationProvider | null = selectedIntegrationEntry === 'linear'
+    ? 'linear'
+    : selectedIntegrationEntry === 'github_projects'
+      ? 'github'
+      : null
+
+  const collectSyncRows = useCallback(async (): Promise<TaskSyncRow[]> => {
+    const provider = syncSetupProvider
+    if (!provider) return []
+
     const tasks = await window.api.db.getTasksByProject(project.id)
     const linkLookups = await Promise.all(
       tasks.map(async (task) => {
-        const link = await window.api.integrations.getLink(task.id, 'github')
+        const link = await window.api.integrations.getLink(task.id, provider)
         return { taskId: task.id, link }
       })
     )
-    const linkedEntries = linkLookups.filter(
-      (entry): entry is { taskId: string; link: ExternalLink } => Boolean(entry.link)
-    )
 
-    const rows = await Promise.all(
-      linkedEntries.map(async ({ taskId, link }) => {
+    const rows: TaskSyncRow[] = await Promise.all(
+      linkLookups.map(async ({ taskId, link }) => {
+        if (!link) {
+          return { taskId, link: null, status: null }
+        }
         try {
-          const status = await window.api.integrations.getTaskSyncStatus(taskId, 'github')
+          const status = await window.api.integrations.getTaskSyncStatus(taskId, provider)
           return { taskId, link, status }
         } catch (error) {
           return {
             taskId,
             link,
-            status: createUnknownGithubStatus(taskId),
+            status: createUnknownStatus(provider, taskId),
             error: error instanceof Error ? error.message : String(error)
           }
         }
       })
     )
 
-    setGithubSyncRows(rows)
-    setGithubSyncSummary(summarizeGithubRows(rows))
+    setSyncRows(rows)
+    setSyncSummary(summarizeSyncRows(rows))
     return rows
-  }, [project])
+  }, [project, syncSetupProvider])
 
-  const handleCheckGithubDiffs = async () => {
-    setCheckingGithubSync(true)
-    setGithubSyncMessage('')
+  const handleCheckDiffs = async () => {
+    setCheckingSync(true)
+    setSyncMessage('')
     try {
-      const rows = await collectGithubSyncRows()
-      setGithubSyncMessage(`Checked ${rows.length} linked GitHub issues`)
+      const rows = await collectSyncRows()
+      const linked = rows.filter((r) => r.link).length
+      const unlinked = rows.filter((r) => !r.link).length
+      setSyncMessage(`Checked ${linked} linked${unlinked > 0 ? ` + ${unlinked} unlinked` : ''} tasks`)
     } catch (error) {
-      setGithubSyncMessage(error instanceof Error ? error.message : String(error))
+      setSyncMessage(error instanceof Error ? error.message : String(error))
     } finally {
-      setCheckingGithubSync(false)
+      setCheckingSync(false)
     }
   }
 
-  const handlePushGithubLocalAhead = async () => {
-    setPushingGithubSync(true)
-    setGithubSyncMessage('')
+  const handlePushLocalAhead = async () => {
+    if (!syncSetupProvider) return
+    setPushingSync(true)
+    setSyncMessage('')
     try {
-      const rows = githubSyncRows.length > 0 ? githubSyncRows : await collectGithubSyncRows()
-      const targets = rows.filter((row) => row.status.state === 'local_ahead')
-      if (targets.length === 0) {
-        setGithubSyncMessage('No local-ahead tasks to push')
-        return
-      }
+      const rows = syncRows.length > 0 ? syncRows : await collectSyncRows()
 
+      // Push linked local-ahead tasks
+      const targets = rows.filter((row) => row.link && row.status?.state === 'local_ahead')
       let pushed = 0
       let skipped = 0
       let errors = 0
@@ -955,7 +922,7 @@ export function IntegrationsTab({
         try {
           const result = await window.api.integrations.pushTask({
             taskId: target.taskId,
-            provider: 'github'
+            provider: syncSetupProvider
           })
           if (result.pushed) pushed += 1
           else skipped += 1
@@ -963,26 +930,43 @@ export function IntegrationsTab({
           errors += 1
         }
       }
-      if (pushed > 0) {
+
+      // Push unlinked tasks
+      const unlinkedCount = rows.filter((r) => !r.link).length
+      let unlinkedPushed = 0
+      if (unlinkedCount > 0) {
+        const result = await window.api.integrations.pushUnlinkedTasks({
+          projectId: project.id,
+          provider: syncSetupProvider
+        })
+        unlinkedPushed = result.pushed
+        errors += result.errors.length
+      }
+
+      if (pushed > 0 || unlinkedPushed > 0) {
         ;(window as any).__slayzone_refreshData?.()
       }
-      setGithubSyncMessage(`Push complete: ${pushed} pushed, ${skipped} skipped${errors > 0 ? `, ${errors} errors` : ''}`)
-      await collectGithubSyncRows()
+      const parts = [`${pushed} pushed`, `${skipped} skipped`]
+      if (unlinkedPushed > 0) parts.push(`${unlinkedPushed} newly linked`)
+      if (errors > 0) parts.push(`${errors} errors`)
+      setSyncMessage(`Push complete: ${parts.join(', ')}`)
+      await collectSyncRows()
     } catch (error) {
-      setGithubSyncMessage(error instanceof Error ? error.message : String(error))
+      setSyncMessage(error instanceof Error ? error.message : String(error))
     } finally {
-      setPushingGithubSync(false)
+      setPushingSync(false)
     }
   }
 
-  const handlePullGithubRemoteAhead = async () => {
-    setPullingGithubSync(true)
-    setGithubSyncMessage('')
+  const handlePullRemoteAhead = async () => {
+    if (!syncSetupProvider) return
+    setPullingSync(true)
+    setSyncMessage('')
     try {
-      const rows = githubSyncRows.length > 0 ? githubSyncRows : await collectGithubSyncRows()
-      const targets = rows.filter((row) => row.status.state === 'remote_ahead')
+      const rows = syncRows.length > 0 ? syncRows : await collectSyncRows()
+      const targets = rows.filter((row) => row.link && row.status?.state === 'remote_ahead')
       if (targets.length === 0) {
-        setGithubSyncMessage('No remote-ahead tasks to pull')
+        setSyncMessage('No remote-ahead tasks to pull')
         return
       }
 
@@ -993,7 +977,7 @@ export function IntegrationsTab({
         try {
           const result = await window.api.integrations.pullTask({
             taskId: target.taskId,
-            provider: 'github'
+            provider: syncSetupProvider
           })
           if (result.pulled) pulled += 1
           else skipped += 1
@@ -1004,12 +988,12 @@ export function IntegrationsTab({
       if (pulled > 0) {
         ;(window as any).__slayzone_refreshData?.()
       }
-      setGithubSyncMessage(`Pull complete: ${pulled} pulled, ${skipped} skipped${errors > 0 ? `, ${errors} errors` : ''}`)
-      await collectGithubSyncRows()
+      setSyncMessage(`Pull complete: ${pulled} pulled, ${skipped} skipped${errors > 0 ? `, ${errors} errors` : ''}`)
+      await collectSyncRows()
     } catch (error) {
-      setGithubSyncMessage(error instanceof Error ? error.message : String(error))
+      setSyncMessage(error instanceof Error ? error.message : String(error))
     } finally {
-      setPullingGithubSync(false)
+      setPullingSync(false)
     }
   }
 
@@ -1033,11 +1017,6 @@ export function IntegrationsTab({
   const isGithubImportView = selectedIntegrationEntry === 'github_issues' && selectedIntegrationMode === 'import'
   const isLinearContinuousView = selectedIntegrationEntry === 'linear' && selectedIntegrationMode === 'continuous'
   const isLinearImportView = selectedIntegrationEntry === 'linear' && selectedIntegrationMode === 'import'
-  const syncSetupProvider: IntegrationProvider | null = selectedIntegrationEntry === 'linear'
-    ? 'linear'
-    : selectedIntegrationEntry === 'github_projects'
-      ? 'github'
-      : null
   const activeSyncProvider: IntegrationProvider | null = linearMappingSource
     ? 'linear'
     : githubMappingSource
@@ -1118,13 +1097,14 @@ export function IntegrationsTab({
   const allVisibleGithubRepoIssuesSelected =
     githubRepoVisibleImportableIssues.length > 0 &&
     githubRepoVisibleImportableIssues.every((issue) => selectedGithubRepoIssueIds.has(issue.id))
-  const githubSummary = githubSyncSummary ?? {
+  const taskSyncSummary = syncSummary ?? {
     total: 0,
     in_sync: 0,
     local_ahead: 0,
     remote_ahead: 0,
     conflict: 0,
     unknown: 0,
+    unlinked: 0,
     errors: 0,
     checkedAt: ''
   }
@@ -1228,6 +1208,9 @@ export function IntegrationsTab({
         title="Integrations"
         description="Choose one integration path, then configure its project-specific connection and mapping."
       />
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+        <p className="text-xs text-amber-400">Integrations are in beta. Use at your own risk. We recommend starting with one-way sync before enabling two-way sync.</p>
+      </div>
 
       {selectedIntegrationEntry === null ? (
         <div className="space-y-3">
@@ -1244,6 +1227,9 @@ export function IntegrationsTab({
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-semibold">{category.title}</p>
+                        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
+                          Beta
+                        </span>
                         {providerConnected ? (
                           <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">
                             Connected
@@ -1675,7 +1661,7 @@ export function IntegrationsTab({
                           </div>
                           <span className="text-sm font-medium">Tasks</span>
                           <span className="text-xs text-muted-foreground">
-                            {githubSummary.total || '0'} linked
+                            {taskSyncSummary.total || '0'} linked
                           </span>
                         </div>
                         <Pencil className="size-3.5 text-muted-foreground" />
@@ -1697,22 +1683,22 @@ export function IntegrationsTab({
                               variant="outline"
                               size="sm"
                               className="h-7"
-                              data-testid="github-project-check-diffs"
-                              disabled={checkingGithubSync || pushingGithubSync || pullingGithubSync}
-                              onClick={() => void handleCheckGithubDiffs()}
+                              data-testid="project-check-diffs"
+                              disabled={checkingSync || pushingSync || pullingSync}
+                              onClick={() => void handleCheckDiffs()}
                             >
-                              {checkingGithubSync ? (
+                              {checkingSync ? (
                                 <><Loader2 className="mr-1 size-3 animate-spin" />Checking&hellip;</>
                               ) : 'Check diffs'}
                             </Button>
                             <Button
                               size="sm"
                               className="h-7"
-                              data-testid="github-project-push-local-ahead"
-                              disabled={checkingGithubSync || pushingGithubSync || pullingGithubSync}
-                              onClick={() => void handlePushGithubLocalAhead()}
+                              data-testid="project-push-local-ahead"
+                              disabled={checkingSync || pushingSync || pullingSync}
+                              onClick={() => void handlePushLocalAhead()}
                             >
-                              {pushingGithubSync ? (
+                              {pushingSync ? (
                                 <><Loader2 className="mr-1 size-3 animate-spin" />Pushing&hellip;</>
                               ) : 'Push \u2191'}
                             </Button>
@@ -1720,46 +1706,36 @@ export function IntegrationsTab({
                               variant="outline"
                               size="sm"
                               className="h-7"
-                              data-testid="github-project-pull-remote-ahead"
-                              disabled={checkingGithubSync || pushingGithubSync || pullingGithubSync}
-                              onClick={() => void handlePullGithubRemoteAhead()}
+                              data-testid="project-pull-remote-ahead"
+                              disabled={checkingSync || pushingSync || pullingSync}
+                              onClick={() => void handlePullRemoteAhead()}
                             >
-                              {pullingGithubSync ? (
+                              {pullingSync ? (
                                 <><Loader2 className="mr-1 size-3 animate-spin" />Pulling&hellip;</>
                               ) : 'Pull \u2193'}
                             </Button>
-                            {syncSetupProvider === 'linear' ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7"
-                                disabled={!linearSyncEnabled || pullingLinearSyncNow}
-                                onClick={() => void handleManualLinearPull()}
-                              >
-                                {pullingLinearSyncNow ? (
-                                  <><Loader2 className="mr-1 size-3 animate-spin" />Pulling&hellip;</>
-                                ) : 'Pull now'}
-                              </Button>
-                            ) : null}
                           </div>
                         </div>
                         <CardContent className="space-y-2 px-4 pb-4">
-                          <div className="grid grid-cols-4 gap-2">
+                          <div className="grid grid-cols-5 gap-2">
                             <div className="rounded-md border border-border/50 bg-muted/40 px-3 py-2 text-center">
-                              <p className="text-xs text-muted-foreground">In sync: {githubSummary.in_sync}</p>
+                              <p className="text-xs text-muted-foreground">In sync: {taskSyncSummary.in_sync}</p>
                             </div>
                             <div className="rounded-md border border-border/50 bg-muted/40 px-3 py-2 text-center">
-                              <p className="text-xs text-muted-foreground">Local ahead: {githubSummary.local_ahead}</p>
+                              <p className="text-xs text-muted-foreground">Local ahead: {taskSyncSummary.local_ahead}</p>
                             </div>
                             <div className="rounded-md border border-border/50 bg-muted/40 px-3 py-2 text-center">
-                              <p className="text-xs text-muted-foreground">Remote ahead: {githubSummary.remote_ahead}</p>
+                              <p className="text-xs text-muted-foreground">Remote ahead: {taskSyncSummary.remote_ahead}</p>
                             </div>
                             <div className="rounded-md border border-border/50 bg-muted/40 px-3 py-2 text-center">
-                              <p className="text-xs text-muted-foreground">Conflicts: {githubSummary.conflict}</p>
+                              <p className="text-xs text-muted-foreground">Conflicts: {taskSyncSummary.conflict}</p>
+                            </div>
+                            <div className="rounded-md border border-border/50 bg-muted/40 px-3 py-2 text-center">
+                              <p className="text-xs text-muted-foreground">Unlinked: {taskSyncSummary.unlinked}</p>
                             </div>
                           </div>
 
-                          {githubSyncMessage ? <p className="text-xs text-muted-foreground">{githubSyncMessage}</p> : null}
+                          {syncMessage ? <p className="text-xs text-muted-foreground">{syncMessage}</p> : null}
                         </CardContent>
                       </>
                     ) : (
