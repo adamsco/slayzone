@@ -160,7 +160,7 @@ export function GeneralTabContent({
 
       {/* Commit graph */}
       <div className="flex-1 min-h-0 flex flex-col">
-        <div className="shrink-0 px-4 pt-4 mb-0.5 flex items-end">
+        <div className="shrink-0 px-4 pt-4 mb-2 flex items-end">
           <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Commits & Branches</div>
           <div className="flex-1" />
           <div className="flex items-center gap-0.5">
