@@ -193,7 +193,7 @@ export function FilterBarB({ filter, onChange, tags }: FilterBarBProps): React.J
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-72 p-3" align="end">
-            <div className="space-y-3">
+            <div className="space-y-8">
               {/* View mode toggle */}
               <div className="grid grid-cols-2 rounded-md border border-border/50 p-0.5 gap-0.5">
                 {([
@@ -218,54 +218,54 @@ export function FilterBarB({ filter, onChange, tags }: FilterBarBProps): React.J
                 })}
               </div>
 
-              {/* Grouping */}
-              <div className="flex items-center justify-between">
-                <Label className="text-sm">Grouping</Label>
-                <Select value={vc.groupBy} onValueChange={(v) => setVc({ groupBy: v as GroupKey })}>
-                  <SelectTrigger size="sm" className="h-7 w-30 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {groupOptions.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {/* Grouping & Ordering */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm">Grouping</Label>
+                  <Select value={vc.groupBy} onValueChange={(v) => setVc({ groupBy: v as GroupKey })}>
+                    <SelectTrigger size="sm" className="h-7 w-30 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {groupOptions.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm">Ordering</Label>
+                  <Select value={vc.sortBy} onValueChange={(v) => setVc({ sortBy: v as SortKey })}>
+                    <SelectTrigger size="sm" className="h-7 w-30 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SORT_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
 
-              {/* Ordering */}
-              <div className="flex items-center justify-between">
-                <Label className="text-sm">Ordering</Label>
-                <Select value={vc.sortBy} onValueChange={(v) => setVc({ sortBy: v as SortKey })}>
-                  <SelectTrigger size="sm" className="h-7 w-30 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {SORT_OPTIONS.map((opt) => (
-                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="h-px bg-border" />
-
-              {/* Toggle switches */}
-              <div className="flex items-center justify-between">
-                <Label htmlFor="display-completed" className="text-sm cursor-pointer">Show completed tasks</Label>
-                <Switch id="display-completed" checked={vc.completedFilter === 'all'} onCheckedChange={(v) => setVc({ completedFilter: v ? 'all' : 'none' })} />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="display-archived" className="text-sm cursor-pointer">Show archived tasks</Label>
-                <Switch id="display-archived" checked={vc.showArchived} onCheckedChange={(v) => setVc({ showArchived: v })} />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="display-subtasks" className="text-sm cursor-pointer">Show sub-tasks</Label>
-                <Switch id="display-subtasks" checked={vc.showSubTasks} onCheckedChange={(v) => setVc({ showSubTasks: v })} />
-              </div>
-              <div className="flex items-center justify-between">
-                <Label htmlFor="display-empty-cols" className="text-sm cursor-pointer">{isList ? 'Show empty groups' : 'Show empty columns'}</Label>
-                <Switch id="display-empty-cols" checked={vc.showEmptyColumns} onCheckedChange={(v) => setVc({ showEmptyColumns: v })} />
+              {/* Settings */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="display-completed" className="text-sm cursor-pointer">Show completed tasks</Label>
+                  <Switch id="display-completed" checked={vc.completedFilter === 'all'} onCheckedChange={(v) => setVc({ completedFilter: v ? 'all' : 'none' })} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="display-archived" className="text-sm cursor-pointer">Show archived tasks</Label>
+                  <Switch id="display-archived" checked={vc.showArchived} onCheckedChange={(v) => setVc({ showArchived: v })} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="display-subtasks" className="text-sm cursor-pointer">Show sub-tasks</Label>
+                  <Switch id="display-subtasks" checked={vc.showSubTasks} onCheckedChange={(v) => setVc({ showSubTasks: v })} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="display-empty-cols" className="text-sm cursor-pointer">{isList ? 'Show empty groups' : 'Show empty columns'}</Label>
+                  <Switch id="display-empty-cols" checked={vc.showEmptyColumns} onCheckedChange={(v) => setVc({ showEmptyColumns: v })} />
+                </div>
               </div>
             </div>
           </PopoverContent>
