@@ -18,15 +18,16 @@ const PROVIDERS = [
 ]
 
 const TRACKED_EVENTS = [
-  'App version and active time',
-  'Pages visited (home, task, leaderboard)',
-  'Open panels (terminal, editor, browser, git)'
+  'App version, active time, and crash reports',
+  'Feature usage (tasks, terminal, editor, git, browser)',
+  'Navigation and keyboard shortcuts',
+  'Settings and theme changes',
 ]
 
 const NOT_TRACKED = [
   'Your code, files, or terminal content',
   'AI conversations or prompts',
-  'Project names or paths'
+  'Any project data',
 ]
 
 function SuccessStep({ onComplete }: { onComplete: () => void }): React.JSX.Element {

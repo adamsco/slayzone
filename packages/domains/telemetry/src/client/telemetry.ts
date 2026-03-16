@@ -182,6 +182,7 @@ export async function initTelemetry(tier: TelemetryTier): Promise<void> {
     capture_pageview: false,
     autocapture: false,
     disable_session_recording: true,
+    capture_exceptions: isOptedIn,
     ...(isOptedIn ? {} : { disable_persistence: true })
   })
 
