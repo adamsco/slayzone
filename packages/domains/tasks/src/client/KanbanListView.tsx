@@ -7,6 +7,7 @@ import {
   useSensors,
   useSensor,
   closestCenter,
+  useDroppable,
   type DragStartEvent,
   type DragEndEvent
 } from '@dnd-kit/core'
@@ -257,6 +258,13 @@ function ListRowContent({
   )
 }
 
+// ── Droppable group wrapper ──
+
+function DroppableGroup({ columnId, children }: { columnId: string; children: React.ReactNode }): React.JSX.Element {
+  const { setNodeRef } = useDroppable({ id: `group:${columnId}` })
+  return <div ref={setNodeRef}>{children}</div>
+}
+
 // ── Group section ──
 
 interface GroupSectionProps {
@@ -273,6 +281,7 @@ interface GroupSectionProps {
   disableDrag?: boolean
   blockedTaskIds?: Set<string>
   subTaskCounts: Map<string, { done: number; total: number }>
+  isDragging?: boolean
   allProjects?: Project[]
   onUpdateTask?: (taskId: string, updates: Partial<Task>) => void
   onArchiveTask?: (taskId: string) => void
@@ -293,6 +302,7 @@ function GroupSection({
   disableDrag,
   blockedTaskIds,
   subTaskCounts,
+  isDragging,
   allProjects,
   onUpdateTask,
   onArchiveTask,
@@ -320,28 +330,35 @@ function GroupSection({
 
       {/* Tasks */}
       {(!showHeader || !collapsed) && (
-        <SortableContext items={column.tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-          <div className="flex flex-col gap-1">
-            {column.tasks.map((task) => (
-              <SortableListRow
-                key={task.id}
-                task={task}
-                columns={columns}
-                cp={cp}
-                onClick={onTaskClick}
-                project={showProjectDot ? projectsMap?.get(task.project_id) : undefined}
-                showProject={showProjectDot}
-                disableDrag={disableDrag}
-                isBlocked={blockedTaskIds?.has(task.id)}
-                subTaskCount={subTaskCounts.get(task.id)}
-                allProjects={allProjects}
-                onUpdateTask={onUpdateTask}
-                onArchiveTask={onArchiveTask}
-                onDeleteTask={onDeleteTask}
-              />
-            ))}
-          </div>
-        </SortableContext>
+        <DroppableGroup columnId={column.id}>
+          <SortableContext items={column.tasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+            <div className="flex flex-col gap-1">
+              {column.tasks.length === 0 && (
+                <div className={cn('px-2.5 py-3 text-xs text-center rounded-md transition-colors', isDragging ? 'text-muted-foreground/50 bg-muted/30 border border-dashed border-muted-foreground/20' : 'text-transparent')}>
+                  Drop here
+                </div>
+              )}
+              {column.tasks.map((task) => (
+                <SortableListRow
+                  key={task.id}
+                  task={task}
+                  columns={columns}
+                  cp={cp}
+                  onClick={onTaskClick}
+                  project={showProjectDot ? projectsMap?.get(task.project_id) : undefined}
+                  showProject={showProjectDot}
+                  disableDrag={disableDrag}
+                  isBlocked={blockedTaskIds?.has(task.id)}
+                  subTaskCount={subTaskCounts.get(task.id)}
+                  allProjects={allProjects}
+                  onUpdateTask={onUpdateTask}
+                  onArchiveTask={onArchiveTask}
+                  onDeleteTask={onDeleteTask}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DroppableGroup>
       )}
     </div>
   )
@@ -433,6 +450,18 @@ export function KanbanListView({
     const overId = over.id as string
     if (taskId === overId) return
 
+    // Dropped on a group droppable (empty or non-empty group area)
+    const groupPrefix = 'group:'
+    if (overId.startsWith(groupPrefix)) {
+      const columnId = overId.slice(groupPrefix.length)
+      const sourceColumn = visibleColumns.find((c) => c.tasks.some((t) => t.id === taskId))
+      const targetColumn = visibleColumns.find((c) => c.id === columnId)
+      if (!sourceColumn || !targetColumn) return
+      if (targetColumn.id === '__unknown__' || sourceColumn.id === targetColumn.id) return
+      onTaskMove(taskId, targetColumn.id, targetColumn.tasks.length)
+      return
+    }
+
     // Find source and target columns
     const sourceColumn = visibleColumns.find((c) => c.tasks.some((t) => t.id === taskId))
     const targetColumn = visibleColumns.find((c) => c.tasks.some((t) => t.id === overId))
@@ -488,6 +517,7 @@ export function KanbanListView({
             disableDrag={disableDrag}
             blockedTaskIds={blockedTaskIds}
             subTaskCounts={subTaskCounts}
+            isDragging={activeId != null}
             allProjects={allProjects}
             onUpdateTask={onUpdateTask}
             onArchiveTask={onArchiveTask}
