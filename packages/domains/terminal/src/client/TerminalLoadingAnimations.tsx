@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // 1. Typing Cursor — blinking block cursor with text typed out
 function TypingCursor() {
