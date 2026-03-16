@@ -134,11 +134,18 @@ export class WebLinkProvider implements ILinkProvider {
     let match: RegExpExecArray | null
 
     while ((match = regex.exec(joinedText)) !== null) {
-      const uri = match[0]
+      let uri = match[0]
 
       const [startY, startX] = mapStringIndex(this._terminal, topLineIndex, 0, match.index)
       const [endY, endX] = mapStringIndex(this._terminal, topLineIndex, 0, match.index + uri.length)
       if (startY === -1 || endY === -1) continue
+
+      // If URL reaches near end of joined text, extend through soft-wrapped
+      // continuation lines (TUI apps that format long URLs across lines)
+      if (match.index + uri.length >= joinedText.length - 2) {
+        const fullUri = this._extendUrlSoft(uri, topLineIndex + lines.length)
+        if (fullUri) uri = fullUri
+      }
 
       links.push({
         range: {
@@ -151,6 +158,89 @@ export class WebLinkProvider implements ILinkProvider {
       })
     }
 
+    // If no URL found, check if this line is a soft-continuation of a URL above
+    if (links.length === 0) {
+      const fullUri = this._resolveUrlFromContext(lineIndex)
+      if (fullUri) {
+        const content = this._terminal.buffer.active.getLine(lineIndex)!.translateToString(true)
+        const trimmed = content.trimStart()
+        const offset = content.length - trimmed.length
+        links.push({
+          range: {
+            start: { x: offset + 1, y: bufferLineNumber },
+            end: { x: offset + trimmed.length + 1, y: bufferLineNumber }
+          },
+          text: fullUri,
+          decorations: { underline: false, pointerCursor: true },
+          activate: (event: MouseEvent) => this._activate(event, fullUri)
+        })
+      }
+    }
+
     callback(links.length > 0 ? links : undefined)
+  }
+
+  /** Extend a partial URL through subsequent non-wrapped indented lines */
+  private _extendUrlSoft(partialUri: string, fromLineIndex: number): string | null {
+    const buf = this._terminal.buffer.active
+    let extended = partialUri
+    let found = false
+
+    for (let idx = fromLineIndex; extended.length < 4096; idx++) {
+      const line = buf.getLine(idx)
+      if (!line || line.isWrapped) break
+      const content = line.translateToString(true)
+      const trimmed = content.trimStart()
+      if (!trimmed || /\s/.test(trimmed)) break
+      extended += trimmed
+      found = true
+    }
+
+    if (!found) return null
+    const m = new RegExp('^' + URL_REGEX.source).exec(extended)
+    return m ? m[0] : null
+  }
+
+  /** Look upward from a continuation line to find and assemble the full URL */
+  private _resolveUrlFromContext(lineIndex: number): string | null {
+    const buf = this._terminal.buffer.active
+    const currentLine = buf.getLine(lineIndex)
+    if (!currentLine) return null
+    const currentContent = currentLine.translateToString(true)
+    const trimmed = currentContent.trimStart()
+
+    // Must be indented, non-empty, no internal whitespace (URL-like fragment)
+    if (!trimmed || trimmed === currentContent || /\s/.test(trimmed)) return null
+
+    const parts: string[] = []
+    let foundScheme = false
+
+    // Scan upward for URL scheme
+    for (let idx = lineIndex; idx >= Math.max(0, lineIndex - 30); idx--) {
+      const line = buf.getLine(idx)
+      if (!line) break
+      const content = line.translateToString(true)
+      const t = content.trimStart()
+      if (!t) break
+      parts.unshift(t)
+      if (/https?:\/\//i.test(t)) { foundScheme = true; break }
+      if (/\s/.test(t)) { parts.shift(); break }
+    }
+
+    if (!foundScheme || parts.length < 2) return null
+
+    // Scan downward for more continuation lines
+    for (let idx = lineIndex + 1; idx <= lineIndex + 30; idx++) {
+      const line = buf.getLine(idx)
+      if (!line || line.isWrapped) break
+      const content = line.translateToString(true)
+      const t = content.trimStart()
+      if (!t || /\s/.test(t)) break
+      parts.push(t)
+    }
+
+    const joined = parts.join('')
+    const m = new RegExp(URL_REGEX.source).exec(joined)
+    return m ? m[0] : null
   }
 }

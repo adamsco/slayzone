@@ -367,6 +367,125 @@ test('matches multiple files', () => {
   assert(files[1], 'src/b.ts')
 })
 
+// ─────────────────────────────────────
+// WebLinkProvider.provideLinks (soft-continuation)
+// ─────────────────────────────────────
+console.log('\nWebLinkProvider soft-continuation')
+console.log('─'.repeat(40))
+
+import { WebLinkProvider } from './web-link-provider'
+
+function getLinks(term: Terminal, bufferLineNumber: number): Promise<ILink[]> {
+  const provider = new WebLinkProvider(term, () => {})
+  return new Promise((resolve) => {
+    provider.provideLinks(bufferLineNumber, (links) => resolve(links ?? []))
+  })
+}
+
+test('extends URL through soft-continuation lines (first line)', async () => {
+  const term = mockTerminal([
+    { text: '  https://example.com/auth?client_id=abc&response_type=', isWrapped: false },
+    { text: '  code&redirect_uri=https%3A%2F%2Fexample.com%2Fcallback', isWrapped: false },
+    { text: '  &scope=read+write&state=xyz123', isWrapped: false },
+  ])
+  const links = await getLinks(term, 1)
+  assert(links.length, 1, 'should find 1 link')
+  assert(
+    links[0].text,
+    'https://example.com/auth?client_id=abc&response_type=code&redirect_uri=https%3A%2F%2Fexample.com%2Fcallback&scope=read+write&state=xyz123',
+    'should assemble full URL'
+  )
+})
+
+test('resolves URL from continuation line (middle line)', async () => {
+  const term = mockTerminal([
+    { text: '  https://example.com/auth?client_id=abc&response_type=', isWrapped: false },
+    { text: '  code&redirect_uri=https%3A%2F%2Fexample.com%2Fcallback', isWrapped: false },
+    { text: '  &scope=read+write&state=xyz123', isWrapped: false },
+  ])
+  const links = await getLinks(term, 2)
+  assert(links.length, 1, 'should find 1 link')
+  assert(
+    links[0].text,
+    'https://example.com/auth?client_id=abc&response_type=code&redirect_uri=https%3A%2F%2Fexample.com%2Fcallback&scope=read+write&state=xyz123',
+    'should assemble full URL from context'
+  )
+})
+
+test('resolves URL from continuation line (last line)', async () => {
+  const term = mockTerminal([
+    { text: '  https://example.com/auth?client_id=abc&response_type=', isWrapped: false },
+    { text: '  code&redirect_uri=callback', isWrapped: false },
+    { text: '  &state=xyz123', isWrapped: false },
+  ])
+  const links = await getLinks(term, 3)
+  assert(links.length, 1, 'should find 1 link')
+  assert(links[0].text.endsWith('&state=xyz123'), true, 'URL should include last fragment')
+})
+
+test('does not false-positive on indented non-URL text', async () => {
+  const term = mockTerminal([
+    { text: '  some random text here', isWrapped: false },
+    { text: '  abcdef123456', isWrapped: false },
+  ])
+  const links = await getLinks(term, 2)
+  assert(links.length, 0, 'should not create link without URL above')
+})
+
+test('stops soft-continuation at line with whitespace', async () => {
+  const term = mockTerminal([
+    { text: '  https://example.com/path?q=', isWrapped: false },
+    { text: '  value one two', isWrapped: false },
+  ])
+  const links = await getLinks(term, 1)
+  assert(links.length, 1, 'should find 1 link')
+  // Should NOT extend through line with internal whitespace
+  assert(links[0].text, 'https://example.com/path?q=', 'should not extend through whitespace line')
+})
+
+test('does not resolve non-indented continuation line', async () => {
+  const term = mockTerminal([
+    { text: '  https://example.com/path?q=', isWrapped: false },
+    { text: 'continuation_no_indent', isWrapped: false },
+  ])
+  // Line 2 is not indented, so _resolveUrlFromContext should reject it
+  const links = await getLinks(term, 2)
+  assert(links.length, 0, 'non-indented line should not resolve as continuation')
+})
+
+test('Claude Code OAuth URL pattern', async () => {
+  const term = mockTerminal([
+    { text: '                                                                                                ', isWrapped: false },
+    { text: '  https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e&response_type=', isWrapped: false },
+    { text: '  code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+', isWrapped: false },
+    { text: '  user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload&code_', isWrapped: false },
+    { text: '  challenge=O44F0Xd8JqqCj_xNOrBLO88VYMQ-PdpZZooZ4_g63Bk&code_challenge_method=S256&state=AYImunry9UZ6y_JIYR', isWrapped: false },
+    { text: '  ziVxJESlTyNu4t-tYKiNqy2Wg', isWrapped: false },
+    { text: '                                                                                                ', isWrapped: false },
+  ])
+  // Test from the first URL line
+  const links1 = await getLinks(term, 2)
+  assert(links1.length, 1, 'first URL line should have link')
+  assert(links1[0].text.startsWith('https://claude.ai/oauth/authorize'), true, 'should start with scheme')
+  assert(links1[0].text.endsWith('ziVxJESlTyNu4t-tYKiNqy2Wg'), true, 'should include last fragment')
+
+  // Test from a middle continuation line
+  const links3 = await getLinks(term, 4)
+  assert(links3.length, 1, 'middle continuation should have link')
+  assert(links3[0].text, links1[0].text, 'should resolve same full URL')
+
+  // Test from the last continuation line
+  const links5 = await getLinks(term, 6)
+  assert(links5.length, 1, 'last continuation should have link')
+  assert(links5[0].text, links1[0].text, 'should resolve same full URL')
+
+  // Blank lines above/below should not get links
+  const linksAbove = await getLinks(term, 1)
+  assert(linksAbove.length, 0, 'blank line above should have no links')
+  const linksBelow = await getLinks(term, 7)
+  assert(linksBelow.length, 0, 'blank line below should have no links')
+})
+
 console.log('─'.repeat(40))
 console.log(`\n${passed} passed, ${failed} failed\n`)
 process.exit(failed > 0 ? 1 : 0)
