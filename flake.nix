@@ -31,8 +31,8 @@
                 };
               };
             in ''
-              install -m 444 -D ${appimageContents}/slayzone.desktop $out/share/applications/slayzone.desktop
-              substituteInPlace $out/share/applications/slayzone.desktop \
+              install -m 444 -D ${appimageContents}/*.desktop $out/share/applications/${pname}.desktop
+              substituteInPlace $out/share/applications/${pname}.desktop \
                 --replace-warn 'Exec=AppRun' 'Exec=${pname}'
               cp -r ${appimageContents}/usr/share/icons $out/share/icons 2>/dev/null || true
             '';

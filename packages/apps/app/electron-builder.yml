@@ -41,6 +41,7 @@ linux:
   target:
     - AppImage
     - deb
+  executableName: slayzone
   maintainer: slayzone
   category: Utility
 deb:
