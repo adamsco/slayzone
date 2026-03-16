@@ -5,6 +5,7 @@ import { DndContext, PointerSensor, useSensors, useSensor, closestCenter, type D
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import type { Task, PanelVisibility } from '@slayzone/task/shared'
+import type { TaskDetailData } from './taskDetailCache'
 import { BUILTIN_PANEL_IDS, getProviderConversationId, getProviderFlags, setProviderConversationId, setProviderFlags, clearAllConversationIds } from '@slayzone/task/shared'
 import type { BrowserTabsState } from '@slayzone/task-browser/shared'
 import type { Tag } from '@slayzone/tags/shared'
@@ -144,7 +145,7 @@ function SortableSubTask({ sub, columns, statusOptions, onNavigate, onUpdate, on
   )
 }
 
-interface TaskDetailPageProps {
+export interface TaskDetailPageProps {
   taskId: string
   isActive?: boolean
   compact?: boolean
@@ -158,6 +159,8 @@ interface TaskDetailPageProps {
   settingsRevision?: number
   terminalFocusRequestId?: number
   onTerminalFocusRequestHandled?: (taskId: string, requestId: number) => void
+  /** Pre-fetched data from Suspense cache. Provided by TaskDetailDataLoader. */
+  initialData: TaskDetailData | null
 }
 
 export const TaskDetailPage = React.memo(function TaskDetailPage({
@@ -174,6 +177,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
   settingsRevision = 0,
   terminalFocusRequestId = 0,
   onTerminalFocusRequestHandled,
+  initialData,
 }: TaskDetailPageProps): React.JSX.Element {
   const { modes } = useTerminalModes()
 
@@ -181,11 +185,10 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
   // Main tab session ID format used by TerminalContainer/useTaskTerminals.
   const getMainSessionId = useCallback((id: string) => `${id}:${id}`, [])
 
-  const [task, setTask] = useState<Task | null>(null)
-  const [project, setProject] = useState<Project | null>(null)
-  const [tags, setTags] = useState<Tag[]>([])
-  const [taskTagIds, setTaskTagIds] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
+  const [task, setTask] = useState<Task | null>(initialData?.task ?? null)
+  const [project, setProject] = useState<Project | null>(initialData?.project ?? null)
+  const [tags] = useState<Tag[]>(initialData?.tags ?? [])
+  const [taskTagIds, setTaskTagIds] = useState<string[]>(initialData?.taskTagIds ?? [])
   const statusOptions = useMemo(() => buildStatusOptions(project?.columns_config), [project?.columns_config])
   const completedStatus = useMemo(() => getDoneStatus(project?.columns_config), [project?.columns_config])
   const startedStatus = useMemo(
@@ -198,14 +201,14 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
   )
 
   // Sub-tasks
-  const [subTasks, setSubTasks] = useState<Task[]>([])
+  const [subTasks, setSubTasks] = useState<Task[]>(initialData?.subTasks ?? [])
   const [addingSubTask, setAddingSubTask] = useState(false)
   const [subTaskTitle, setSubTaskTitle] = useState('')
   const subTaskInputRef = useRef<HTMLInputElement>(null)
-  const [parentTask, setParentTask] = useState<Task | null>(null)
+  const [parentTask] = useState<Task | null>(initialData?.parentTask ?? null)
 
   // Project path validation
-  const [projectPathMissing, setProjectPathMissing] = useState(false)
+  const [projectPathMissing, setProjectPathMissing] = useState(initialData?.projectPathMissing ?? false)
 
   // PTY context for buffer management
   const { resetTaskState, subscribeSessionDetected, subscribeDevServer, getQuickRunPrompt, clearQuickRunPrompt } = usePty()
@@ -215,7 +218,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
 
   // Title editing state
   const [editingTitle, setEditingTitle] = useState(false)
-  const [titleValue, setTitleValue] = useState('')
+  const [titleValue, setTitleValue] = useState(initialData?.task?.title ?? '')
   const titleInputRef = useRef<HTMLInputElement>(null)
 
   // Delete/archive dialog state
@@ -233,7 +236,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
   // In-progress prompt state
 
   // Description editing state
-  const [descriptionValue, setDescriptionValue] = useState('')
+  const [descriptionValue, setDescriptionValue] = useState(initialData?.task?.description ?? '')
 
   // Terminal restart key (changing this forces remount)
   const [terminalKey, setTerminalKey] = useState(0)
@@ -247,14 +250,14 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
 
   // Panel visibility state
   const defaultPanelVisibility: PanelVisibility = { terminal: true, browser: false, diff: false, settings: true, editor: false, processes: false }
-  const [panelVisibility, setPanelVisibility] = useState<PanelVisibility>(defaultPanelVisibility)
+  const [panelVisibility, setPanelVisibility] = useState<PanelVisibility>(initialData?.panelVisibility ?? defaultPanelVisibility)
 
   // Browser tabs state
   const defaultBrowserTabs: BrowserTabsState = {
     tabs: [{ id: 'default', url: 'about:blank', title: 'New Tab' }],
     activeTabId: 'default'
   }
-  const [browserTabs, setBrowserTabs] = useState<BrowserTabsState>(defaultBrowserTabs)
+  const [browserTabs, setBrowserTabs] = useState<BrowserTabsState>(initialData?.browserTabs ?? defaultBrowserTabs)
 
   // Global panel configuration (which panels are enabled, custom web panels)
   const { enabledWebPanels, isBuiltinEnabled } = usePanelConfig()
@@ -382,83 +385,6 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
   useEffect(() => {
     if (panelVisibility.browser) setDetectedDevUrl(null)
   }, [panelVisibility.browser])
-
-  // Load task data on mount or when taskId changes
-  useEffect(() => {
-    // Reset transient state when switching tasks
-    setLoading(true)
-    setDetectedSessionId(null)
-    setEditingTitle(false)
-
-    const loadData = async (): Promise<void> => {
-      const checkProjectPathExists = async (path: string): Promise<boolean> => {
-        const pathExists = window.api.files?.pathExists
-        if (typeof pathExists === 'function') return pathExists(path)
-        console.warn('window.api.files.pathExists is unavailable; skipping path validation')
-        return true
-      }
-
-      const [loadedTask, loadedTags, loadedTaskTags, projects, loadedSubTasks] = await Promise.all([
-        window.api.db.getTask(taskId),
-        window.api.tags.getTags(),
-        window.api.taskTags.getTagsForTask(taskId),
-        window.api.db.getProjects(),
-        window.api.db.getSubTasks(taskId)
-      ])
-
-      if (loadedTask) {
-        setTask(loadedTask)
-        setTitleValue(loadedTask.title)
-        setDescriptionValue(loadedTask.description ?? '')
-        // Restore panel visibility and browser tabs (always reset to defaults if not saved)
-        setPanelVisibility({
-          ...defaultPanelVisibility,
-          ...(loadedTask.panel_visibility ?? {}),
-          ...(loadedTask.is_temporary ? { settings: false } : {})
-        })
-        if (loadedTask.browser_tabs) {
-          setBrowserTabs(loadedTask.browser_tabs)
-        } else {
-          // Default to first URL from other tasks
-          const allTasks = await window.api.db.getTasks()
-          let firstUrl = 'about:blank'
-          for (const t of allTasks) {
-            if (t.id === loadedTask.id) continue
-            const url = t.browser_tabs?.tabs?.find(tab => tab.url && tab.url !== 'about:blank')?.url
-            if (url) {
-              firstUrl = url
-              break
-            }
-          }
-          setBrowserTabs({
-            tabs: [{ id: 'default', url: firstUrl, title: firstUrl === 'about:blank' ? 'New Tab' : firstUrl }],
-            activeTabId: 'default'
-          })
-        }
-        // Find project for this task
-        const taskProject = projects.find((p) => p.id === loadedTask.project_id)
-        setProject(taskProject || null)
-        if (taskProject?.path) {
-          const exists = await checkProjectPathExists(taskProject.path)
-          setProjectPathMissing(!exists)
-        } else {
-          setProjectPathMissing(false)
-        }
-      }
-      setSubTasks(loadedSubTasks)
-      if (loadedTask?.parent_id) {
-        const parent = await window.api.db.getTask(loadedTask.parent_id)
-        setParentTask(parent)
-      } else {
-        setParentTask(null)
-      }
-      setTags(loadedTags)
-      setTaskTagIds(loadedTaskTags.map((t) => t.id))
-      setLoading(false)
-    }
-
-    loadData()
-  }, [taskId])
 
   // Re-check project path on window focus
   useEffect(() => {
@@ -1302,10 +1228,6 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
     if (!task) return
     const updated = await window.api.db.updateTask({ id: task.id, status: startedStatus })
     handleTaskUpdate(updated)
-  }
-
-  if (loading) {
-    return <div className="flex h-screen items-center justify-center">Loading...</div>
   }
 
   if (!task) {

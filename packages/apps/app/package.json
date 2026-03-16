@@ -39,6 +39,7 @@
     "@slayzone/onboarding": "workspace:*",
     "@slayzone/projects": "workspace:*",
     "@slayzone/settings": "workspace:*",
+    "@slayzone/suspense": "workspace:*",
     "@slayzone/tags": "workspace:*",
     "@slayzone/task": "workspace:*",
     "@slayzone/task-terminals": "workspace:*",

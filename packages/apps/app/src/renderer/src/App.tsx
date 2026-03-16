@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import React, { Suspense, lazy, useState, useEffect, useRef, useMemo, useCallback, useTransition } from 'react'
 import { useHotkeys } from 'react-hotkeys-hook'
 import { AlertTriangle, LayoutGrid, TerminalSquare, GitBranch, FileCode, Cpu, Kanban, FlaskConical } from 'lucide-react'
 import type { Task } from '@slayzone/task/shared'
@@ -72,9 +72,11 @@ import { UsagePopover } from '@/components/usage/UsagePopover'
 import { useUsage } from '@/components/usage/useUsage'
 import { useOnboardingChecklist } from '@/hooks/useOnboardingChecklist'
 import { useHomePanelState } from '@/hooks/useHomePanelVisibility'
+import { TaskShell } from '@slayzone/task/client/TaskShell'
+import { taskDetailCache } from '@slayzone/task/client/taskDetailCache'
 
 // Lazy-loaded: heavy components not needed for first paint (sub-path exports to avoid barrel pull-in)
-const TaskDetailPage = lazy(() => import('@slayzone/task/client/TaskDetailPage').then(m => ({ default: m.TaskDetailPage })))
+const TaskDetailDataLoader = lazy(() => import('@slayzone/task/client/TaskDetailDataLoader').then(m => ({ default: m.TaskDetailDataLoader })))
 const FileEditorView = lazy(() => import('@slayzone/file-editor/client/FileEditorView').then(m => ({ default: m.FileEditorView })))
 const UserSettingsDialog = lazy(() => import('@slayzone/settings/client/UserSettingsDialog').then(m => ({ default: m.UserSettingsDialog })))
 const TutorialAnimationModal = lazy(() => import('@/components/tutorial/TutorialAnimationModal').then(m => ({ default: m.TutorialAnimationModal })))
@@ -127,7 +129,13 @@ function App(): React.JSX.Element {
   const tabs = useTabStore((s) => s.tabs)
   const activeTabIndex = useTabStore((s) => s.activeTabIndex)
   const selectedProjectId = useTabStore((s) => s.selectedProjectId)
-  const { setActiveTabIndex, setSelectedProjectId, openTask, openTaskInBackground, reorderTabs, reopenClosedTab } = useTabStore.getState()
+  const { setActiveTabIndex, setSelectedProjectId, openTask: rawOpenTask, openTaskInBackground, reorderTabs, reopenClosedTab } = useTabStore.getState()
+  // Wrap openTask in startTransition so React keeps showing the old tab
+  // while the new TaskDetailDataLoader suspends (fetches data).
+  const [, startTransition] = useTransition()
+  const openTask = useCallback((taskId: string) => {
+    startTransition(() => rawOpenTask(taskId))
+  }, [rawOpenTask, startTransition])
 
   // Expose tab store for e2e tests (same pattern as __slayzone_refreshData)
   if (!(window as any).__slayzone_tabStore) (window as any).__slayzone_tabStore = useTabStore
@@ -248,6 +256,18 @@ function App(): React.JSX.Element {
     useTabStore.setState({ _taskLookup: { tasks, projects } })
   }, [tasks, projects])
 
+  // Evict cache entries when task tabs close (prevent memory leaks).
+  const prevTabsRef = useRef(tabs)
+  useEffect(() => {
+    const prev = prevTabsRef.current
+    prevTabsRef.current = tabs
+    for (const tab of prev) {
+      if (tab.type !== 'task') continue
+      if (!tabs.some((t) => t.type === 'task' && t.taskId === tab.taskId)) {
+        taskDetailCache.evict('taskDetail', tab.taskId)
+      }
+    }
+  }, [tabs])
 
   const [showAnimatedTour, setShowAnimatedTour] = useState(false)
   const openTutorialModal = useCallback((): void => {
@@ -1565,9 +1585,9 @@ function App(): React.JSX.Element {
                         ) : tab.type === 'usage-analytics' ? (
                         <UsageAnalyticsPage onTaskClick={openTask} />
                         ) : (
-                        <Suspense fallback={<div className="flex items-center justify-center h-full text-muted-foreground text-sm">Loading...</div>}>
+                        <Suspense fallback={<TaskShell />}>
                         <div className={explodeMode ? "absolute inset-0" : "h-full"}>
-                          <TaskDetailPage
+                          <TaskDetailDataLoader
                             taskId={tab.taskId}
                             isActive={explodeMode || i === activeTabIndex}
                             compact={explodeMode}
