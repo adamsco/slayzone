@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHand
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-// import { WebLinksAddon } from '@xterm/addon-web-links' // Disabled - causes persistent underlines
+import { WebLinkProvider } from './web-link-provider'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
@@ -320,14 +320,26 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       })
 
       const fitAddon = new FitAddon()
-      // const webLinksAddon = new WebLinksAddon() // Disabled - causes persistent underlines
       const serializeAddon = new SerializeAddon()
       const searchAddon = new SearchAddon()
 
       terminal.loadAddon(fitAddon)
-      // terminal.loadAddon(webLinksAddon) // Disabled - causes persistent underlines
       terminal.loadAddon(serializeAddon)
       terminal.loadAddon(searchAddon)
+
+      // Clickable URLs — pointer cursor on hover, no underline decoration.
+      // Underline disabled to avoid persistent-underline bugs with WebGL LinkRenderLayer.
+      const linkProvider = new WebLinkProvider(terminal, (uri) => {
+        void window.api.shell.openExternal(uri)
+      })
+      terminal.registerLinkProvider(linkProvider)
+
+      // Test helper — allows e2e tests to trigger link activation without mouse coordinates
+      const w = window as unknown as Record<string, unknown>
+      w.__slayzone_terminalLinks = {
+        ...w.__slayzone_terminalLinks as object,
+        [sessionId]: linkProvider,
+      }
 
       // WebGL renderer — 5-10x faster than Canvas 2D.
       // Safe because filterBufferData() strips SGR 4 (underline) codes server-side
@@ -508,6 +520,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
       serializeAddonRef.current = null
       searchAddonRef.current = null
       initializedRef.current = false
+
+      // Clean up test helper reference
+      const wClean = window as unknown as Record<string, Record<string, unknown> | undefined>
+      if (wClean.__slayzone_terminalLinks) {
+        delete wClean.__slayzone_terminalLinks[sessionId]
+      }
     }
   }, [initTerminal, sessionId])
 

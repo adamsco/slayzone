@@ -18,7 +18,7 @@ import {
   type Column
 } from '@slayzone/tasks'
 import { CreateTaskDialog, EditTaskDialog, DeleteTaskDialog, ProcessesPanel, ResizeHandle, usePanelSizes, usePanelConfig } from '@slayzone/task'
-import { UnifiedGitPanel, type GitTabId } from '@slayzone/worktrees'
+import { UnifiedGitPanel } from '@slayzone/worktrees'
 import { QuickOpenDialog } from '@slayzone/file-editor/client/QuickOpenDialog'
 import {
   CreateProjectDialog,
@@ -27,7 +27,7 @@ import {
   type ProjectCreationContext,
   type ProjectStartMode
 } from '@slayzone/projects'
-import { useTabStore, AppearanceProvider, type Tab } from '@slayzone/settings'
+import { useTabStore, AppearanceProvider } from '@slayzone/settings'
 import { OnboardingDialog } from '@slayzone/onboarding'
 import { TestPanel } from '@slayzone/test-panel'
 import { track, trackShortcut } from '@slayzone/telemetry/client'
@@ -69,7 +69,6 @@ import { UsagePopover } from '@/components/usage/UsagePopover'
 import { useUsage } from '@/components/usage/useUsage'
 import { useOnboardingChecklist } from '@/hooks/useOnboardingChecklist'
 import { TaskShell } from '@slayzone/task/client/TaskShell'
-import { taskDetailCache } from '@slayzone/task/client/taskDetailCache'
 // Extracted hooks (self-contained, clean interfaces)
 import { useHomePanel, HOME_PANEL_ORDER, HOME_PANEL_SIZE_KEY } from '@/hooks/useHomePanel'
 import { useTerminalStateTracking } from '@/hooks/useTerminalStateTracking'
@@ -86,7 +85,6 @@ const TutorialAnimationModal = lazy(() => import('@/components/tutorial/Tutorial
 type ProjectSettingsTab = 'general' | 'environment' | 'columns' | 'integrations' | 'ai-config' | 'tests'
 type ProjectIntegrationOnboardingProvider = Exclude<ProjectStartMode, 'scratch'>
 type GlobalAiConfigSection = 'providers' | 'instructions' | 'skill' | 'mcp' | 'files'
-const HANDLE_WIDTH = 16
 const COMMUNITY_DISCORD_URL = 'https://discord.gg/g7xPHXaU98'
 const COMMUNITY_X_URL = 'https://x.com/debuglebowski'
 
