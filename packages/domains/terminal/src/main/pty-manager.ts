@@ -729,16 +729,6 @@ export async function createPty(opts: CreatePtyOptions): Promise<{ success: bool
       }, 250)
     }
 
-    // Transition out of 'starting' once setup completes
-    // (pty.spawn is synchronous, so process is already running)
-    setImmediate(() => {
-      const session = sessions.get(sessionId)
-      if (session?.state === 'starting') {
-        session.activity = 'attention'
-        transitionState(sessionId, 'attention')
-      }
-    })
-
     const attachPtyHandlers = (target: pty.IPty): void => {
       // Forward data to renderer
       target.onData((data0) => {

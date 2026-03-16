@@ -143,6 +143,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   const [isDragOver, setIsDragOver] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [isInitializing, setIsInitializing] = useState(true)
+  const [isReplaying, setIsReplaying] = useState(false)
   const [initError, setInitError] = useState<string | null>(null)
   const [deadExitCode, setDeadExitCode] = useState<number | null>(null)
   const [deadCrashOutput, setDeadCrashOutput] = useState<string | null>(null)
@@ -582,17 +583,28 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   // Replay missed PTY data when task becomes active
   useEffect(() => {
     if (!isActive || !terminalRef.current) return
+    let cancelled = false
     const replay = async () => {
-      const missed = await window.api.pty.getBufferSince(sessionId, lastRenderedSeqRef.current)
-      if (!missed || missed.chunks.length === 0) return
-      for (const chunk of missed.chunks) {
-        const cutoff = clearedSeqRef.current
-        if (cutoff !== null && chunk.seq <= cutoff) continue
-        terminalRef.current?.write(chunk.data)
-        lastRenderedSeqRef.current = chunk.seq
+      setIsReplaying(true)
+      try {
+        const missed = await window.api.pty.getBufferSince(sessionId, lastRenderedSeqRef.current)
+        if (cancelled || !missed || missed.chunks.length === 0) return
+        for (const chunk of missed.chunks) {
+          const cutoff = clearedSeqRef.current
+          if (cutoff !== null && chunk.seq <= cutoff) continue
+          terminalRef.current?.write(chunk.data)
+          lastRenderedSeqRef.current = chunk.seq
+        }
+        // Wait for xterm to finish processing all queued writes
+        if (terminalRef.current) {
+          await new Promise<void>(resolve => terminalRef.current!.write('', resolve))
+        }
+      } finally {
+        if (!cancelled) setIsReplaying(false)
       }
     }
     replay()
+    return () => { cancelled = true }
   }, [isActive, sessionId])
 
 
@@ -811,7 +823,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     }
   }, [sessionId])
 
-  const isLoading = !initError && (isInitializing || ptyState === 'starting')
+  const isLoading = !initError && (isInitializing || isReplaying || ptyState === 'starting')
 
   const handleSearchClose = useCallback(() => {
     setSearchOpen(false)
