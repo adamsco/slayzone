@@ -14,8 +14,7 @@ import {
   useUndoableTaskActions,
   useFilterState,
   applyFilters,
-  getViewConfig,
-  type Column
+  getViewConfig
 } from '@slayzone/tasks'
 import { CreateTaskDialog, EditTaskDialog, DeleteTaskDialog, ProcessesPanel, ResizeHandle, usePanelSizes, usePanelConfig } from '@slayzone/task'
 import { UnifiedGitPanel } from '@slayzone/worktrees'
@@ -27,7 +26,7 @@ import {
   type ProjectCreationContext,
   type ProjectStartMode
 } from '@slayzone/projects'
-import { useTabStore, AppearanceProvider } from '@slayzone/settings'
+import { useTabStore, useDialogStore, AppearanceProvider } from '@slayzone/settings'
 import { OnboardingDialog } from '@slayzone/onboarding'
 import { TestPanel } from '@slayzone/test-panel'
 import { track, trackShortcut } from '@slayzone/telemetry/client'
@@ -122,31 +121,29 @@ function App(): React.JSX.Element {
   // Filter state (persisted per project)
   const [filter, setFilter] = useFilterState(selectedProjectId)
 
-  // Dialog state
-  const [createOpen, setCreateOpen] = useState(false)
-  const [createTaskDefaults, setCreateTaskDefaults] = useState<{
-    status?: Task['status']; priority?: number; dueDate?: string | null
-  }>({})
-  const [editingTask, setEditingTask] = useState<Task | null>(null)
-  const [deletingTask, setDeletingTask] = useState<Task | null>(null)
-  const [createProjectOpen, setCreateProjectOpen] = useState(false)
+  // Dialog state (from zustand store — see useDialogStore)
+  const createTaskOpen = useDialogStore((s) => s.createTaskOpen)
+  const createTaskDefaults = useDialogStore((s) => s.createTaskDefaults)
+  const editingTask = useDialogStore((s) => s.editingTask)
+  const deletingTask = useDialogStore((s) => s.deletingTask)
+  const createProjectOpen = useDialogStore((s) => s.createProjectOpen)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [projectSettingsInitialTab, setProjectSettingsInitialTab] = useState<ProjectSettingsTab>('general')
   const [testGroupBy, setTestGroupBy] = useState<'none' | 'path' | 'label'>('none')
   const [projectSettingsOnboardingProvider, setProjectSettingsOnboardingProvider] =
     useState<ProjectIntegrationOnboardingProvider | null>(null)
-  const [deletingProject, setDeletingProject] = useState<Project | null>(null)
+  const deletingProject = useDialogStore((s) => s.deletingProject)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsRevision, setSettingsRevision] = useState(0)
   const [colorTintsEnabled, setColorTintsEnabled] = useState(true)
   const [testsPanelEnabled, setTestsPanelEnabled] = useState(false)
   const [settingsInitialTab, setSettingsInitialTab] = useState<string>('general')
   const [settingsInitialAiConfigSection, setSettingsInitialAiConfigSection] = useState<GlobalAiConfigSection | null>(null)
-  const [onboardingOpen, setOnboardingOpen] = useState(false)
-  const [changelogOpen, setChangelogOpen] = useState(false)
+  const onboardingOpen = useDialogStore((s) => s.onboardingOpen)
+  const changelogOpen = useDialogStore((s) => s.changelogOpen)
   const [autoChangelogOpen, dismissAutoChangelog] = useChangelogAutoOpen()
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [completeTaskDialogOpen, setCompleteTaskDialogOpen] = useState(false)
+  const searchOpen = useDialogStore((s) => s.searchOpen)
+  const completeTaskDialogOpen = useDialogStore((s) => s.completeTaskDialogOpen)
   const [terminalFocusRequests, setTerminalFocusRequests] = useState<Record<string, number>>({})
   const [zenMode, setZenMode] = useState(false)
   const [explodeMode, setExplodeMode] = useState(false)
@@ -185,13 +182,7 @@ function App(): React.JSX.Element {
   const { taskProjectColors, taskWorktreeColors, tabCycleOrder } = useTabColors(tabs, tasks, projects, colorTintsEnabled)
 
   // Onboarding
-  const [showAnimatedTour, setShowAnimatedTour] = useState(false)
-  const handleChecklistCreateFirstProject = useCallback((): void => { setCreateProjectOpen(true) }, [])
-  const handleChecklistCreateFirstTask = useCallback((): void => {
-    if (projects.length === 0) return
-    setCreateTaskDefaults({})
-    setCreateOpen(true)
-  }, [projects.length])
+  const showAnimatedTour = useDialogStore((s) => s.showAnimatedTour)
   const handleChecklistCheckLeaderboard = useCallback((): void => {
     const { tabs, setActiveTabIndex } = useTabStore.getState()
     const idx = tabs.findIndex((t) => t.type === 'leaderboard')
@@ -208,10 +199,6 @@ function App(): React.JSX.Element {
   } = useOnboardingChecklist({
     projectCount: projects.length,
     hasCreatedTask,
-    onOpenSetupGuide: () => setOnboardingOpen(true),
-    onStartTour: () => setShowAnimatedTour(true),
-    onCreateFirstProject: handleChecklistCreateFirstProject,
-    onCreateFirstTask: handleChecklistCreateFirstTask,
     onCheckLeaderboard: handleChecklistCheckLeaderboard,
     onJoinCommunity: handleChecklistJoinCommunity,
     onFollowOnX: handleChecklistFollowOnX
@@ -295,10 +282,10 @@ function App(): React.JSX.Element {
 
   // Keyboard shortcuts
   useHotkeys('mod+n', (e) => {
-    if (projects.length > 0) { e.preventDefault(); trackShortcut('mod+n'); setCreateOpen(true) }
+    if (projects.length > 0) { e.preventDefault(); trackShortcut('mod+n'); useDialogStore.getState().openCreateTask() }
   }, { enableOnFormTags: true })
 
-  useHotkeys('mod+k', (e) => { e.preventDefault(); trackShortcut('mod+k'); setSearchOpen(true) }, { enableOnFormTags: true })
+  useHotkeys('mod+k', (e) => { e.preventDefault(); trackShortcut('mod+k'); useDialogStore.getState().openSearch() }, { enableOnFormTags: true })
 
   useHotkeys('mod+z', async (e) => {
     const el = e.target as HTMLElement
@@ -398,7 +385,7 @@ function App(): React.JSX.Element {
 
   useHotkeys('mod+shift+d', (e) => {
     e.preventDefault()
-    if (tabs[activeTabIndex].type === 'task') setCompleteTaskDialogOpen(true)
+    if (tabs[activeTabIndex].type === 'task') useDialogStore.getState().openCompleteTaskDialog()
   }, { enableOnFormTags: true })
 
   useHotkeys('mod+j', (e) => { e.preventDefault(); track('zen_mode_toggled'); trackShortcut('mod+j'); setZenMode(prev => !prev) }, { enableOnFormTags: true })
@@ -512,7 +499,7 @@ function App(): React.JSX.Element {
     await window.api.db.updateTask({ id: activeTab.taskId, status: doneStatus })
     updateTask({ ...task, status: doneStatus })
     closeTab(activeTabIndex)
-    setCompleteTaskDialogOpen(false)
+    useDialogStore.getState().closeCompleteTaskDialog()
     if (prevStatus !== doneStatus) {
       pushUndo({
         label: `Completed "${task.title}"`,
@@ -541,10 +528,10 @@ function App(): React.JSX.Element {
   useEffect(() => { return window.api.app.onNewTemporaryTask(() => { handleCreateScratchTerminal() }) }, [handleCreateScratchTerminal])
 
   // Task handlers
-  const handleTaskCreated = (task: Task): void => { setTasks((prev) => [task, ...prev]); setCreateOpen(false); setCreateTaskDefaults({}) }
+  const handleTaskCreated = (task: Task): void => { setTasks((prev) => [task, ...prev]); useDialogStore.getState().closeCreateTask() }
 
   const handleTaskCreatedAndOpen = (task: Task): void => {
-    setTasks((prev) => [task, ...prev]); setCreateOpen(false); setCreateTaskDefaults({})
+    setTasks((prev) => [task, ...prev]); useDialogStore.getState().closeCreateTask()
     setTerminalFocusRequests((prev) => ({ ...prev, [task.id]: (prev[task.id] ?? 0) + 1 }))
     const lookup = useTabStore.getState()._taskLookup
     useTabStore.setState({ _taskLookup: { ...lookup, tasks: [task, ...lookup.tasks] } })
@@ -558,21 +545,7 @@ function App(): React.JSX.Element {
     })
   }, [])
 
-  const handleCreateTaskFromColumn = (column: Column): void => {
-    const defaults: typeof createTaskDefaults = {}
-    const vc = getViewConfig(filter)
-    if (vc.groupBy === 'status') { if (column.id !== '__unknown__') defaults.status = column.id as Task['status'] }
-    else if (vc.groupBy === 'priority') { const p = parseInt(column.id.slice(1), 10); if (!isNaN(p)) defaults.priority = p }
-    else if (vc.groupBy === 'due_date') {
-      const today = new Date().toISOString().split('T')[0]
-      if (column.id === 'today') defaults.dueDate = today
-      else if (column.id === 'this_week') { const d = new Date(today); d.setDate(d.getDate() + 7); defaults.dueDate = d.toISOString().split('T')[0] }
-      else if (column.id === 'overdue') { const d = new Date(today); d.setDate(d.getDate() - 1); defaults.dueDate = d.toISOString().split('T')[0] }
-    }
-    setCreateTaskDefaults(defaults); setCreateOpen(true)
-  }
-
-  const handleTaskUpdated = (task: Task): void => { updateTask(task); setEditingTask(null) }
+  const handleTaskUpdated = (task: Task): void => { updateTask(task); useDialogStore.getState().closeEditTask() }
 
   const handleConvertTask = useCallback(async (task: Task): Promise<Task> => {
     const project = useTabStore.getState()._taskLookup.projects.find((item) => item.id === task.project_id)
@@ -580,7 +553,7 @@ function App(): React.JSX.Element {
     updateTask(converted); return converted
   }, [updateTask])
 
-  const handleTaskDeleted = (): void => { if (deletingTask) { deleteTask(deletingTask.id); setDeletingTask(null) } }
+  const handleTaskDeleted = (): void => { if (deletingTask) { deleteTask(deletingTask.id); useDialogStore.getState().closeDeleteTask() } }
   const handleTaskClick = (task: Task, e: { metaKey: boolean }): void => { if (e.metaKey) openTaskInBackground(task.id); else openTask(task.id) }
   const handleTaskMove = (taskId: string, newColumnId: string, targetIndex: number): void => { moveTask(taskId, newColumnId, targetIndex, getViewConfig(filter).groupBy) }
 
@@ -598,7 +571,7 @@ function App(): React.JSX.Element {
   }, [])
 
   const handleProjectCreated = (project: Project, context: ProjectCreationContext): void => {
-    setProjects((prev) => [...prev, project]); setSelectedProjectId(project.id); setCreateProjectOpen(false)
+    setProjects((prev) => [...prev, project]); setSelectedProjectId(project.id); useDialogStore.getState().closeCreateProject()
     if (context.startMode === 'github' || context.startMode === 'linear') openProjectSettings(project, { initialTab: 'integrations', integrationOnboardingProvider: context.startMode })
   }
 
@@ -629,7 +602,7 @@ function App(): React.JSX.Element {
     updateProject(updated); validateProjectPath(updated)
   }, [selectedProjectId, projects, updateProject, validateProjectPath])
 
-  const handleProjectDeleted = (): void => { if (deletingProject) { deleteProject(deletingProject.id, selectedProjectId, setSelectedProjectId); setDeletingProject(null) } }
+  const handleProjectDeleted = (): void => { if (deletingProject) { deleteProject(deletingProject.id, selectedProjectId, setSelectedProjectId); useDialogStore.getState().closeDeleteProject() } }
   const handleSidebarSelectProject = (projectId: string): void => { track('project_switched'); setSelectedProjectId(projectId); setActiveTabIndex(0) }
   const handleOpenSettings = (): void => { setSettingsInitialTab('general'); setSettingsInitialAiConfigSection(null); setSettingsOpen(true) }
 
@@ -652,11 +625,8 @@ function App(): React.JSX.Element {
         <AppSidebar
           projects={projects} tasks={tasks} selectedProjectId={selectedProjectId}
           onSelectProject={handleSidebarSelectProject}
-          onAddProject={() => setCreateProjectOpen(true)}
           onProjectSettings={(project) => openProjectSettings(project)}
-          onProjectDelete={setDeletingProject}
           onSettings={handleOpenSettings}
-          onChangelog={() => setChangelogOpen(true)}
           onLeaderboard={() => { const store = useTabStore.getState(); const idx = store.tabs.findIndex((t) => t.type === 'leaderboard'); if (idx >= 0) setActiveTabIndex(idx) }}
           onUsageAnalytics={() => {
             const store = useTabStore.getState(); const existing = store.tabs.findIndex((t) => t.type === 'usage-analytics')
@@ -765,13 +735,13 @@ function App(): React.JSX.Element {
                                 <div className={cn('shrink-0 min-h-0 overflow-hidden rounded-lg border border-border', id === 'kanban' && Object.values(homePanel.homePanelVisibility).filter(Boolean).length <= 1 ? 'border-transparent' : cn('bg-background', id === 'kanban' ? 'p-3' : ''))} style={{ width: w }}>
                                   {id === 'kanban' && filter.viewMode !== 'list' && (
                                     <KanbanBoard tasks={displayTasks} columns={selectedProject?.columns_config} viewConfig={getViewConfig(filter)} isActive={tabs[activeTabIndex]?.type === 'home'}
-                                      onTaskMove={handleTaskMove} onTaskReorder={reorderTasks} onTaskClick={handleTaskClick} onCreateTask={handleCreateTaskFromColumn}
+                                      onTaskMove={handleTaskMove} onTaskReorder={reorderTasks} onTaskClick={handleTaskClick}
                                       projectsMap={projectsMap} showProjectDot={false} cardProperties={filter.cardProperties} taskTags={taskTags} tags={tags} blockedTaskIds={blockedTaskIds}
                                       allProjects={projects} onUpdateTask={contextMenuUpdate} onArchiveTask={archiveTask} onDeleteTask={deleteTask} onArchiveAllTasks={archiveTasks} />
                                   )}
                                   {id === 'kanban' && filter.viewMode === 'list' && (
                                     <KanbanListView tasks={displayTasks} columns={selectedProject?.columns_config} viewConfig={getViewConfig(filter)}
-                                      onTaskMove={handleTaskMove} onTaskReorder={reorderTasks} onTaskClick={handleTaskClick} onCreateTask={handleCreateTaskFromColumn}
+                                      onTaskMove={handleTaskMove} onTaskReorder={reorderTasks} onTaskClick={handleTaskClick}
                                       projectsMap={projectsMap} showProjectDot={false} cardProperties={filter.cardProperties} blockedTaskIds={blockedTaskIds}
                                       allProjects={projects} onUpdateTask={contextMenuUpdate} onArchiveTask={archiveTask} onDeleteTask={deleteTask} />
                                   )}
@@ -779,8 +749,7 @@ function App(): React.JSX.Element {
                                     <UnifiedGitPanel ref={homePanel.homeGitPanelRef} projectId={selectedProjectId} projectPath={projectPath} visible={true}
                                       defaultTab={homePanel.homeGitDefaultTab} onTabChange={homePanel.setHomeGitDefaultTab} tasks={tasks} filter={filter} projects={projects}
                                       onTaskClick={(t) => handleTaskClick(t, { metaKey: false })}
-                                      onUpdateTask={(data) => window.api.db.updateTask(data).then(t => { updateTask(t); return t })}
-                                      onCreateTask={(defaults) => { setCreateTaskDefaults(defaults); setCreateOpen(true) }} />
+                                      onUpdateTask={(data) => window.api.db.updateTask(data).then(t => { updateTask(t); return t })} />
                                   )}
                                   {id === 'editor' && <Suspense><FileEditorView ref={homePanel.homeEditorRefCallback} projectPath={projectPath ?? ''} /></Suspense>}
                                   {id === 'processes' && <ProcessesPanel taskId={null} projectId={selectedProjectId} cwd={projectPath} />}
@@ -830,30 +799,30 @@ function App(): React.JSX.Element {
               homePanel.homeEditorRef.current.openFile(filePath)
             } else { homePanel.pendingHomeEditorFileRef.current = filePath; homePanel.setHomePanelVisibility(prev => ({ ...prev, editor: true })) }
           }} />
-        <CreateTaskDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={handleTaskCreated} onCreatedAndOpen={handleTaskCreatedAndOpen}
+        <CreateTaskDialog open={createTaskOpen} onOpenChange={(open) => { if (!open) useDialogStore.getState().closeCreateTask() }} onCreated={handleTaskCreated} onCreatedAndOpen={handleTaskCreatedAndOpen}
           defaultProjectId={selectedProjectId || projects[0]?.id} defaultStatus={createTaskDefaults.status}
           defaultPriority={createTaskDefaults.priority} defaultDueDate={createTaskDefaults.dueDate}
           tags={tags} onTagCreated={(tag: Tag) => setTags((prev) => [...prev, tag])} />
-        <EditTaskDialog task={editingTask} open={!!editingTask} onOpenChange={(open) => !open && setEditingTask(null)} onUpdated={handleTaskUpdated} />
-        <DeleteTaskDialog task={deletingTask} open={!!deletingTask} onOpenChange={(open) => !open && setDeletingTask(null)} onDeleted={handleTaskDeleted} />
-        <CreateProjectDialog open={createProjectOpen} onOpenChange={setCreateProjectOpen} onCreated={handleProjectCreated} />
+        <EditTaskDialog task={editingTask} open={!!editingTask} onOpenChange={(open) => { if (!open) useDialogStore.getState().closeEditTask() }} onUpdated={handleTaskUpdated} />
+        <DeleteTaskDialog task={deletingTask} open={!!deletingTask} onOpenChange={(open) => { if (!open) useDialogStore.getState().closeDeleteTask() }} onDeleted={handleTaskDeleted} />
+        <CreateProjectDialog open={createProjectOpen} onOpenChange={(open) => { if (!open) useDialogStore.getState().closeCreateProject() }} onCreated={handleProjectCreated} />
         <ProjectSettingsDialog project={editingProject} open={!!editingProject} onOpenChange={(open) => !open && closeProjectSettings()}
           initialTab={projectSettingsInitialTab} groupBy={testGroupBy} onGroupByChange={setTestGroupBy}
           integrationOnboardingProvider={projectSettingsOnboardingProvider} onIntegrationOnboardingHandled={() => setProjectSettingsOnboardingProvider(null)}
           onOpenGlobalAiConfig={openGlobalAiConfigFromProject} onUpdated={handleProjectUpdated} />
-        <DeleteProjectDialog project={deletingProject} open={!!deletingProject} onOpenChange={(open) => !open && setDeletingProject(null)} onDeleted={handleProjectDeleted} />
+        <DeleteProjectDialog project={deletingProject} open={!!deletingProject} onOpenChange={(open) => { if (!open) useDialogStore.getState().closeDeleteProject() }} onDeleted={handleProjectDeleted} />
         <Suspense><UserSettingsDialog open={settingsOpen} onOpenChange={(open) => { setSettingsOpen(open); if (!open) { setSettingsRevision((r) => r + 1); setSettingsInitialAiConfigSection(null) } }}
           initialTab={settingsInitialTab} initialAiConfigSection={settingsInitialAiConfigSection} onTabChange={setSettingsInitialTab} /></Suspense>
-        <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} tasks={tasks} projects={projects} onSelectTask={openTask} onSelectProject={setSelectedProjectId} />
+        <SearchDialog open={searchOpen} onOpenChange={(open) => { if (!open) useDialogStore.getState().closeSearch() }} tasks={tasks} projects={projects} onSelectTask={openTask} onSelectProject={setSelectedProjectId} />
         <OnboardingDialog externalOpen={onboardingOpen} onExternalClose={async () => {
-          setOnboardingOpen(false)
+          useDialogStore.getState().closeOnboarding()
           const [onboardingCompleted, prompted] = await Promise.all([window.api.settings.get('onboarding_completed'), window.api.settings.get('tutorial_prompted')])
           if (onboardingCompleted === 'true') markSetupGuideCompleted()
           if (!prompted) { void window.api.settings.set('tutorial_prompted', 'true'); toast('Want a quick tour?', { duration: 8000, action: { label: 'Take the tour', onClick: startTour } }) }
         }} />
-        <Suspense><TutorialAnimationModal open={showAnimatedTour} onClose={() => setShowAnimatedTour(false)} /></Suspense>
-        <ChangelogDialog open={changelogOpen || autoChangelogOpen} onOpenChange={(open) => { if (!open) { setChangelogOpen(false); dismissAutoChangelog() } }} />
-        <AlertDialog open={completeTaskDialogOpen} onOpenChange={setCompleteTaskDialogOpen}>
+        <Suspense><TutorialAnimationModal open={showAnimatedTour} onClose={() => useDialogStore.getState().closeAnimatedTour()} /></Suspense>
+        <ChangelogDialog open={changelogOpen || autoChangelogOpen} onOpenChange={(open) => { if (!open) { useDialogStore.getState().closeChangelog(); dismissAutoChangelog() } }} />
+        <AlertDialog open={completeTaskDialogOpen} onOpenChange={(open) => { if (!open) useDialogStore.getState().closeCompleteTaskDialog() }}>
           <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Complete Task</AlertDialogTitle><AlertDialogDescription>Mark as complete and close tab?</AlertDialogDescription></AlertDialogHeader>
           <AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction autoFocus onClick={handleCompleteTaskConfirm}>Complete</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
         </AlertDialog>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useDialogStore } from '@slayzone/settings'
 
 const CHECKLIST_SETTINGS_KEY = 'onboarding_checklist_state'
 const CHECKLIST_STATE_VERSION = 1 as const
@@ -47,10 +48,6 @@ export interface OnboardingChecklistState {
 interface UseOnboardingChecklistOptions {
   projectCount: number
   hasCreatedTask: boolean
-  onOpenSetupGuide: () => void
-  onStartTour: () => void
-  onCreateFirstProject: () => void
-  onCreateFirstTask: () => void
   onCheckLeaderboard: () => void
   onJoinCommunity: () => void
   onFollowOnX: () => void
@@ -111,10 +108,6 @@ function areStatesEqual(left: PersistedChecklistStateV1, right: PersistedCheckli
 export function useOnboardingChecklist({
   projectCount,
   hasCreatedTask,
-  onOpenSetupGuide,
-  onStartTour,
-  onCreateFirstProject,
-  onCreateFirstTask,
   onCheckLeaderboard,
   onJoinCommunity,
   onFollowOnX
@@ -205,7 +198,7 @@ export function useOnboardingChecklist({
   }, [updatePersistedState])
 
   const startTour = useCallback((): void => {
-    onStartTour()
+    useDialogStore.getState().openAnimatedTour()
     updatePersistedState((previous) => ({
       ...previous,
       completed: {
@@ -213,7 +206,7 @@ export function useOnboardingChecklist({
         takeTour: true
       }
     }))
-  }, [onStartTour, updatePersistedState])
+  }, [updatePersistedState])
 
   const checkLeaderboard = useCallback((): void => {
     onCheckLeaderboard()
@@ -270,7 +263,7 @@ export function useOnboardingChecklist({
         label: 'Setup guide',
         completed: forceComplete || persistedState.completed.setupGuide,
         allowWhenCompleted: true,
-        onClick: onOpenSetupGuide
+        onClick: () => useDialogStore.getState().openOnboarding()
       },
       {
         id: 'take-tour',
@@ -283,14 +276,14 @@ export function useOnboardingChecklist({
         id: 'create-first-project',
         label: 'Create first project',
         completed: forceComplete || projectCount > 0,
-        onClick: onCreateFirstProject
+        onClick: () => useDialogStore.getState().openCreateProject()
       },
       {
         id: 'create-first-task',
         label: 'Create first task',
         completed: forceComplete || hasCreatedTask,
         disabled: !forceComplete && projectCount === 0,
-        onClick: onCreateFirstTask
+        onClick: () => useDialogStore.getState().openCreateTask()
       },
       {
         id: 'check-leaderboard',
@@ -320,10 +313,7 @@ export function useOnboardingChecklist({
     persistedState.completed.followOnX,
     projectCount,
     hasCreatedTask,
-    onOpenSetupGuide,
     startTour,
-    onCreateFirstProject,
-    onCreateFirstTask,
     checkLeaderboard,
     joinCommunity,
     followOnX

@@ -18,13 +18,14 @@ import type { Project } from '@slayzone/projects/shared'
 import type { ColumnConfig } from '@slayzone/projects/shared'
 import { isTerminalStatus } from '@slayzone/projects/shared'
 import type { TerminalState } from '@slayzone/terminal/shared'
-import { groupTasksBy, PRIORITY_LABELS, todayISO, type Column } from './kanban'
+import { groupTasksBy, columnToCreateTaskDefaults, PRIORITY_LABELS, todayISO, type Column } from './kanban'
 import type { ViewConfig, CardProperties } from './FilterState'
 import { TaskContextMenu } from './TaskContextMenu'
 import { cn, getTerminalStateStyle, Tooltip, TooltipContent, TooltipTrigger } from '@slayzone/ui'
 import { IconButton } from '@slayzone/ui'
 import { ChevronDown, Plus, AlertCircle, Check, GitMerge, Link2 } from 'lucide-react'
 import { usePty, useActiveTaskIds } from '@slayzone/terminal'
+import { useDialogStore } from '@slayzone/settings/client'
 import { useEffect } from 'react'
 
 // ── Types ──
@@ -36,7 +37,6 @@ interface KanbanListViewProps {
   onTaskMove: (taskId: string, newColumnId: string, targetIndex: number) => void
   onTaskReorder: (taskIds: string[]) => void
   onTaskClick?: (task: Task, e: { metaKey: boolean }) => void
-  onCreateTask?: (column: Column) => void
   projectsMap?: Map<string, Project>
   showProjectDot?: boolean
   cardProperties?: CardProperties
@@ -373,7 +373,6 @@ export function KanbanListView({
   onTaskMove,
   onTaskReorder,
   onTaskClick,
-  onCreateTask,
   projectsMap,
   showProjectDot,
   cardProperties,
@@ -384,6 +383,10 @@ export function KanbanListView({
   onDeleteTask
 }: KanbanListViewProps): React.JSX.Element {
   const { groupBy, sortBy, showEmptyColumns } = viewConfig
+
+  const handleCreateTask = useMemo(() => {
+    return (column: Column) => useDialogStore.getState().openCreateTask(columnToCreateTaskDefaults(column, groupBy))
+  }, [groupBy])
   const disableDrag = groupBy === 'due_date'
   const [activeId, setActiveId] = useState<string | null>(null)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
@@ -509,7 +512,7 @@ export function KanbanListView({
             collapsed={collapsedGroups.has(column.id)}
             onToggle={() => toggleGroup(column.id)}
             showHeader={groupBy !== 'none'}
-            onCreateTask={onCreateTask}
+            onCreateTask={handleCreateTask}
             cp={cardProperties}
             onTaskClick={onTaskClick}
             projectsMap={projectsMap}

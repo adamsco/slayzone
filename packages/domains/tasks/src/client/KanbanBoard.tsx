@@ -18,13 +18,13 @@ import type { ColumnConfig } from '@slayzone/projects/shared'
 import { isTerminalStatus } from '@slayzone/projects/shared'
 import type { Project } from '@slayzone/projects/shared'
 import type { Tag } from '@slayzone/tags/shared'
-import { groupTasksBy, type Column } from './kanban'
+import { groupTasksBy, columnToCreateTaskDefaults, type Column } from './kanban'
 import type { ViewConfig, CardProperties } from './FilterState'
 import { KanbanColumn } from './KanbanColumn'
 import { KanbanCard } from './KanbanCard'
 import { KanbanPicker } from './KanbanPicker'
 import { useKanbanKeyboard } from './useKanbanKeyboard'
-import { useAppearance } from '@slayzone/settings/client'
+import { useAppearance, useDialogStore } from '@slayzone/settings/client'
 import { track } from '@slayzone/telemetry/client'
 
 interface KanbanBoardProps {
@@ -35,7 +35,6 @@ interface KanbanBoardProps {
   onTaskMove: (taskId: string, newColumnId: string, targetIndex: number) => void
   onTaskReorder: (taskIds: string[]) => void
   onTaskClick?: (task: Task, e: { metaKey: boolean }) => void
-  onCreateTask?: (column: Column) => void
   projectsMap?: Map<string, Project>
   showProjectDot?: boolean
   cardProperties?: CardProperties
@@ -58,7 +57,6 @@ export function KanbanBoard({
   onTaskMove,
   onTaskReorder,
   onTaskClick,
-  onCreateTask,
   projectsMap,
   showProjectDot,
   cardProperties,
@@ -73,6 +71,10 @@ export function KanbanBoard({
 }: KanbanBoardProps): React.JSX.Element {
   const { groupBy, sortBy, showEmptyColumns } = viewConfig
   const disableDrag = groupBy === 'due_date'
+
+  const handleCreateTask = useMemo(() => {
+    return (column: Column) => useDialogStore.getState().openCreateTask(columnToCreateTaskDefaults(column, groupBy))
+  }, [groupBy])
   const { reduceMotion } = useAppearance()
   const [activeId, setActiveId] = useState<string | null>(null)
   const [activeColumnId, setActiveColumnId] = useState<string | null>(null)
@@ -226,7 +228,7 @@ export function KanbanBoard({
             activeColumnId={activeColumnId}
             overColumnId={overColumnId}
             onTaskClick={onTaskClick}
-            onCreateTask={onCreateTask}
+            onCreateTask={handleCreateTask}
             projectsMap={projectsMap}
             showProjectDot={showProjectDot}
             disableDrag={disableDrag}

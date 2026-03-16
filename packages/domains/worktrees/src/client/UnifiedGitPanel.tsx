@@ -31,7 +31,6 @@ type UnifiedGitPanelProps = {
   onTaskClick?: (task: Task) => void
   onUpdateTask?: (data: UpdateTaskInput) => Promise<Task>
   onTaskUpdated?: (task: Task) => void
-  onCreateTask?: (defaults: Partial<Task>) => void
 }
 
 interface ConflictToolbarData {
@@ -56,7 +55,6 @@ interface GitPanelContextValue {
   onTaskClick?: (task: Task) => void
   onUpdateTask?: (data: UpdateTaskInput) => Promise<Task>
   onTaskUpdated?: (task: Task) => void
-  onCreateTask?: (defaults: Partial<Task>) => void
 }
 
 const GitPanelContext = createContext<GitPanelContextValue | null>(null)
@@ -81,8 +79,7 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
   tasks = [],
   filter,
   projects = [],
-  onTaskClick,
-  onCreateTask
+  onTaskClick
 }, ref) {
   const [activeTab, setActiveTabRaw] = useState<GitTabId>(defaultTab)
   const setActiveTab = useCallback((tab: GitTabId) => {
@@ -186,8 +183,7 @@ export const UnifiedGitPanel = forwardRef<UnifiedGitPanelHandle, UnifiedGitPanel
       projectPath,
       onTaskClick,
       onUpdateTask,
-      onTaskUpdated,
-      onCreateTask
+      onTaskUpdated
     }}>
       <div className="h-full flex flex-col">
       {/* Unified header: tabs left, actions right */}

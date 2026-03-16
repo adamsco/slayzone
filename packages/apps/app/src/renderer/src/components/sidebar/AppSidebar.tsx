@@ -25,7 +25,7 @@ import {
 import { ProjectItem } from './ProjectItem'
 import { TerminalStatusPopover } from '@slayzone/terminal'
 import { cn, useAppearance } from '@slayzone/ui'
-import { useTabStore } from '@slayzone/settings'
+import { useTabStore, useDialogStore } from '@slayzone/settings'
 import type { Task } from '@slayzone/task/shared'
 import type { Project } from '@slayzone/projects/shared'
 import type { OnboardingChecklistState } from '@/hooks/useOnboardingChecklist'
@@ -35,11 +35,8 @@ interface AppSidebarProps {
   tasks: Task[]
   selectedProjectId: string
   onSelectProject: (id: string) => void
-  onAddProject: () => void
   onProjectSettings: (project: Project) => void
-  onProjectDelete: (project: Project) => void
   onSettings: () => void
-  onChangelog: () => void
   onUsageAnalytics: () => void
   onLeaderboard: () => void
   onTaskClick?: (taskId: string) => void
@@ -96,11 +93,8 @@ export function AppSidebar({
   tasks,
   selectedProjectId,
   onSelectProject,
-  onAddProject,
   onProjectSettings,
-  onProjectDelete,
   onSettings,
-  onChangelog,
   onUsageAnalytics,
   onLeaderboard,
   onTaskClick,
@@ -129,7 +123,7 @@ export function AppSidebar({
                     selected={selectedProjectId === project.id}
                     onClick={() => onSelectProject(project.id)}
                     onSettings={() => onProjectSettings(project)}
-                    onDelete={() => onProjectDelete(project)}
+                    onDelete={() => useDialogStore.getState().openDeleteProject(project)}
                     attentionCount={attentionByProject.get(project.id) ?? 0}
                     badgeMode={sidebarBadgeMode}
                   />
@@ -139,7 +133,7 @@ export function AppSidebar({
               {/* Add project button */}
               <SidebarMenuItem>
                 <button
-                  onClick={onAddProject}
+                  onClick={() => useDialogStore.getState().openCreateProject()}
                   className={cn(
                     'w-10 h-10 rounded-lg flex items-center justify-center',
                     'text-lg text-muted-foreground border-2 border-dashed',
@@ -292,7 +286,7 @@ export function AppSidebar({
                   aria-label="What's New"
                   variant="ghost"
                   size="icon-lg"
-                  onClick={onChangelog}
+                  onClick={() => useDialogStore.getState().openChangelog()}
                   className="rounded-lg text-muted-foreground"
                 >
                   <Megaphone className="size-5" />

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useImperativeHandle, forwardRef } from 'react'
+import { useDialogStore } from '@slayzone/settings/client'
 import {
   FolderGit2,
   GitBranch,
@@ -505,7 +506,7 @@ function WorktreeCard({
   onRemove: () => void
   onAssign: () => void
 }) {
-  const { tasks, activeTask, onCreateTask } = useGitPanelContext()
+  const { tasks, activeTask } = useGitPanelContext()
   const displayTitle = node.isMain ? 'Main Repository' : (node.branch || 'detached HEAD')
   const isActive = activeTask?.worktree_path === node.path || (node.isMain && !activeTask?.worktree_path && activeTask)
 
@@ -615,7 +616,7 @@ function WorktreeCard({
                       <DropdownMenuItem onClick={onAssign}>
                         <Link className="h-3.5 w-3.5 mr-2" /> Assign to Task
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onCreateTask?.({ worktree_path: node.path, title: node.path.split(/[\\/]/).pop() || 'New Task' })}>
+                      <DropdownMenuItem onClick={() => useDialogStore.getState().openCreateTask()}>
                         <PlusCircle className="h-3.5 w-3.5 mr-2" /> Create Task from here
                       </DropdownMenuItem>
                     </>
