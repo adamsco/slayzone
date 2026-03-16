@@ -2,7 +2,7 @@
  * Tests for WebLinkProvider (clickable URL detection in terminal)
  * Run with: npx tsx packages/domains/terminal/src/client/web-link-provider.test.ts
  */
-import { URL_REGEX, getWindowedLineStrings, mapStringIndex } from './web-link-provider'
+import { URL_REGEX, FILE_REGEX, getWindowedLineStrings, mapStringIndex } from './web-link-provider'
 import type { Terminal, IBufferLine } from '@xterm/xterm'
 
 let passed = 0
@@ -276,6 +276,95 @@ test('maps across three lines', () => {
   ])
   // Index 12 = 5 + 5 + 2 → line 2, col 2
   assertDeep(mapStringIndex(term, 0, 0, 12), [2, 2])
+})
+
+// ─────────────────────────────────────
+// FILE_REGEX
+// ─────────────────────────────────────
+console.log('\nFILE_REGEX matching')
+console.log('─'.repeat(40))
+
+function matchFile(text: string): string | null {
+  const m = text.match(FILE_REGEX)
+  return m ? m[0] : null
+}
+
+function matchAllFiles(text: string): string[] {
+  const regex = new RegExp(FILE_REGEX.source, 'g')
+  const results: string[] = []
+  let m: RegExpExecArray | null
+  while ((m = regex.exec(text)) !== null) results.push(m[0])
+  return results
+}
+
+// Relative paths
+test('matches relative path with extension', () => {
+  assert(matchFile('error in src/index.ts here'), 'src/index.ts')
+})
+
+test('matches dotslash relative path', () => {
+  assert(matchFile('see ./src/main.tsx for details'), './src/main.tsx')
+})
+
+test('matches dot-dot relative path', () => {
+  assert(matchFile('from ../utils/helper.js:'), '../utils/helper.js')
+})
+
+// With line:col
+test('matches file:line', () => {
+  assert(matchFile('src/index.ts:42'), 'src/index.ts:42')
+})
+
+test('matches file:line:col', () => {
+  assert(matchFile('src/index.ts:42:10'), 'src/index.ts:42:10')
+})
+
+// Absolute paths
+test('matches absolute path', () => {
+  assert(matchFile('reading /Users/foo/project/main.rs'), '/Users/foo/project/main.rs')
+})
+
+test('matches absolute path with line:col', () => {
+  assert(matchFile('/home/user/app.py:100:5'), '/home/user/app.py:100:5')
+})
+
+// Nested paths
+test('matches deeply nested path', () => {
+  assert(matchFile('packages/domains/terminal/src/client/Terminal.tsx'), 'packages/domains/terminal/src/client/Terminal.tsx')
+})
+
+// Real terminal output patterns
+test('matches TypeScript error output', () => {
+  assert(matchFile('src/App.tsx(89,7): error TS6133'), 'src/App.tsx')
+})
+
+test('matches Rust compiler output', () => {
+  assert(matchFile('error[E0308]: src/lib.rs:15:5'), 'src/lib.rs:15:5')
+})
+
+test('matches go vet output', () => {
+  assert(matchFile('pkg/server/handler.go:42:15: undefined'), 'pkg/server/handler.go:42:15')
+})
+
+// Non-matches
+test('does not match plain words', () => {
+  assert(matchFile('hello world'), null)
+})
+
+test('does not match URL (handled by WebLinkProvider)', () => {
+  assert(matchFile('https://example.com/path.html'), null)
+})
+
+test('does not match path without extension', () => {
+  assert(matchFile('src/utils/helpers'), null)
+})
+
+// Multiple files in one line
+test('matches multiple files', () => {
+  const files = matchAllFiles('diff src/a.ts src/b.ts')
+  assert(files.length, 2)
+  assert(files[0], 'src/a.ts')
+  assert(files[1], 'src/b.ts')
 })
 
 console.log('─'.repeat(40))

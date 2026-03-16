@@ -32,6 +32,8 @@ interface TerminalContainerProps {
   onRetry?: () => void
   onFocusRequestHandled?: (requestId: number) => void
   onMainTabActiveChange?: (isMainActive: boolean) => void
+  onOpenUrl?: (url: string) => void
+  onOpenFile?: (filePath: string) => void
   rightContent?: React.ReactNode
 }
 
@@ -53,6 +55,8 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
   onRetry,
   onFocusRequestHandled,
   onMainTabActiveChange,
+  onOpenUrl,
+  onOpenFile,
   rightContent
 }: TerminalContainerProps, ref) {
   const {
@@ -286,6 +290,8 @@ export const TerminalContainer = forwardRef<TerminalContainerHandle, TerminalCon
           panes={paneProps}
           isActive={isActive}
           onAttached={handlePaneAttached}
+          onOpenUrl={onOpenUrl}
+          onOpenFile={onOpenFile}
         />
       </div>
     </div>

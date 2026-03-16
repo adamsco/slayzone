@@ -31,9 +31,11 @@ interface TerminalSplitGroupProps {
   panes: PaneProps[]
   isActive?: boolean
   onAttached?: (api: { focus: () => void }) => void
+  onOpenUrl?: (url: string) => void
+  onOpenFile?: (filePath: string) => void
 }
 
-export const TerminalSplitGroup = forwardRef<TerminalSplitGroupHandle, TerminalSplitGroupProps>(function TerminalSplitGroup({ panes, isActive, onAttached }, ref) {
+export const TerminalSplitGroup = forwardRef<TerminalSplitGroupHandle, TerminalSplitGroupProps>(function TerminalSplitGroup({ panes, isActive, onAttached, onOpenUrl, onOpenFile }, ref) {
   const [sizes, setSizes] = useState<number[]>(() =>
     panes.map(() => 100 / panes.length)
   )
@@ -132,6 +134,8 @@ export const TerminalSplitGroup = forwardRef<TerminalSplitGroupHandle, TerminalS
           onReady={pane.onReady}
           onFirstInput={pane.onFirstInput}
           onRetry={pane.onRetry}
+          onOpenUrl={onOpenUrl}
+          onOpenFile={onOpenFile}
         />
       </div>
     )

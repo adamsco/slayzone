@@ -66,10 +66,58 @@ export function mapStringIndex(terminal: Terminal, lineIndex: number, startCol: 
   return [lineIndex, col]
 }
 
+// Matches file paths with optional line:col suffix.
+// Patterns: ./relative/path.ts, ../up/path.js, src/foo.tsx:42:10, /absolute/path.rs:10
+// Requires a file extension to avoid false positives on plain words.
+// The line:col suffix (:digits and optionally :digits) is captured but not part of the "file" match group.
+export const FILE_REGEX = /(?<![:/\w.])(?:\.{1,2}\/[\w./-]+|[a-zA-Z][\w./-]*\/[\w./-]*\.[a-zA-Z]\w*|\/[\w./-]+\.[a-zA-Z]\w*)(?::(\d+)(?::(\d+))?)?/
+
+export class FileLinkProvider implements ILinkProvider {
+  constructor(
+    private _terminal: Terminal,
+    private _activate: (event: MouseEvent, filePath: string, line?: number, col?: number) => void
+  ) {}
+
+  provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
+    const line = this._terminal.buffer.active.getLine(bufferLineNumber - 1)
+    if (!line) {
+      callback(undefined)
+      return
+    }
+
+    // File links don't span wrapped lines — paths with spaces aren't matched anyway
+    const text = line.translateToString(true)
+    const regex = new RegExp(FILE_REGEX.source, 'g')
+    const links: ILink[] = []
+    let match: RegExpExecArray | null
+
+    while ((match = regex.exec(text)) !== null) {
+      const fullMatch = match[0]
+      const lineNum = match[1] ? parseInt(match[1], 10) : undefined
+      const colNum = match[2] ? parseInt(match[2], 10) : undefined
+      // Strip the :line:col suffix from the file path
+      const filePath = lineNum !== undefined ? fullMatch.replace(/:\d+(?::\d+)?$/, '') : fullMatch
+      const startX = match.index
+
+      links.push({
+        range: {
+          start: { x: startX + 1, y: bufferLineNumber },
+          end: { x: startX + fullMatch.length + 1, y: bufferLineNumber }
+        },
+        text: fullMatch,
+        decorations: { underline: false, pointerCursor: true },
+        activate: (event: MouseEvent) => this._activate(event, filePath, lineNum, colNum)
+      })
+    }
+
+    callback(links.length > 0 ? links : undefined)
+  }
+}
+
 export class WebLinkProvider implements ILinkProvider {
   constructor(
     private _terminal: Terminal,
-    private _activate: (uri: string) => void
+    private _activate: (event: MouseEvent, uri: string) => void
   ) {}
 
   provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
@@ -99,7 +147,7 @@ export class WebLinkProvider implements ILinkProvider {
         },
         text: uri,
         decorations: { underline: false, pointerCursor: true },
-        activate: () => this._activate(uri)
+        activate: (event: MouseEvent) => this._activate(event, uri)
       })
     }
 

@@ -1499,6 +1499,8 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
                   onRetry={handleRestartTerminal}
                   onFocusRequestHandled={handleTerminalFocusRequestHandled}
                   onMainTabActiveChange={setIsMainTabActive}
+                  onOpenUrl={openDevServerInBrowser}
+                  onOpenFile={handleQuickOpenFile}
                   rightContent={
                     <Tooltip open={!isMainTabActive && !task.is_temporary ? undefined : false}>
                       <TooltipTrigger asChild>

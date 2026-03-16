@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHand
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { WebLinkProvider } from './web-link-provider'
+import { WebLinkProvider, FileLinkProvider } from './web-link-provider'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
@@ -99,6 +99,8 @@ interface TerminalProps {
   }) => void
   onFirstInput?: () => void
   onRetry?: () => void
+  onOpenUrl?: (url: string) => void
+  onOpenFile?: (filePath: string) => void
 }
 
 function stripAnsi(str: string): string {
@@ -127,7 +129,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   onSessionInvalid,
   onReady,
   onFirstInput,
-  onRetry
+  onRetry,
+  onOpenUrl,
+  onOpenFile
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<XTerm | null>(null)
@@ -167,6 +171,10 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
   onAttachedRef.current = onAttached
   const onFirstInputRef = useRef(onFirstInput)
   onFirstInputRef.current = onFirstInput
+  const onOpenUrlRef = useRef(onOpenUrl)
+  onOpenUrlRef.current = onOpenUrl
+  const onOpenFileRef = useRef(onOpenFile)
+  onOpenFileRef.current = onOpenFile
   const hasCalledFirstInputRef = useRef(false)
 
   const { subscribe, subscribeExit, subscribeSessionInvalid, subscribeAttention, subscribeState, getState, getCrashOutput, resetTaskState, cleanupTask } = usePty()
@@ -329,10 +337,34 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
 
       // Clickable URLs — pointer cursor on hover, no underline decoration.
       // Underline disabled to avoid persistent-underline bugs with WebGL LinkRenderLayer.
-      const linkProvider = new WebLinkProvider(terminal, (uri) => {
-        void window.api.shell.openExternal(uri)
+      // Click → browser panel, Shift+Click → external browser
+      const linkProvider = new WebLinkProvider(terminal, (event, uri) => {
+        if (event.shiftKey) {
+          void window.api.shell.openExternal(uri)
+        } else if (onOpenUrlRef.current) {
+          onOpenUrlRef.current(uri)
+        } else {
+          void window.api.shell.openExternal(uri)
+        }
       })
       terminal.registerLinkProvider(linkProvider)
+
+      // Clickable file paths — Click → editor panel, Shift+Click → external editor
+      // Files outside the project path always open externally.
+      terminal.registerLinkProvider(new FileLinkProvider(terminal, (event, filePath, _line, _col) => {
+        // Resolve relative paths against terminal cwd
+        const resolved = filePath.startsWith('/') ? filePath : `${cwd}/${filePath}`
+        const isInProject = resolved.startsWith(cwd + '/') || resolved === cwd
+        if (event.shiftKey || !isInProject) {
+          void window.api.git.revealInFinder(resolved)
+        } else if (onOpenFileRef.current) {
+          // Pass relative path to editor panel
+          const relative = resolved.startsWith(cwd + '/') ? resolved.slice(cwd.length + 1) : filePath
+          onOpenFileRef.current(relative)
+        } else {
+          void window.api.git.revealInFinder(resolved)
+        }
+      }))
 
       // Test helper — allows e2e tests to trigger link activation without mouse coordinates
       const w = window as unknown as Record<string, unknown>
