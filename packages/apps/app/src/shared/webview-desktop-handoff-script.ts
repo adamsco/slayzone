@@ -5,6 +5,10 @@
  */
 export const WEBVIEW_DESKTOP_HANDOFF_SCRIPT = `
 (function() {
+  // Skip hardening in popup windows (OAuth, payment flows). The session preload
+  // runs in ALL frames of persist:browser-tabs — including popup BrowserWindows.
+  // Faking chrome.runtime, patching navigator, etc. confuses OAuth providers.
+  if (window.opener) return;
   if (window.__slzDesktopHandoffPatched) return;
   Object.defineProperty(window, '__slzDesktopHandoffPatched', {
     value: true,
@@ -34,6 +38,42 @@ export const WEBVIEW_DESKTOP_HANDOFF_SCRIPT = `
   if (!navigator.languages || navigator.languages.length === 0) {
     Object.defineProperty(navigator, 'languages', {
       get: function() { return ['en-US', 'en']; },
+      configurable: true,
+      enumerable: true,
+    });
+  }
+
+  // --- Spoof navigator.userAgentData (Client Hints JS API) ---
+  // The Sec-CH-UA header is overridden at the network level, but Google's sign-in
+  // also checks the JS API which still exposes Electron/non-Chrome brands.
+  if (navigator.userAgentData) {
+    var origUAData = navigator.userAgentData;
+    var chromiumBrand = origUAData.brands.find(function(b) { return b.brand === 'Chromium'; });
+    var cVer = chromiumBrand ? chromiumBrand.version : '142';
+    var spoofedBrands = [
+      { brand: 'Google Chrome', version: cVer },
+      { brand: 'Chromium', version: cVer },
+      { brand: 'Not_A Brand', version: '8' },
+    ];
+    var spoofedUAData = {
+      brands: spoofedBrands,
+      mobile: false,
+      platform: origUAData.platform,
+      toJSON: function() { return { brands: spoofedBrands, mobile: false, platform: origUAData.platform }; },
+      getHighEntropyValues: function(hints) {
+        return origUAData.getHighEntropyValues(hints).then(function(values) {
+          values.brands = spoofedBrands;
+          values.fullVersionList = [
+            { brand: 'Google Chrome', version: cVer + '.0.0.0' },
+            { brand: 'Chromium', version: cVer + '.0.0.0' },
+            { brand: 'Not_A Brand', version: '8.0.0.0' },
+          ];
+          return values;
+        });
+      },
+    };
+    Object.defineProperty(navigator, 'userAgentData', {
+      get: function() { return spoofedUAData; },
       configurable: true,
       enumerable: true,
     });
