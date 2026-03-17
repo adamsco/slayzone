@@ -6,6 +6,7 @@ out
 *.log*
 *.tsbuildinfo
 bundle-report.html
+graph-visual-report.html
 logs/
 
 # Environment
