@@ -1,6 +1,7 @@
 import { spawnSync, spawn } from 'child_process'
 import { platform } from 'os'
 import { existsSync, readFileSync, writeFileSync, chmodSync, constants as fsConstants, accessSync, cpSync, statSync, mkdirSync } from 'fs'
+import { cp, stat, mkdir } from 'fs/promises'
 import path from 'path'
 import { recordDiagnosticEvent } from '@slayzone/diagnostics/main'
 import type { ConflictFileContent, DetectedWorktree, GitDiffSnapshot, GitSyncResult, MergeResult, RebaseProgress, RebaseCommitInfo, CommitInfo, AheadBehind, StatusSummary, BranchDetail, BranchListResult, DeleteBranchResult, PruneResult, DiffStatsSummary, WorktreeMetadata, RebaseOntoResult, DagCommit, IgnoredFileNode, ResolvedCommit, ResolvedGraph, ForkGraphResult } from '../shared/types'
@@ -371,10 +372,10 @@ export async function copyIgnoredFiles(
 
     try {
       const destDir = path.dirname(destPath)
-      if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+      await mkdir(destDir, { recursive: true })
 
-      const stats = statSync(sourcePath)
-      cpSync(sourcePath, destPath, {
+      const stats = await stat(sourcePath)
+      await cp(sourcePath, destPath, {
         recursive: stats.isDirectory(),
         force: true
       })
