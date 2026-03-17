@@ -218,6 +218,14 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
     if (e.ctrlKey && e.shiftKey && (e.code === 'KeyC' || e.code === 'KeyV') && e.type === 'keydown') {
       return false
     }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'ArrowUp' && e.type === 'keydown') {
+      terminalRef.current?.scrollToTop()
+      return false
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'ArrowDown' && e.type === 'keydown') {
+      terminalRef.current?.scrollToBottom()
+      return false
+    }
     return true
   }, [clearBufferWithoutRestart])
 
