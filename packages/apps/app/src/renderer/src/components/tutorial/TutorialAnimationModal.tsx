@@ -144,6 +144,21 @@ export function TutorialAnimationModal({ open, onClose }: Props): React.JSX.Elem
   const [stepIndex, setStepIndex] = useState(0)
   const [direction, setDirection] = useState(1)
   const [cycle, setCycle] = useState(0)
+  const [sceneScale, setSceneScale] = useState(1)
+
+  useEffect(() => {
+    if (!open) return
+    const update = (): void => {
+      // 368px = sidebar w-68 (272) + p-12 padding (96)
+      const scaleW = (window.innerWidth * 0.9 - 368) / 1440
+      // 200px ≈ p-12 padding (96) + caption (~70) + timer (~10) + margin
+      const scaleH = (window.innerHeight * 0.9 - 200) / 1080
+      setSceneScale(Math.max(Math.min(scaleW, scaleH, 1), 0.15))
+    }
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [open])
 
   useEffect(() => {
     if (open) {
@@ -212,7 +227,7 @@ export function TutorialAnimationModal({ open, onClose }: Props): React.JSX.Elem
   return (
     <Dialog open={open} onOpenChange={() => onClose()}>
       <DialogContent
-        className="!w-auto !max-w-[90vw] !h-auto p-0 overflow-hidden bg-surface-1 border shadow-2xl"
+        className="!w-auto !max-w-[90vw] !max-h-[90vh] !h-auto p-0 overflow-hidden bg-surface-1 border shadow-2xl"
         showCloseButton={false}
       >
         <div className="flex p-12">
@@ -291,36 +306,44 @@ export function TutorialAnimationModal({ open, onClose }: Props): React.JSX.Elem
               </div>
             </div>
 
-            {/* Scene area — 1024px wide, 4:3, scales down if viewport is smaller */}
-            <div className="relative overflow-hidden flex items-center justify-center">
+            {/* Scene area — rendered at 1440px design size, scaled to fit */}
+            <div className="relative overflow-hidden">
               <div
-                className="w-[1440px] max-w-full flex flex-col items-center"
-                style={{ aspectRatio: '4 / 3' }}
+                className="mx-auto overflow-hidden"
+                style={{
+                  width: 1440 * sceneScale,
+                  height: 1080 * sceneScale,
+                }}
               >
-                {/* Monitor frame — static */}
-                <div className="w-full flex-1 min-h-0 rounded-2xl overflow-hidden shadow-2xl bg-neutral-700 flex flex-col p-[5px]">
-                  <div className="flex-1 min-h-0 rounded-xl overflow-hidden relative">
-                    <AnimatePresence mode="popLayout" custom={direction}>
-                      <motion.div
-                        key={`${tabIndex}-${stepIndex}`}
-                        custom={direction}
-                        variants={slideVariants}
-                        initial="enter"
-                        animate="center"
-                        exit="exit"
-                        className="absolute inset-0"
-                      >
+                <div
+                  className="w-[1440px] flex flex-col items-center origin-top-left"
+                  style={{ aspectRatio: '4 / 3', transform: `scale(${sceneScale})` }}
+                >
+                  {/* Monitor frame — static */}
+                  <div className="w-full flex-1 min-h-0 rounded-2xl overflow-hidden shadow-2xl bg-neutral-700 flex flex-col p-[5px]">
+                    <div className="flex-1 min-h-0 rounded-xl overflow-hidden relative">
+                      <AnimatePresence mode="popLayout" custom={direction}>
                         <motion.div
-                          key={cycle}
-                          className="w-full h-full"
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: [0, 1, 1, 0] }}
-                          transition={{ duration: sceneDuration / 1000, times: [0, 0.033, 0.967, 1], ease: 'linear' }}
+                          key={`${tabIndex}-${stepIndex}`}
+                          custom={direction}
+                          variants={slideVariants}
+                          initial="enter"
+                          animate="center"
+                          exit="exit"
+                          className="absolute inset-0"
                         >
-                          <Component />
+                          <motion.div
+                            key={cycle}
+                            className="w-full h-full"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: [0, 1, 1, 0] }}
+                            transition={{ duration: sceneDuration / 1000, times: [0, 0.033, 0.967, 1], ease: 'linear' }}
+                          >
+                            <Component />
+                          </motion.div>
                         </motion.div>
-                      </motion.div>
-                    </AnimatePresence>
+                      </AnimatePresence>
+                    </div>
                   </div>
                 </div>
               </div>
