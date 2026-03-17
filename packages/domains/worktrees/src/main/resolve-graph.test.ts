@@ -2511,6 +2511,236 @@ describe('computeDagLayout — diverged branches connect at fork point', () => {
   })
 })
 
+// ─── Behind branch on diverged local chain stays on local column ──
+
+describe('computeDagLayout — behind branch on diverged local main stays on main column', () => {
+  // Topology (matches real repo):
+  //   local main: L1 → L2(change-title tip) → L3 → fork
+  //   origin/main: R1 → fork
+  //   change-title-of-select-copy-files-stuff: behind branch, tip = L2
+  // L2 is owned by change-title (via Pass 1 branchRefs) but is on local main's chain.
+  // When diverged, it should stay on main's column (col 1+), NOT jump to col 0.
+  const forkHash = makeHash()
+  const l3Hash = makeHash()
+  const l2Hash = makeHash()
+  const l1Hash = makeHash()
+  const r1Hash = makeHash()
+
+  const commits: ResolvedCommit[] = [
+    resolved({ hash: l1Hash, message: 'local work', branch: 'main', parents: [l2Hash], branchRefs: ['main'], isBranchTip: true, isHead: true }),
+    resolved({ hash: l2Hash, message: 'also local', branch: 'change-title', parents: [l3Hash], branchRefs: ['change-title'], isBranchTip: true }),
+    resolved({ hash: l3Hash, message: 'more local', branch: 'main', parents: [forkHash] }),
+    resolved({ hash: r1Hash, message: 'remote only', branch: 'origin/main', parents: [forkHash], branchRefs: ['origin/main'], isBranchTip: true }),
+    resolved({ hash: forkHash, message: 'fork point', branch: 'origin/main', parents: [] }),
+  ]
+
+  const layout = computeDagLayout(commits, 'main')
+
+  test('local main on col 1+', () => {
+    const l1 = layout.nodes.find(n => n.commit.hash === l1Hash)!
+    expect(l1.column > 0).toBe(true)
+  })
+
+  test('behind branch commit (change-title) on same column as local main', () => {
+    const l1 = layout.nodes.find(n => n.commit.hash === l1Hash)!
+    const l2 = layout.nodes.find(n => n.commit.hash === l2Hash)!
+    expect(l2.column).toBe(l1.column)
+  })
+
+  test('origin/main on col 0', () => {
+    const r1 = layout.nodes.find(n => n.commit.hash === r1Hash)!
+    expect(r1.column).toBe(0)
+  })
+
+  test('behind branch commit has behindBranch indicator', () => {
+    const l2 = layout.nodes.find(n => n.commit.hash === l2Hash)!
+    expect(l2.behindBranch !== undefined).toBe(true)
+    expect(l2.behindBranch!.branchName).toBe('change-title')
+  })
+})
+
+// ─── Pass 4: localOnlyHashes reclaims shared commits for trunk ──
+
+describe('resolveCommitGraph — localOnlyHashes reclaims shared commits', () => {
+  // Real-world topology: local1 is local-only, everything below was pushed.
+  // mergedFrom commit 935968d has parent on shared history.
+  const commits: DagCommit[] = [
+    dag({ hash: 'local1', message: 'local work', refs: ['HEAD -> refs/heads/main'], parents: ['512265a'] }),
+    dag({ hash: '512265a', message: 'feat: double', parents: ['a4be17b'] }),
+    dag({ hash: 'a4be17b', message: 'Merge #30 from user/fix/worktree-remove', parents: ['caa4377', '935968d'] }),
+    dag({ hash: '935968d', message: 'fix handle', parents: ['caa4377'] }),
+    dag({ hash: 'caa4377', message: 'release', parents: ['548abbc'] }),
+    dag({ hash: '548abbc', message: 'chore', parents: ['61fb34c'] }),
+    dag({ hash: '4327416', message: 'origin only', refs: ['refs/remotes/origin/main'], parents: ['61fb34c'] }),
+    dag({ hash: '61fb34c', message: 'fork', parents: [] }),
+  ]
+
+  // Only local1 is truly local (not on origin/main)
+  const localOnly = new Set(['local1'])
+  const g = resolveCommitGraph(commits, 'main', ['main'], localOnly)
+
+  test('local1 stays on main', () => {
+    expect(g.commits.find(c => c.hash === 'local1')!.branch).toBe('main')
+  })
+
+  test('shared commits reclaimed to origin/main', () => {
+    expect(g.commits.find(c => c.hash === '512265a')!.branch).toBe('origin/main')
+    expect(g.commits.find(c => c.hash === 'a4be17b')!.branch).toBe('origin/main')
+    expect(g.commits.find(c => c.hash === 'caa4377')!.branch).toBe('origin/main')
+    expect(g.commits.find(c => c.hash === '548abbc')!.branch).toBe('origin/main')
+  })
+
+  test('mergedFrom commit also reclaimed', () => {
+    expect(g.commits.find(c => c.hash === '935968d')!.branch).toBe('origin/main')
+  })
+
+  test('layout: local1 on col 1, shared on col 0', () => {
+    const layout = computeDagLayout(g.commits, g.baseBranch)
+    const local1 = layout.nodes.find(n => n.commit.hash === 'local1')!
+    const shared = layout.nodes.find(n => n.commit.hash === 'caa4377')!
+    expect(local1.column > 0).toBe(true)
+    expect(shared.column).toBe(0)
+  })
+
+  test('layout: local1 edge is dashed', () => {
+    const layout = computeDagLayout(g.commits, g.baseBranch)
+    const local1 = layout.nodes.find(n => n.commit.hash === 'local1')!
+    const localEdge = layout.edges.find(e => e.fromRow === local1.row)
+    expect(localEdge!.dashed).toBe(true)
+  })
+
+  test('layout: origin/main col 0 edges below origin ref are not dashed', () => {
+    const layout = computeDagLayout(g.commits, g.baseBranch)
+    const originNode = layout.nodes.find(n => n.commit.hash === '4327416')!
+    const belowEdges = layout.edges.filter(e =>
+      e.fromCol === 0 && e.toCol === 0 && e.fromRow > originNode.row
+    )
+    for (const e of belowEdges) {
+      expect(e.dashed ?? false).toBe(false)
+    }
+  })
+})
+
+// ─── Real-world: merge commit with worktree branch (add-funny-stuff repo) ──
+
+describe('real-world: merge + worktree branches use col 0 for base branch', () => {
+  // Real topology from add-funny-stuff repo:
+  //   5343284 = merge "Merge branch 'move-to-convex'" (parents: 0e3335b, bc87769)
+  //   refs: add-funny-stuff + main → 5343284, move-to-convex → bc87769
+  //   bc87769 = move-to-convex tip, parent 0e3335b
+  //   0e3335b → 3cb615f → cece7da → 4ab3c3a → 5016e6f (linear)
+  const commits: DagCommit[] = [
+    dag({ hash: '5343284', message: "Merge branch 'move-to-convex'", refs: ['HEAD -> refs/heads/add-funny-stuff', 'refs/heads/main'], parents: ['0e3335b', 'bc87769'] }),
+    dag({ hash: 'bc87769', message: 'migrate from Supabase to Convex', refs: ['refs/heads/move-to-convex'], parents: ['0e3335b'] }),
+    dag({ hash: '0e3335b', message: 'switch to non-streaming Haiku 4.5', refs: [], parents: ['3cb615f'] }),
+    dag({ hash: '3cb615f', message: 'feat: unified chat+preview builder', refs: [], parents: ['cece7da'] }),
+    dag({ hash: 'cece7da', message: 'feat: add placeholder pages', refs: [], parents: ['4ab3c3a'] }),
+    dag({ hash: '4ab3c3a', message: 'fix: remove footer flame effect', refs: [], parents: ['5016e6f'] }),
+    dag({ hash: '5016e6f', message: 'init: Hatable', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'add-funny-stuff', ['add-funny-stuff', 'move-to-convex'])
+  const layout = computeDagLayout(g.commits, g.baseBranch)
+
+  test('base branch (add-funny-stuff) commits on col 0', () => {
+    const merge = layout.nodes.find(n => n.commit.hash === '5343284')!
+    const c1 = layout.nodes.find(n => n.commit.hash === '0e3335b')!
+    const root = layout.nodes.find(n => n.commit.hash === '5016e6f')!
+    expect(merge.column).toBe(0)
+    expect(c1.column).toBe(0)
+    expect(root.column).toBe(0)
+  })
+
+  test('move-to-convex commit on col > 0 or synthetic', () => {
+    const mtc = layout.nodes.find(n => n.commit.hash === 'bc87769')!
+    // Either on a side column or rendered as synthetic branch dot on col 0
+    const onSideCol = mtc.column > 0
+    const isSynthetic = mtc.syntheticBranch !== undefined
+    expect(onSideCol || isSynthetic).toBe(true)
+  })
+
+  test('no commit uses col > 1 (no zigzag)', () => {
+    const maxCol = Math.max(...layout.nodes.map(n => n.column))
+    expect(maxCol <= 1).toBe(true)
+  })
+
+})
+
+describe('real-world: worktree branch as baseBranch with shared main ref — no zigzag', () => {
+  // Same repo but baseBranch='main' (the app's defaultBaseBranch).
+  // main and add-funny-stuff both point at 5343284 (merge commit).
+  // main has no unique commits — it's just a ref on the merge.
+  // All commits should still render on col 0, not zigzag between 1 and 2.
+  const commits: DagCommit[] = [
+    dag({ hash: '5343284', message: "Merge branch 'move-to-convex'", refs: ['HEAD -> refs/heads/add-funny-stuff', 'refs/heads/main'], parents: ['0e3335b', 'bc87769'] }),
+    dag({ hash: 'bc87769', message: 'migrate from Supabase to Convex', refs: ['refs/heads/move-to-convex'], parents: ['0e3335b'] }),
+    dag({ hash: '0e3335b', message: 'switch to non-streaming Haiku 4.5', refs: [], parents: ['3cb615f'] }),
+    dag({ hash: '3cb615f', message: 'feat: unified chat+preview builder', refs: [], parents: ['cece7da'] }),
+    dag({ hash: 'cece7da', message: 'feat: add placeholder pages', refs: [], parents: ['4ab3c3a'] }),
+    dag({ hash: '4ab3c3a', message: 'fix: remove footer flame effect', refs: [], parents: ['5016e6f'] }),
+    dag({ hash: '5016e6f', message: 'init: Hatable', refs: [], parents: [] }),
+  ]
+
+  const g = resolveCommitGraph(commits, 'main', ['main', 'add-funny-stuff', 'move-to-convex'])
+  const layout = computeDagLayout(g.commits, g.baseBranch)
+
+  test('all base branch commits on col 0', () => {
+    const merge = layout.nodes.find(n => n.commit.hash === '5343284')!
+    const c1 = layout.nodes.find(n => n.commit.hash === '0e3335b')!
+    const root = layout.nodes.find(n => n.commit.hash === '5016e6f')!
+    expect(merge.column).toBe(0)
+    expect(c1.column).toBe(0)
+    expect(root.column).toBe(0)
+  })
+
+  test('no commit uses col > 1', () => {
+    const maxCol = Math.max(...layout.nodes.map(n => n.column))
+    expect(maxCol <= 1).toBe(true)
+  })
+
+  test('cross-column edge from merge to move-to-convex uses move-to-convex color', () => {
+    const mergeNode = layout.nodes.find(n => n.commit.hash === '5343284')!
+    const mtcNode = layout.nodes.find(n => n.commit.hash === 'bc87769')!
+    const crossEdge = layout.edges.find(e =>
+      e.fromRow === mergeNode.row && e.toRow === mtcNode.row &&
+      e.fromCol !== e.toCol
+    )
+    expect(crossEdge !== undefined).toBe(true)
+    // Edge color should match target branch (move-to-convex), not source (main)
+    const mainColor = layout.edges.find(e => e.fromCol === 0 && e.toCol === 0)?.color
+    expect(crossEdge!.color !== mainColor).toBe(true)
+  })
+})
+
+// ─── Cross-column edge color uses target branch ─────────────────
+
+describe('computeDagLayout — cross-column edge color matches target branch', () => {
+  const base = makeHash(), m1 = makeHash(), f1 = makeHash()
+
+  const commits: ResolvedCommit[] = [
+    resolved({ hash: m1, message: 'merge', branch: 'main', parents: [base, f1], branchRefs: ['main'], isBranchTip: true, isHead: true }),
+    resolved({ hash: f1, message: 'feature work', branch: 'feature', parents: [base], branchRefs: ['feature'], isBranchTip: true }),
+    resolved({ hash: base, message: 'shared', branch: 'main', parents: [] }),
+  ]
+
+  const layout = computeDagLayout(commits, 'main')
+
+  test('same-column edge uses source branch color', () => {
+    const straightEdge = layout.edges.find(e => e.fromCol === e.toCol)
+    expect(straightEdge !== undefined).toBe(true)
+    // main color (base branch = white #e2e2e2)
+    expect(straightEdge!.color).toBe('#e2e2e2')
+  })
+
+  test('cross-column edge uses target branch color, not source', () => {
+    const crossEdge = layout.edges.find(e => e.fromCol !== e.toCol)
+    expect(crossEdge !== undefined).toBe(true)
+    // Should NOT be main's white color
+    expect(crossEdge!.color).toBe(crossEdge!.color) // exists
+    expect(crossEdge!.color !== '#e2e2e2').toBe(true)
+  })
+})
+
 // ─── Summary ───────────────────────────────────────────────────
 
 console.log(`\n${passed} passed, ${failed} failed`)
