@@ -84,11 +84,26 @@ export function EditorFileTree({ projectPath, onOpenFile, onFileRenamed, activeF
     loadDir('')
   }, [loadDir])
 
-  // Reload expanded dirs on external file changes
+  // Reload expanded dirs on external file changes + clear collapsed folder caches
   useEffect(() => {
     if (!refreshKey) return
     loadDir('')
     expandedFolders.forEach((dir) => loadDir(dir))
+    // Clear cache for collapsed folders so next expand fetches fresh data
+    setDirContents((prev) => {
+      const keep = new Set(['', ...expandedFolders])
+      let changed = false
+      for (const key of prev.keys()) {
+        if (!keep.has(key)) { changed = true; break }
+      }
+      if (!changed) return prev
+      const next = new Map<string, DirEntry[]>()
+      for (const key of keep) {
+        const val = prev.get(key)
+        if (val) next.set(key, val)
+      }
+      return next
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey])
 
