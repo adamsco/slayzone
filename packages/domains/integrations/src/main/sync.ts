@@ -1,36 +1,31 @@
 import type { Database } from 'better-sqlite3'
 import type {
   ExternalLink,
-  GithubIssueSummary,
   IntegrationProjectMapping,
-  LinearIssueSummary,
+  IntegrationProvider,
   SyncNowInput,
   SyncNowResult
 } from '../shared'
-import { getIssuesBatch, getIssue as getLinearIssue, updateIssue, createIssue as createLinearIssue, listIssues as listLinearIssues } from './linear-client'
-import { getIssuesBatch as getGithubIssuesBatch, getIssue as getGithubIssue, updateIssue as updateGithubIssue, createIssue as createGithubIssue, listIssues as listGithubIssues } from './github-client'
 import { readCredential } from './credentials'
 import { htmlToMarkdown, markdownToHtml } from './markdown'
 import {
   toMs,
   getProjectColumns,
   normalizeMarkdown,
-  localStatusToGitHubState,
-  githubStateToLocal,
-  parseGitHubExternalKey,
   upsertFieldState,
-  linearStateToTaskStatus,
-  linearPriorityToLocal,
-  localPriorityToLinear,
   buildDefaultProviderConfig
 } from './sync-helpers'
 import {
   getColumnById,
   getDefaultStatus,
   getDoneStatus,
+  getStatusByCategories,
   isKnownStatus,
+  type ColumnConfig,
   type WorkflowCategory
 } from '@slayzone/workflow'
+import { getAdapter, getRegisteredProviders } from './adapters'
+import type { NormalizedIssue, ProviderAdapter } from './adapters'
 
 type Task = {
   id: string
@@ -50,51 +45,83 @@ interface LinkRow extends ExternalLink {
   credential_ref: string
 }
 
+// --- Generic status resolution helpers ---
 
-function applyRemoteTaskUpdate(
+/**
+ * Resolve the local status column ID for a remote status.
+ * 1. Check integration_state_mappings for explicit mapping by state_type
+ * 2. Fall back to adapter's category mapping → getStatusByCategories()
+ */
+export function resolveLocalStatus(
   db: Database,
-  taskId: string,
-  issue: LinearIssueSummary,
-  localStatus: string
-): void {
-  db.prepare(`
-    UPDATE tasks
-    SET title = ?,
-        description = ?,
-        status = ?,
-        priority = ?,
-        assignee = ?,
-        updated_at = ?
-    WHERE id = ?
-  `).run(
-    issue.title,
-    issue.description ? markdownToHtml(issue.description) : null,
-    localStatus,
-    linearPriorityToLocal(issue.priority),
-    issue.assignee?.name ?? null,
-    issue.updatedAt,
-    taskId
-  )
+  adapter: ProviderAdapter,
+  mapping: ProjectMapping | undefined,
+  projectId: string,
+  remoteStatusType: string,
+  remoteStatusName: string
+): string {
+  const columns = getProjectColumns(db, projectId)
+
+  if (mapping) {
+    const mapped = db.prepare(`
+      SELECT local_status FROM integration_state_mappings
+      WHERE provider = ? AND project_mapping_id = ? AND state_type = ?
+      ORDER BY rowid ASC
+      LIMIT 1
+    `).get(mapping.provider, mapping.id, remoteStatusType) as { local_status: string } | undefined
+
+    if (mapped && isKnownStatus(mapped.local_status, columns)) {
+      return mapped.local_status
+    }
+  }
+
+  // Fall back to adapter-based category mapping
+  const category = adapter.remoteStatusToCategory({
+    id: remoteStatusType,
+    name: remoteStatusName,
+    color: '',
+    type: remoteStatusType
+  })
+  return resolveStatusByCategory(category, columns)
 }
 
-export function getDesiredLinearStateId(
+export function resolveStatusByCategory(category: WorkflowCategory, columns: ColumnConfig[] | null): string {
+  const CATEGORY_FALLBACKS: Record<WorkflowCategory, WorkflowCategory[]> = {
+    triage: ['triage', 'unstarted', 'backlog'],
+    backlog: ['backlog', 'unstarted', 'triage'],
+    unstarted: ['unstarted', 'triage', 'backlog'],
+    started: ['started'],
+    completed: ['completed', 'canceled'],
+    canceled: ['canceled', 'completed']
+  }
+  return getStatusByCategories(CATEGORY_FALLBACKS[category], columns) ?? getDefaultStatus(columns)
+}
+
+/**
+ * Find the remote state_id to use when pushing a local status.
+ * Works for any provider that has integration_state_mappings.
+ */
+export function getDesiredRemoteStatusId(
   db: Database,
   mapping: IntegrationProjectMapping | undefined,
   projectId: string,
   taskStatus: string
 ): string | undefined {
   if (!mapping) return undefined
+
+  // Direct mapping: local_status → state_id
   const direct = db.prepare(`
     SELECT state_id FROM integration_state_mappings
-    WHERE provider = 'linear' AND project_mapping_id = ? AND local_status = ?
-  `).get(mapping.id, taskStatus) as { state_id: string } | undefined
+    WHERE provider = ? AND project_mapping_id = ? AND local_status = ?
+  `).get(mapping.provider, mapping.id, taskStatus) as { state_id: string } | undefined
   if (direct?.state_id) return direct.state_id
 
+  // Category-based fallback: find state mappings with matching category
   const projectColumns = getProjectColumns(db, projectId)
   const statusColumn = getColumnById(taskStatus, projectColumns)
   if (!statusColumn) return undefined
 
-  const stateTypeCandidates: Record<WorkflowCategory, string[]> = {
+  const CATEGORY_FALLBACKS: Record<WorkflowCategory, string[]> = {
     triage: ['triage', 'unstarted', 'backlog'],
     backlog: ['backlog', 'unstarted', 'triage'],
     unstarted: ['unstarted', 'triage', 'backlog'],
@@ -103,49 +130,30 @@ export function getDesiredLinearStateId(
     canceled: ['canceled', 'completed']
   }
 
-  for (const stateType of stateTypeCandidates[statusColumn.category]) {
+  for (const stateType of CATEGORY_FALLBACKS[statusColumn.category]) {
     const byType = db.prepare(`
       SELECT state_id FROM integration_state_mappings
-      WHERE provider = 'linear' AND project_mapping_id = ? AND state_type = ?
+      WHERE provider = ? AND project_mapping_id = ? AND state_type = ?
       ORDER BY rowid ASC
       LIMIT 1
-    `).get(mapping.id, stateType) as { state_id: string } | undefined
+    `).get(mapping.provider, mapping.id, stateType) as { state_id: string } | undefined
     if (byType?.state_id) return byType.state_id
   }
 
   return undefined
 }
 
-function getLocalStatusForRemoteState(
-  db: Database,
-  mapping: IntegrationProjectMapping | undefined,
-  projectId: string,
-  remoteStateType: string
-): string {
-  if (mapping) {
-    const mapped = db.prepare(`
-      SELECT local_status FROM integration_state_mappings
-      WHERE provider = 'linear' AND project_mapping_id = ? AND state_type = ?
-      ORDER BY rowid ASC
-      LIMIT 1
-    `).get(mapping.id, remoteStateType) as { local_status: string } | undefined
+/** @deprecated Use getDesiredRemoteStatusId instead */
+export const getDesiredLinearStateId = getDesiredRemoteStatusId
 
-    const projectColumns = getProjectColumns(db, projectId)
-    if (mapped && isKnownStatus(mapped.local_status, projectColumns)) {
-      return mapped.local_status
-    }
-    return linearStateToTaskStatus(remoteStateType, projectColumns)
-  }
-
-  return linearStateToTaskStatus(remoteStateType, getProjectColumns(db, projectId))
-}
+// --- Core helpers ---
 
 function loadTask(db: Database, taskId: string): Task | null {
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as Task | undefined
   return row ?? null
 }
 
-function loadProjectMappingByTask(db: Database, taskId: string, provider: 'linear' | 'github'): ProjectMapping | undefined {
+function loadProjectMappingByTask(db: Database, taskId: string, provider: IntegrationProvider): ProjectMapping | undefined {
   return db.prepare(`
     SELECT pm.*
     FROM integration_project_mappings pm
@@ -167,68 +175,131 @@ function markLinkSynced(db: Database, link: LinkRow): void {
   `).run(link.connection_id)
 }
 
-function applyRemoteGithubTaskUpdate(
-  db: Database,
-  taskId: string,
-  issue: GithubIssueSummary,
-  localStatus: string
-): void {
+function markLinkError(db: Database, linkId: string, message: string): void {
   db.prepare(`
-    UPDATE tasks
-    SET title = ?,
-        description = ?,
-        status = ?,
-        assignee = ?,
-        updated_at = ?
+    UPDATE external_links
+    SET sync_state = 'error', last_error = ?, updated_at = datetime('now')
     WHERE id = ?
-  `).run(
-    issue.title,
-    issue.body ? markdownToHtml(issue.body) : null,
-    localStatus,
-    issue.assignee?.login ?? null,
-    issue.updatedAt,
-    taskId
-  )
+  `).run(message, linkId)
 }
 
-function upsertGithubFieldState(
+function createExternalLink(
+  db: Database,
+  provider: IntegrationProvider,
+  connectionId: string,
+  externalId: string,
+  externalKey: string,
+  externalUrl: string,
+  taskId: string
+): string {
+  const id = crypto.randomUUID()
+  db.prepare(`
+    INSERT INTO external_links (
+      id, provider, connection_id, external_type, external_id, external_key,
+      external_url, task_id, sync_state, last_sync_at, last_error, created_at, updated_at
+    ) VALUES (?, ?, ?, 'issue', ?, ?, ?, ?, 'active', datetime('now'), NULL, datetime('now'), datetime('now'))
+  `).run(id, provider, connectionId, externalId, externalKey, externalUrl, taskId)
+  return id
+}
+
+// --- Unified remote update / field state ---
+
+function applyRemoteUpdate(
+  db: Database,
+  taskId: string,
+  issue: NormalizedIssue,
+  localStatus: string,
+  priority?: number
+): void {
+  if (priority !== undefined) {
+    db.prepare(`
+      UPDATE tasks
+      SET title = ?, description = ?, status = ?, priority = ?, assignee = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      issue.title,
+      issue.description ? markdownToHtml(issue.description) : null,
+      localStatus,
+      priority,
+      issue.assignee?.name ?? null,
+      issue.updatedAt,
+      taskId
+    )
+  } else {
+    db.prepare(`
+      UPDATE tasks
+      SET title = ?, description = ?, status = ?, assignee = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      issue.title,
+      issue.description ? markdownToHtml(issue.description) : null,
+      localStatus,
+      issue.assignee?.name ?? null,
+      issue.updatedAt,
+      taskId
+    )
+  }
+}
+
+function upsertNormalizedFieldState(
   db: Database,
   linkId: string,
   task: Task,
-  remoteIssue: GithubIssueSummary
+  issue: NormalizedIssue
 ): void {
-  const columns = getProjectColumns(db, task.project_id)
-  const localStatus = localStatusToGitHubState(task.status, columns)
-  upsertFieldState(db, linkId, 'title', task.title, remoteIssue.title, task.updated_at, remoteIssue.updatedAt)
-  upsertFieldState(db, linkId, 'description', normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null), normalizeMarkdown(remoteIssue.body), task.updated_at, remoteIssue.updatedAt)
-  upsertFieldState(db, linkId, 'status', localStatus, remoteIssue.state, task.updated_at, remoteIssue.updatedAt)
+  upsertFieldState(db, linkId, 'title', task.title, issue.title, task.updated_at, issue.updatedAt)
+  upsertFieldState(
+    db, linkId, 'description',
+    normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
+    normalizeMarkdown(issue.description),
+    task.updated_at, issue.updatedAt
+  )
+  upsertFieldState(db, linkId, 'status', task.status, issue.status.type, task.updated_at, issue.updatedAt)
+  if (issue.extras.priority !== undefined) {
+    upsertFieldState(db, linkId, 'priority', task.priority, issue.extras.priority, task.updated_at, issue.updatedAt)
+  }
 }
 
-export async function runSyncNow(db: Database, input: SyncNowInput): Promise<SyncNowResult> {
+function resolvePriorityFromExtras(extras: Record<string, unknown>, existingPriority: number): number {
+  const raw = extras.priority
+  if (typeof raw !== 'number') return existingPriority
+  // Linear priority mapping: 0=none→3, 1=urgent→5, 2=high→4, 3=medium→3, 4=low→2
+  if (raw <= 1) return 5
+  if (raw === 2) return 4
+  if (raw === 3) return 3
+  if (raw === 4) return 2
+  if (raw >= 5) return 1
+  return 3
+}
+
+function localPriorityToExtras(priority: number): number {
+  if (priority <= 1) return 4
+  if (priority === 2) return 4
+  if (priority === 3) return 3
+  if (priority === 4) return 2
+  if (priority >= 5) return 1
+  return 3
+}
+
+// --- Unified sync ---
+
+export async function runProviderSync(
+  db: Database,
+  provider: IntegrationProvider,
+  input: SyncNowInput
+): Promise<SyncNowResult> {
+  const adapter = getAdapter(provider)
   const result: SyncNowResult = {
-    scanned: 0,
-    pushed: 0,
-    pulled: 0,
-    conflictsResolved: 0,
-    errors: [],
-    at: new Date().toISOString()
+    scanned: 0, pushed: 0, pulled: 0, conflictsResolved: 0,
+    errors: [], at: new Date().toISOString()
   }
 
-  const where: string[] = ["l.provider = 'linear'", "c.enabled = 1"]
-  const values: unknown[] = []
+  const where: string[] = ['l.provider = ?', 'c.enabled = 1']
+  const values: unknown[] = [provider]
 
-  if (input.connectionId) {
-    where.push('l.connection_id = ?')
-    values.push(input.connectionId)
-  }
-  if (input.taskId) {
-    where.push('l.task_id = ?')
-    values.push(input.taskId)
-  }
-  if (input.projectId) {
-    where.push('t.project_id = ?')
-    values.push(input.projectId)
-  }
+  if (input.connectionId) { where.push('l.connection_id = ?'); values.push(input.connectionId) }
+  if (input.taskId) { where.push('l.task_id = ?'); values.push(input.taskId) }
+  if (input.projectId) { where.push('t.project_id = ?'); values.push(input.projectId) }
 
   const links = db.prepare(`
     SELECT l.*, c.credential_ref
@@ -241,32 +312,32 @@ export async function runSyncNow(db: Database, input: SyncNowInput): Promise<Syn
 
   if (links.length === 0) return result
 
-  // Group links by credential and batch-fetch all issues per credential
-  const byCredential = new Map<string, { apiKey: string; links: LinkRow[] }>()
+  // Group by credential for batch operations
+  const byCredential = new Map<string, { credential: string; links: LinkRow[] }>()
   for (const link of links) {
     let group = byCredential.get(link.credential_ref)
     if (!group) {
-      group = { apiKey: readCredential(db, link.credential_ref), links: [] }
+      group = { credential: readCredential(db, link.credential_ref), links: [] }
       byCredential.set(link.credential_ref, group)
     }
     group.links.push(link)
   }
 
-  for (const { apiKey, links: credLinks } of byCredential.values()) {
-    const issueIds = credLinks.map((l) => l.external_id)
-    let issueMap: Map<string, LinearIssueSummary>
+  for (const { credential, links: credLinks } of byCredential.values()) {
+    // Build refs with context from external_key
+    const refs = credLinks.map((link) => ({
+      id: link.external_id,
+      context: adapter.parseExternalKey(link.external_key) ?? undefined
+    }))
 
+    let issueMap: Map<string, NormalizedIssue>
     try {
-      issueMap = await getIssuesBatch(apiKey, issueIds)
+      issueMap = await adapter.getIssuesBatch(credential, refs)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       for (const link of credLinks) {
         result.scanned += 1
-        db.prepare(`
-          UPDATE external_links
-          SET sync_state = 'error', last_error = ?, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(message, link.id)
+        markLinkError(db, link.id, message)
         result.errors.push(`${link.external_key}: ${message}`)
       }
       continue
@@ -278,23 +349,23 @@ export async function runSyncNow(db: Database, input: SyncNowInput): Promise<Syn
       try {
         let remoteIssue = issueMap.get(link.external_id)
 
-        // Batch fetch may exclude archived issues — retry with single fetch to confirm
+        // Batch fetch may miss issues — retry with single fetch
         if (!remoteIssue) {
           const task = loadTask(db, link.task_id)
-          // Skip retry if task is already archived (avoids repeated API calls)
           if (task?.archived_at) {
             markLinkSynced(db, link)
             continue
           }
           try {
-            remoteIssue = (await getLinearIssue(apiKey, link.external_id)) ?? undefined
+            const ctx = adapter.parseExternalKey(link.external_key) ?? undefined
+            remoteIssue = (await adapter.getIssue(credential, link.external_id, ctx)) ?? undefined
           } catch {
-            // Single fetch also failed — treat as genuinely missing
+            // Single fetch failed
           }
         }
 
         if (!remoteIssue) {
-          // Issue is truly gone (archived/deleted) — archive local task
+          // Issue gone — archive local task
           db.prepare("UPDATE tasks SET archived_at = datetime('now') WHERE id = ? AND archived_at IS NULL")
             .run(link.task_id)
           markLinkSynced(db, link)
@@ -308,56 +379,65 @@ export async function runSyncNow(db: Database, input: SyncNowInput): Promise<Syn
         const localUpdatedMs = toMs(task.updated_at)
         const remoteUpdatedMs = toMs(remoteIssue.updatedAt)
 
-        const mapping = loadProjectMappingByTask(db, task.id, 'linear')
+        const mapping = loadProjectMappingByTask(db, task.id, provider)
         const syncMode = mapping?.sync_mode ?? 'one_way'
 
         if (remoteUpdatedMs > localUpdatedMs) {
-          const localStatus = getLocalStatusForRemoteState(
-            db,
-            mapping,
-            task.project_id,
-            remoteIssue.state.type
+          // Pull remote changes
+          const localStatus = resolveLocalStatus(
+            db, adapter, mapping, task.project_id,
+            remoteIssue.status.type, remoteIssue.status.name
           )
-          applyRemoteTaskUpdate(db, task.id, remoteIssue, localStatus)
+          const priority = resolvePriorityFromExtras(remoteIssue.extras, task.priority)
+          applyRemoteUpdate(db, task.id, remoteIssue, localStatus, remoteIssue.extras.priority !== undefined ? priority : undefined)
+          const updatedTask = loadTask(db, task.id)!
+          upsertNormalizedFieldState(db, link.id, updatedTask, remoteIssue)
           result.pulled += 1
           result.conflictsResolved += 1
         } else if (localUpdatedMs > remoteUpdatedMs && syncMode === 'two_way') {
-          const stateId = getDesiredLinearStateId(db, mapping, task.project_id, task.status)
+          // Push local changes
+          const statusId = getDesiredRemoteStatusId(db, mapping, task.project_id, task.status)
+          const ctx = adapter.parseExternalKey(link.external_key) ?? undefined
 
-          const updatedIssue = await updateIssue(apiKey, link.external_id, {
-            title: task.title,
-            description: task.description ? htmlToMarkdown(task.description) : null,
-            priority: localPriorityToLinear(task.priority),
-            stateId,
-            assigneeId: null
-          })
+          const extras: Record<string, unknown> = {}
+          if (remoteIssue.extras.priority !== undefined) {
+            extras.priority = localPriorityToExtras(task.priority)
+          }
+          // GitHub needs explicit state for updateIssue
+          if (provider === 'github') {
+            const columns = getProjectColumns(db, task.project_id)
+            const col = getColumnById(task.status, columns)
+            extras.state = (col?.category === 'completed' || col?.category === 'canceled') ? 'closed' : 'open'
+          }
+
+          const updatedIssue = await adapter.updateIssue(
+            credential, link.external_id,
+            {
+              title: task.title,
+              description: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
+              statusId,
+              extras
+            },
+            ctx
+          )
 
           if (updatedIssue) {
             result.pushed += 1
-            upsertFieldState(db, link.id, 'title', task.title, updatedIssue.title, task.updated_at, updatedIssue.updatedAt)
-            upsertFieldState(db, link.id, 'description', task.description, updatedIssue.description, task.updated_at, updatedIssue.updatedAt)
-            upsertFieldState(db, link.id, 'priority', task.priority, updatedIssue.priority, task.updated_at, updatedIssue.updatedAt)
-            upsertFieldState(db, link.id, 'status', task.status, updatedIssue.state.type, task.updated_at, updatedIssue.updatedAt)
+            upsertNormalizedFieldState(db, link.id, task, updatedIssue)
           }
         }
 
-        // Archive sync: remote terminal/archived → archive locally, remote reopened → unarchive
-        // Only update archived_at, NOT updated_at — avoids false "local ahead" on next tick
-        const isRemoteTerminal = remoteIssue.state.type === 'completed' || remoteIssue.state.type === 'canceled' || Boolean(remoteIssue.archivedAt)
-        if (isRemoteTerminal && !task.archived_at) {
+        // Archive sync
+        if (remoteIssue.isArchived && !task.archived_at) {
           db.prepare("UPDATE tasks SET archived_at = datetime('now') WHERE id = ?").run(task.id)
-        } else if (!isRemoteTerminal && task.archived_at) {
+        } else if (!remoteIssue.isArchived && task.archived_at) {
           db.prepare("UPDATE tasks SET archived_at = NULL WHERE id = ?").run(task.id)
         }
 
         markLinkSynced(db, link)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        db.prepare(`
-          UPDATE external_links
-          SET sync_state = 'error', last_error = ?, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(message, link.id)
+        markLinkError(db, link.id, message)
         result.errors.push(`${link.external_key}: ${message}`)
       }
     }
@@ -366,177 +446,17 @@ export async function runSyncNow(db: Database, input: SyncNowInput): Promise<Syn
   return result
 }
 
+/** @deprecated Use runProviderSync(db, 'linear', input) */
+export async function runSyncNow(db: Database, input: SyncNowInput): Promise<SyncNowResult> {
+  return runProviderSync(db, 'linear', input)
+}
+
+/** @deprecated Use runProviderSync(db, 'github', input) */
 export async function runGithubSyncNow(db: Database, input: SyncNowInput): Promise<SyncNowResult> {
-  const result: SyncNowResult = {
-    scanned: 0,
-    pushed: 0,
-    pulled: 0,
-    conflictsResolved: 0,
-    errors: [],
-    at: new Date().toISOString()
-  }
-
-  const where: string[] = ["l.provider = 'github'", "c.enabled = 1"]
-  const values: unknown[] = []
-
-  if (input.connectionId) {
-    where.push('l.connection_id = ?')
-    values.push(input.connectionId)
-  }
-  if (input.taskId) {
-    where.push('l.task_id = ?')
-    values.push(input.taskId)
-  }
-  if (input.projectId) {
-    where.push('t.project_id = ?')
-    values.push(input.projectId)
-  }
-
-  const links = db.prepare(`
-    SELECT l.*, c.credential_ref
-    FROM external_links l
-    JOIN integration_connections c ON c.id = l.connection_id
-    JOIN tasks t ON t.id = l.task_id
-    JOIN integration_project_mappings pm ON pm.project_id = t.project_id AND pm.provider = l.provider
-    WHERE ${where.join(' AND ')} AND pm.status_setup_complete = 1
-  `).all(...values) as LinkRow[]
-
-  if (links.length === 0) return result
-
-  // Group links by credential and batch-fetch
-  const byCredential = new Map<string, { token: string; links: LinkRow[] }>()
-  for (const link of links) {
-    let group = byCredential.get(link.credential_ref)
-    if (!group) {
-      group = { token: readCredential(db, link.credential_ref), links: [] }
-      byCredential.set(link.credential_ref, group)
-    }
-    group.links.push(link)
-  }
-
-  for (const { token, links: credLinks } of byCredential.values()) {
-    // Build batch input: parse external_key to get owner/repo/number
-    const batchInput: Array<{ id: string; owner: string; repo: string; number: number }> = []
-    const keyByExternalId = new Map<string, { owner: string; repo: string; number: number }>()
-    for (const link of credLinks) {
-      const key = parseGitHubExternalKey(link.external_key)
-      if (!key) {
-        result.scanned += 1
-        result.errors.push(`Invalid external key: ${link.external_key}`)
-        continue
-      }
-      batchInput.push({ id: link.external_id, ...key })
-      keyByExternalId.set(link.external_id, key)
-    }
-
-    let issueMap: Map<string, GithubIssueSummary>
-    try {
-      issueMap = await getGithubIssuesBatch(token, batchInput)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      for (const link of credLinks) {
-        result.scanned += 1
-        db.prepare(`
-          UPDATE external_links
-          SET sync_state = 'error', last_error = ?, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(message, link.id)
-        result.errors.push(`${link.external_key}: ${message}`)
-      }
-      continue
-    }
-
-    for (const link of credLinks) {
-      result.scanned += 1
-
-      try {
-        let remoteIssue = issueMap.get(link.external_id)
-
-        // Batch fetch may miss issues — retry with single fetch to confirm
-        if (!remoteIssue) {
-          const task = loadTask(db, link.task_id)
-          // Skip retry if task is already archived
-          if (task?.archived_at) {
-            markLinkSynced(db, link)
-            continue
-          }
-          const key = keyByExternalId.get(link.external_id)
-          if (key) {
-            try {
-              remoteIssue = (await getGithubIssue(token, key)) ?? undefined
-            } catch {
-              // Single fetch also failed
-            }
-          }
-        }
-
-        if (!remoteIssue) {
-          // Issue is truly gone (deleted) — archive local task
-          db.prepare("UPDATE tasks SET archived_at = datetime('now') WHERE id = ? AND archived_at IS NULL")
-            .run(link.task_id)
-          markLinkSynced(db, link)
-          result.pulled += 1
-          continue
-        }
-
-        const task = loadTask(db, link.task_id)
-        if (!task) continue
-
-        const localUpdatedMs = toMs(task.updated_at)
-        const remoteUpdatedMs = toMs(remoteIssue.updatedAt)
-
-        const mapping = loadProjectMappingByTask(db, task.id, 'github')
-        const syncMode = mapping?.sync_mode ?? 'one_way'
-        const columns = getProjectColumns(db, task.project_id)
-
-        if (remoteUpdatedMs > localUpdatedMs) {
-          const localStatus = githubStateToLocal(remoteIssue.state, columns)
-          applyRemoteGithubTaskUpdate(db, task.id, remoteIssue, localStatus)
-          const updatedTask = loadTask(db, task.id)!
-          upsertGithubFieldState(db, link.id, updatedTask, remoteIssue)
-          result.pulled += 1
-          result.conflictsResolved += 1
-        } else if (localUpdatedMs > remoteUpdatedMs && syncMode === 'two_way') {
-          const key = keyByExternalId.get(link.external_id)
-          if (key) {
-            const updatedIssue = await updateGithubIssue(token, {
-              owner: key.owner,
-              repo: key.repo,
-              number: key.number,
-              title: task.title,
-              body: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
-              state: localStatusToGitHubState(task.status, columns)
-            })
-            if (updatedIssue) {
-              result.pushed += 1
-              upsertGithubFieldState(db, link.id, task, updatedIssue)
-            }
-          }
-        }
-
-        // Archive sync: remote closed → archive locally, remote reopened → unarchive
-        // Only update archived_at, NOT updated_at — avoids false "local ahead" on next tick
-        if (remoteIssue.state === 'closed' && !task.archived_at) {
-          db.prepare("UPDATE tasks SET archived_at = datetime('now') WHERE id = ?").run(task.id)
-        } else if (remoteIssue.state === 'open' && task.archived_at) {
-          db.prepare("UPDATE tasks SET archived_at = NULL WHERE id = ?").run(task.id)
-        }
-
-        markLinkSynced(db, link)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        db.prepare(`
-          UPDATE external_links
-          SET sync_state = 'error', last_error = ?, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(message, link.id)
-        result.errors.push(`${link.external_key}: ${message}`)
-      }
-    }
-  }
-
-  return result
+  return runProviderSync(db, 'github', input)
 }
+
+// --- Sync poller ---
 
 let syncRunning = false
 
@@ -549,13 +469,12 @@ export function startSyncPoller(db: Database, onChanged?: () => void): NodeJS.Ti
   return setInterval(() => {
     if (syncRunning) return
     syncRunning = true
-    void Promise.all([
-      runSyncNow(db, {}),
-      runGithubSyncNow(db, {})
-    ]).then(([linear, github]) => {
-      if ((linear.pulled + github.pulled + linear.pushed + github.pushed) > 0) {
-        onChanged?.()
-      }
+    const providers = getRegisteredProviders()
+    void Promise.all(
+      providers.map((provider) => runProviderSync(db, provider, {}))
+    ).then((results) => {
+      const totalChanges = results.reduce((sum, r) => sum + r.pulled + r.pushed, 0)
+      if (totalChanges > 0) onChanged?.()
     }).catch((err) => {
       console.error('Periodic sync failed:', err)
     }).finally(() => {
@@ -580,44 +499,37 @@ export async function pushTaskAfterEdit(
 
   const providers = new Set(links.map((l) => l.provider))
 
-  if (providers.has('linear')) {
-    await runSyncNow(db, { taskId }).catch((err) => {
-      console.error(`[sync] push-on-edit failed for task ${taskId} (linear):`, err)
-    })
-  }
-  if (providers.has('github') && opts?.pushGithubTask) {
-    await opts.pushGithubTask(taskId).catch((err) => {
-      console.error(`[sync] push-on-edit failed for task ${taskId} (github):`, err)
-    })
+  for (const provider of providers) {
+    if (provider === 'github' && opts?.pushGithubTask) {
+      await opts.pushGithubTask(taskId).catch((err) => {
+        console.error(`[sync] push-on-edit failed for task ${taskId} (github):`, err)
+      })
+    } else {
+      await runProviderSync(db, provider as IntegrationProvider, { taskId }).catch((err) => {
+        console.error(`[sync] push-on-edit failed for task ${taskId} (${provider}):`, err)
+      })
+    }
   }
 }
 
-function createExternalLink(
-  db: Database,
-  provider: 'linear' | 'github',
-  connectionId: string,
-  externalId: string,
-  externalKey: string,
-  externalUrl: string,
-  taskId: string
-): string {
-  const id = crypto.randomUUID()
-  db.prepare(`
-    INSERT INTO external_links (
-      id, provider, connection_id, external_type, external_id, external_key,
-      external_url, task_id, sync_state, last_sync_at, last_error, created_at, updated_at
-    ) VALUES (?, ?, ?, 'issue', ?, ?, ?, ?, 'active', datetime('now'), NULL, datetime('now'), datetime('now'))
-  `).run(id, provider, connectionId, externalId, externalKey, externalUrl, taskId)
-  return id
-}
+// --- Unified task creation from normalized issue ---
 
-function createLocalTaskFromLinearIssue(
+function createLocalTaskFromNormalizedIssue(
   db: Database,
+  adapter: ProviderAdapter,
   projectId: string,
-  issue: LinearIssueSummary
+  issue: NormalizedIssue
 ): string {
   const columns = getProjectColumns(db, projectId)
   const defaults = buildDefaultProviderConfig(db)
+  const category = adapter.remoteStatusToCategory({
+    id: issue.status.id,
+    name: issue.status.name,
+    color: '',
+    type: issue.status.type
+  })
+  const status = resolveStatusByCategory(category, columns)
+  const priority = resolvePriorityFromExtras(issue.extras, 3)
   const id = crypto.randomUUID()
   db.prepare(`
     INSERT INTO tasks (
@@ -627,8 +539,8 @@ function createLocalTaskFromLinearIssue(
   `).run(
     id, projectId, issue.title,
     issue.description ? markdownToHtml(issue.description) : null,
-    linearStateToTaskStatus(issue.state.type, columns),
-    linearPriorityToLocal(issue.priority),
+    status,
+    priority,
     issue.assignee?.name ?? null,
     defaults.json, defaults.claudeFlags, defaults.codexFlags,
     issue.updatedAt
@@ -636,30 +548,7 @@ function createLocalTaskFromLinearIssue(
   return id
 }
 
-function createLocalTaskFromGithubIssue(
-  db: Database,
-  projectId: string,
-  issue: GithubIssueSummary
-): string {
-  const columns = getProjectColumns(db, projectId)
-  const defaults = buildDefaultProviderConfig(db)
-  const id = crypto.randomUUID()
-  db.prepare(`
-    INSERT INTO tasks (
-      id, project_id, title, description, status, priority, assignee,
-      terminal_mode, provider_config, claude_flags, codex_flags, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'claude-code', ?, ?, ?, datetime('now'), ?)
-  `).run(
-    id, projectId, issue.title,
-    issue.body ? markdownToHtml(issue.body) : null,
-    githubStateToLocal(issue.state, columns),
-    3,
-    issue.assignee?.login ?? null,
-    defaults.json, defaults.claudeFlags, defaults.codexFlags,
-    issue.updatedAt
-  )
-  return id
-}
+// --- Unified push functions ---
 
 export async function pushNewTaskToProviders(db: Database, taskId: string, projectId: string): Promise<void> {
   const mappings = db.prepare(`
@@ -673,46 +562,43 @@ export async function pushNewTaskToProviders(db: Database, taskId: string, proje
   if (!task) return
 
   for (const mapping of mappings) {
-    // Skip if already linked
     const existing = db.prepare(
       'SELECT id FROM external_links WHERE task_id = ? AND provider = ?'
     ).get(taskId, mapping.provider)
     if (existing) continue
 
     try {
+      const adapter = getAdapter(mapping.provider as IntegrationProvider)
       const credential = readCredential(db, mapping.credential_ref)
+      const statusId = getDesiredRemoteStatusId(db, mapping, projectId, task.status)
 
+      const extras: Record<string, unknown> = {}
       if (mapping.provider === 'linear') {
-        const stateId = getDesiredLinearStateId(db, mapping, projectId, task.status)
-        const issue = await createLinearIssue(credential, {
-          teamId: mapping.external_team_id,
-          title: task.title,
-          description: task.description ? htmlToMarkdown(task.description) : undefined,
-          priority: localPriorityToLinear(task.priority),
-          stateId,
-          projectId: mapping.external_project_id
-        })
-        if (!issue) continue
-
-        const linkId = createExternalLink(db, 'linear', mapping.connection_id, issue.id, issue.identifier, issue.url, taskId)
-        upsertFieldState(db, linkId, 'title', task.title, issue.title, task.updated_at, issue.updatedAt)
-        upsertFieldState(db, linkId, 'description', task.description, issue.description, task.updated_at, issue.updatedAt)
-        upsertFieldState(db, linkId, 'priority', task.priority, issue.priority, task.updated_at, issue.updatedAt)
-        upsertFieldState(db, linkId, 'status', task.status, issue.state.type, task.updated_at, issue.updatedAt)
-      } else if (mapping.provider === 'github') {
-        if (!mapping.external_repo_owner || !mapping.external_repo_name) continue
-        const issue = await createGithubIssue(credential, {
-          owner: mapping.external_repo_owner,
-          repo: mapping.external_repo_name,
-          title: task.title,
-          body: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null)
-        })
-
-        const externalKey = `${mapping.external_repo_owner}/${mapping.external_repo_name}#${issue.number}`
-        const linkId = createExternalLink(db, 'github', mapping.connection_id, issue.id, externalKey, issue.url, taskId)
-        const updatedTask = loadTask(db, taskId)!
-        upsertGithubFieldState(db, linkId, updatedTask, issue)
+        extras.priority = localPriorityToExtras(task.priority)
       }
+
+      // Build groupId: Linear=teamId, GitHub=owner/repo
+      let groupId = mapping.external_team_id
+      if (mapping.provider === 'github') {
+        if (!mapping.external_repo_owner || !mapping.external_repo_name) continue
+        groupId = `${mapping.external_repo_owner}/${mapping.external_repo_name}`
+      }
+
+      const issue = await adapter.createIssue(credential, {
+        groupId,
+        scopeId: mapping.external_project_id,
+        title: task.title,
+        description: task.description ? htmlToMarkdown(task.description) : undefined,
+        statusId,
+        extras
+      })
+
+      const externalKey = adapter.buildExternalKey(issue)
+      const linkId = createExternalLink(
+        db, mapping.provider as IntegrationProvider, mapping.connection_id,
+        issue.id, externalKey, issue.url, taskId
+      )
+      upsertNormalizedFieldState(db, linkId, task, issue)
     } catch (err) {
       console.error(`[sync] push-new-task failed for task ${taskId} (${mapping.provider}):`, err)
     }
@@ -732,26 +618,29 @@ export async function pushArchiveToProviders(db: Database, taskId: string): Prom
 
   for (const link of links) {
     try {
-      const mapping = loadProjectMappingByTask(db, taskId, link.provider as 'linear' | 'github')
+      const provider = link.provider as IntegrationProvider
+      const mapping = loadProjectMappingByTask(db, taskId, provider)
       if (mapping?.sync_mode !== 'two_way') continue
 
+      const adapter = getAdapter(provider)
       const credential = readCredential(db, link.credential_ref)
+      const ctx = adapter.parseExternalKey(link.external_key) ?? undefined
 
-      if (link.provider === 'linear') {
-        const columns = getProjectColumns(db, task.project_id)
-        const doneStatus = getDoneStatus(columns)
-        const stateId = getDesiredLinearStateId(db, mapping, task.project_id, doneStatus)
-        await updateIssue(credential, link.external_id, { stateId })
-      } else if (link.provider === 'github') {
-        const key = parseGitHubExternalKey(link.external_key)
-        if (!key) continue
-        await updateGithubIssue(credential, {
-          owner: key.owner, repo: key.repo, number: key.number,
-          title: task.title,
-          body: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
-          state: 'closed'
-        })
+      const columns = getProjectColumns(db, task.project_id)
+      const doneStatus = getDoneStatus(columns)
+      const statusId = getDesiredRemoteStatusId(db, mapping, task.project_id, doneStatus)
+
+      const extras: Record<string, unknown> = {}
+      if (provider === 'github') {
+        extras.state = 'closed'
       }
+
+      await adapter.updateIssue(credential, link.external_id, {
+        title: task.title,
+        description: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
+        statusId,
+        extras
+      }, ctx)
     } catch (err) {
       console.error(`[sync] push-archive failed for task ${taskId} (${link.provider}):`, err)
     }
@@ -771,30 +660,100 @@ export async function pushUnarchiveToProviders(db: Database, taskId: string): Pr
 
   for (const link of links) {
     try {
-      const mapping = loadProjectMappingByTask(db, taskId, link.provider as 'linear' | 'github')
+      const provider = link.provider as IntegrationProvider
+      const mapping = loadProjectMappingByTask(db, taskId, provider)
       if (mapping?.sync_mode !== 'two_way') continue
 
+      const adapter = getAdapter(provider)
       const credential = readCredential(db, link.credential_ref)
+      const ctx = adapter.parseExternalKey(link.external_key) ?? undefined
 
-      if (link.provider === 'linear') {
-        const columns = getProjectColumns(db, task.project_id)
-        const defaultStatus = getDefaultStatus(columns)
-        const stateId = getDesiredLinearStateId(db, mapping, task.project_id, defaultStatus)
-        await updateIssue(credential, link.external_id, { stateId })
-      } else if (link.provider === 'github') {
-        const key = parseGitHubExternalKey(link.external_key)
-        if (!key) continue
-        await updateGithubIssue(credential, {
-          owner: key.owner, repo: key.repo, number: key.number,
-          title: task.title,
-          body: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
-          state: 'open'
-        })
+      const columns = getProjectColumns(db, task.project_id)
+      const defaultStatus = getDefaultStatus(columns)
+      const statusId = getDesiredRemoteStatusId(db, mapping, task.project_id, defaultStatus)
+
+      const extras: Record<string, unknown> = {}
+      if (provider === 'github') {
+        extras.state = 'open'
       }
+
+      await adapter.updateIssue(credential, link.external_id, {
+        title: task.title,
+        description: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
+        statusId,
+        extras
+      }, ctx)
     } catch (err) {
       console.error(`[sync] push-unarchive failed for task ${taskId} (${link.provider}):`, err)
     }
   }
+}
+
+// --- Unified discovery ---
+
+async function discoverIssues(
+  db: Database,
+  adapter: ProviderAdapter,
+  mapping: IntegrationProjectMapping & { credential_ref: string },
+  credential: string
+): Promise<number> {
+  // GitHub needs repo configured for discovery
+  if (mapping.provider === 'github' && (!mapping.external_repo_owner || !mapping.external_repo_name)) {
+    console.log(`[discovery] GitHub: skipping mapping ${mapping.id} — no repo configured`)
+    return 0
+  }
+
+  let cursor: string | null = null
+  let discovered = 0
+
+  // Build groupId: Linear=teamId, GitHub=owner/repo
+  let groupId = mapping.external_team_id
+  if (mapping.provider === 'github' && mapping.external_repo_owner && mapping.external_repo_name) {
+    groupId = `${mapping.external_repo_owner}/${mapping.external_repo_name}`
+  }
+
+  do {
+    const { issues, nextCursor } = await adapter.listIssues(credential, {
+      groupId,
+      scopeId: mapping.external_project_id ?? undefined,
+      limit: mapping.provider === 'github' ? 100 : 50,
+      cursor,
+      updatedAfter: mapping.last_discovery_at
+    })
+
+    for (const issue of issues) {
+      const linked = db.prepare(
+        'SELECT id FROM external_links WHERE provider = ? AND external_id = ?'
+      ).get(mapping.provider, issue.id)
+      if (linked) continue
+
+      try {
+        const taskId = createLocalTaskFromNormalizedIssue(db, adapter, mapping.project_id, issue)
+        const externalKey = adapter.buildExternalKey(issue)
+        const linkId = createExternalLink(
+          db, mapping.provider as IntegrationProvider, mapping.connection_id,
+          issue.id, externalKey, issue.url, taskId
+        )
+        const task = loadTask(db, taskId)!
+        upsertNormalizedFieldState(db, linkId, task, issue)
+        discovered++
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('UNIQUE')) continue
+        throw err
+      }
+    }
+
+    cursor = nextCursor
+  } while (cursor)
+
+  db.prepare(
+    "UPDATE integration_project_mappings SET last_discovery_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+  ).run(mapping.id)
+
+  if (discovered > 0) {
+    console.log(`[discovery] ${mapping.provider}: discovered ${discovered} new issues for project ${mapping.project_id}`)
+  }
+  return discovered
 }
 
 export async function runDiscovery(db: Database): Promise<number> {
@@ -808,13 +767,9 @@ export async function runDiscovery(db: Database): Promise<number> {
   let totalDiscovered = 0
   for (const mapping of mappings) {
     try {
+      const adapter = getAdapter(mapping.provider as IntegrationProvider)
       const credential = readCredential(db, mapping.credential_ref)
-
-      if (mapping.provider === 'linear') {
-        totalDiscovered += await discoverLinearIssues(db, mapping, credential)
-      } else if (mapping.provider === 'github') {
-        totalDiscovered += await discoverGithubIssues(db, mapping, credential)
-      }
+      totalDiscovered += await discoverIssues(db, adapter, mapping, credential)
     } catch (err) {
       console.error(`[discovery] failed for mapping ${mapping.id} (${mapping.provider}):`, err)
     }
@@ -822,115 +777,9 @@ export async function runDiscovery(db: Database): Promise<number> {
   return totalDiscovered
 }
 
-async function discoverLinearIssues(
-  db: Database,
-  mapping: IntegrationProjectMapping & { credential_ref: string },
-  apiKey: string
-): Promise<number> {
-  let cursor: string | null = null
-  let discovered = 0
-
-  do {
-    const { issues, nextCursor } = await listLinearIssues(apiKey, {
-      teamId: mapping.external_team_id,
-      projectId: mapping.external_project_id ?? undefined,
-      first: 50,
-      after: cursor,
-      updatedAfter: mapping.last_discovery_at
-    })
-
-    for (const issue of issues) {
-      const linked = db.prepare(
-        "SELECT id FROM external_links WHERE provider = 'linear' AND external_id = ?"
-      ).get(issue.id)
-      if (linked) continue
-
-      try {
-        const taskId = createLocalTaskFromLinearIssue(db, mapping.project_id, issue)
-        const linkId = createExternalLink(db, 'linear', mapping.connection_id, issue.id, issue.identifier, issue.url, taskId)
-        const task = loadTask(db, taskId)!
-        upsertFieldState(db, linkId, 'title', task.title, issue.title, task.updated_at, issue.updatedAt)
-        upsertFieldState(db, linkId, 'description', task.description, issue.description, task.updated_at, issue.updatedAt)
-        upsertFieldState(db, linkId, 'status', task.status, issue.state.type, task.updated_at, issue.updatedAt)
-        discovered++
-      } catch (err) {
-        // UNIQUE constraint violation = already linked (race), skip
-        if (err instanceof Error && err.message.includes('UNIQUE')) continue
-        throw err
-      }
-    }
-
-    cursor = nextCursor
-  } while (cursor)
-
-  db.prepare(
-    "UPDATE integration_project_mappings SET last_discovery_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
-  ).run(mapping.id)
-
-  if (discovered > 0) {
-    console.log(`[discovery] Linear: discovered ${discovered} new issues for project ${mapping.project_id}`)
-  }
-  return discovered
-}
-
-async function discoverGithubIssues(
-  db: Database,
-  mapping: IntegrationProjectMapping & { credential_ref: string },
-  token: string
-): Promise<number> {
-  if (!mapping.external_repo_owner || !mapping.external_repo_name) {
-    console.log(`[discovery] GitHub: skipping mapping ${mapping.id} — no repo configured (owner=${mapping.external_repo_owner}, name=${mapping.external_repo_name})`)
-    return 0
-  }
-
-  let cursor: string | null = null
-  let discovered = 0
-
-  do {
-    const { issues, nextCursor } = await listGithubIssues(token, {
-      owner: mapping.external_repo_owner,
-      repo: mapping.external_repo_name,
-      limit: 100,
-      cursor,
-      since: mapping.last_discovery_at
-    })
-
-    for (const issue of issues) {
-      const linked = db.prepare(
-        "SELECT id FROM external_links WHERE provider = 'github' AND external_id = ?"
-      ).get(issue.id)
-      if (linked) continue
-
-      try {
-        const taskId = createLocalTaskFromGithubIssue(db, mapping.project_id, issue)
-        const externalKey = `${issue.repository.fullName}#${issue.number}`
-        const linkId = createExternalLink(db, 'github', mapping.connection_id, issue.id, externalKey, issue.url, taskId)
-        const task = loadTask(db, taskId)!
-        upsertGithubFieldState(db, linkId, task, issue)
-        discovered++
-      } catch (err) {
-        if (err instanceof Error && err.message.includes('UNIQUE')) continue
-        throw err
-      }
-    }
-
-    cursor = nextCursor
-  } while (cursor)
-
-  db.prepare(
-    "UPDATE integration_project_mappings SET last_discovery_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
-  ).run(mapping.id)
-
-  if (discovered > 0) {
-    console.log(`[discovery] GitHub: discovered ${discovered} new issues for project ${mapping.project_id}`)
-  }
-  return discovered
-}
-
 let discoveryRunning = false
 
 export function startDiscoveryPoller(db: Database, onChanged?: () => void): NodeJS.Timeout {
-  // Run immediately on startup, then every 60s
   void runDiscovery(db).then((discovered) => {
     if (discovered && discovered > 0) onChanged?.()
   }).catch((err) => {

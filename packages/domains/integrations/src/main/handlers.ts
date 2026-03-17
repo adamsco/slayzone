@@ -1,24 +1,17 @@
 import type { Database } from 'better-sqlite3'
 import type { IpcMain } from 'electron'
 import {
-  getIssue,
-  getIssuesBatch,
   listIssues,
   listProjects,
   listTeams,
-  listWorkflowStates,
-  getViewer as getLinearViewer,
-  updateIssue as updateLinearIssue
+  getViewer as getLinearViewer
 } from './linear-client'
 import {
   getViewer as getGitHubViewer,
-  getIssuesBatch as getGithubIssuesBatch,
   listIssues as listGitHubRepositoryIssues,
   listRepositories as listGitHubRepositories,
   listProjects as listGitHubProjects,
   listProjectIssues as listGitHubProjectIssues,
-  listProjectStatusOptions as listGitHubProjectStatusOptions,
-  getIssue as getGitHubIssue,
   updateIssue as updateGitHubIssue
 } from './github-client'
 import { deleteCredential, readCredential, storeCredential } from './credentials'
@@ -64,7 +57,7 @@ import type {
   PushUnlinkedTasksResult,
   BatchTaskSyncStatusItem
 } from '../shared'
-import { runSyncNow, runGithubSyncNow, pushNewTaskToProviders, getDesiredLinearStateId } from './sync'
+import { runProviderSync, pushNewTaskToProviders, getDesiredRemoteStatusId, resolveLocalStatus, resolveStatusByCategory } from './sync'
 import { providerStatusesToColumns, computeStatusDiff } from './status-sync'
 import { htmlToMarkdown, markdownToHtml } from './markdown'
 import {
@@ -73,7 +66,6 @@ import {
   normalizeMarkdown,
   localStatusToGitHubState,
   githubStateToLocal,
-  parseGitHubExternalKey,
   upsertFieldState,
   linearStateToTaskStatus,
   linearPriorityToLocal,
@@ -85,6 +77,8 @@ import {
   type ColumnConfig,
   type WorkflowCategory
 } from '@slayzone/workflow'
+import { getAdapter, getRegisteredProviders, normalizeGithubIssue } from './adapters'
+import type { NormalizedIssue, ProviderAdapter } from './adapters'
 
 function columnExists(db: Database, table: string, column: string): boolean {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
@@ -372,70 +366,42 @@ function computeOverallState(fields: TaskSyncFieldDiff[]): TaskSyncStatus['state
   return 'in_sync'
 }
 
-function buildGitHubTaskSyncStatus(
-  db: Database,
-  link: ExternalLink,
-  task: TaskRow,
-  remoteIssue: GithubIssueSummary
-): TaskSyncStatus {
-  const columns = getProjectColumns(db, task.project_id)
-  const localValues: Record<SyncField, unknown> = {
-    title: task.title,
-    description: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
-    status: localStatusToGitHubState(task.status, columns)
-  }
-  const remoteValues: Record<SyncField, unknown> = {
-    title: remoteIssue.title,
-    description: normalizeMarkdown(remoteIssue.body),
-    status: remoteIssue.state
-  }
-
-  const baselineByField = readFieldState(db, link.id)
-  const fields: TaskSyncFieldDiff[] = (['title', 'description', 'status'] as const).map((field) => ({
-    field,
-    state: computeFieldState(
-      baselineByField.get(field),
-      localValues[field],
-      remoteValues[field],
-      task.updated_at,
-      remoteIssue.updatedAt
-    )
-  }))
-
-  return {
-    provider: 'github',
-    taskId: task.id,
-    state: computeOverallState(fields),
-    fields,
-    comparedAt: new Date().toISOString()
-  }
-}
-
-function normalizeLinearBaselineStatus(
+/**
+ * Normalize a baseline external status value to local column ID format.
+ * Stored baselines may be in remote format (e.g. 'started' for Linear, 'open' for GitHub).
+ */
+function normalizeBaselineExternalStatus(
+  adapter: ProviderAdapter,
   value: unknown,
   columns: ColumnConfig[] | null
 ): unknown {
   if (typeof value !== 'string') return value
-  if (
-    value === 'backlog' ||
-    value === 'started' ||
-    value === 'completed' ||
-    value === 'canceled' ||
-    value === 'unstarted' ||
-    value === 'triage'
-  ) {
-    return linearStateToTaskStatus(value, columns)
-  }
-  return value
+  // If already a known local column ID, keep it
+  if (columns && columns.some((c) => c.id === value)) return value
+  // Convert remote status type to local via adapter category mapping
+  const category = adapter.remoteStatusToCategory({ id: value, name: value, color: '', type: value })
+  return resolveStatusByCategory(category, columns)
 }
 
-function buildLinearTaskSyncStatus(
+function buildTaskSyncStatus(
   db: Database,
+  adapter: ProviderAdapter,
   link: ExternalLink,
   task: TaskRow,
-  remoteIssue: LinearIssueSummary
+  remoteIssue: NormalizedIssue
 ): TaskSyncStatus {
   const columns = getProjectColumns(db, task.project_id)
+  const mapping = db.prepare(`
+    SELECT * FROM integration_project_mappings
+    WHERE project_id = ? AND provider = ?
+  `).get(task.project_id, adapter.provider) as IntegrationProjectMapping | undefined
+
+  // Both local and remote status compared in local column ID format
+  const remoteStatusAsLocal = resolveLocalStatus(
+    db, adapter, mapping, task.project_id,
+    remoteIssue.status.type, remoteIssue.status.name
+  )
+
   const localValues: Record<SyncField, unknown> = {
     title: task.title,
     description: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
@@ -444,7 +410,7 @@ function buildLinearTaskSyncStatus(
   const remoteValues: Record<SyncField, unknown> = {
     title: remoteIssue.title,
     description: normalizeMarkdown(remoteIssue.description),
-    status: linearStateToTaskStatus(remoteIssue.state.type, columns)
+    status: remoteStatusAsLocal
   }
 
   const baselineByField = readFieldState(db, link.id)
@@ -452,7 +418,7 @@ function buildLinearTaskSyncStatus(
   const normalizedStatusBaseline = rawStatusBaseline
     ? {
       local: rawStatusBaseline.local,
-      external: normalizeLinearBaselineStatus(rawStatusBaseline.external, columns)
+      external: normalizeBaselineExternalStatus(adapter, rawStatusBaseline.external, columns)
     }
     : undefined
 
@@ -468,7 +434,7 @@ function buildLinearTaskSyncStatus(
   }))
 
   return {
-    provider: 'linear',
+    provider: adapter.provider,
     taskId: task.id,
     state: computeOverallState(fields),
     fields,
@@ -482,22 +448,23 @@ function persistGitHubBaseline(
   task: TaskRow,
   remoteIssue: GithubIssueSummary
 ): void {
-  const columns = getProjectColumns(db, task.project_id)
-  const localTitle = task.title
-  const localDescription = normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null)
-  const localStatus = localStatusToGitHubState(task.status, columns)
+  persistNormalizedBaseline(db, linkId, task, normalizeGithubIssue(remoteIssue))
+}
 
-  upsertFieldState(db, linkId, 'title', localTitle, remoteIssue.title, task.updated_at, remoteIssue.updatedAt)
+function persistNormalizedBaseline(
+  db: Database,
+  linkId: string,
+  task: TaskRow,
+  remoteIssue: NormalizedIssue
+): void {
+  upsertFieldState(db, linkId, 'title', task.title, remoteIssue.title, task.updated_at, remoteIssue.updatedAt)
   upsertFieldState(
-    db,
-    linkId,
-    'description',
-    localDescription,
-    normalizeMarkdown(remoteIssue.body),
-    task.updated_at,
-    remoteIssue.updatedAt
+    db, linkId, 'description',
+    normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
+    normalizeMarkdown(remoteIssue.description),
+    task.updated_at, remoteIssue.updatedAt
   )
-  upsertFieldState(db, linkId, 'status', localStatus, remoteIssue.state, task.updated_at, remoteIssue.updatedAt)
+  upsertFieldState(db, linkId, 'status', task.status, remoteIssue.status.type, task.updated_at, remoteIssue.updatedAt)
 }
 
 function getTaskById(db: Database, taskId: string): TaskRow {
@@ -922,18 +889,6 @@ export function registerIntegrationHandlers(
     return matched ? cloneGithubIssue(matched) : null
   }
 
-  const getGithubIssueWithMocks = async (
-    token: string,
-    input: { owner: string; repo: string; number: number }
-  ): Promise<GithubIssueSummary | null> => {
-    const mockedIssue = getMockedGithubIssue(input.owner, input.repo, input.number)
-    if (mockedIssue) return mockedIssue
-    if (githubTestIssuesByRepository.has(githubRepositoryKey(input.owner, input.repo))) {
-      return null
-    }
-    return getGitHubIssue(token, input)
-  }
-
   const updateGithubIssueWithMocks = async (
     token: string,
     input: {
@@ -967,6 +922,63 @@ export function registerIntegrationHandlers(
     }
 
     return updateGitHubIssue(token, input)
+  }
+
+  // Mock-aware adapter helpers: fetch/update remote issues as NormalizedIssue, respecting GitHub test mocks
+  const fetchRemoteIssueNormalized = async (
+    adapter: ProviderAdapter,
+    credential: string,
+    link: ExternalLink
+  ): Promise<NormalizedIssue | null> => {
+    const ctx = adapter.parseExternalKey(link.external_key) ?? undefined
+    if (adapter.provider === 'github' && ctx) {
+      const { owner, repo, number } = ctx as { owner: string; repo: string; number: number }
+      const mocked = getMockedGithubIssue(owner, repo, number)
+      if (mocked) return normalizeGithubIssue(mocked)
+      if (githubTestIssuesByRepository.has(githubRepositoryKey(owner, repo))) return null
+    }
+    return adapter.getIssue(credential, link.external_id, ctx)
+  }
+
+  const updateRemoteIssueNormalized = async (
+    adapter: ProviderAdapter,
+    credential: string,
+    link: ExternalLink,
+    params: { title: string; description: string | null; statusId?: string; extras?: Record<string, unknown> }
+  ): Promise<NormalizedIssue | null> => {
+    const ctx = adapter.parseExternalKey(link.external_key) ?? undefined
+    if (adapter.provider === 'github' && ctx) {
+      const { owner, repo, number } = ctx as { owner: string; repo: string; number: number }
+      const updated = await updateGithubIssueWithMocks(credential, {
+        owner, repo, number,
+        title: params.title,
+        body: params.description,
+        state: (params.extras?.state as 'open' | 'closed') ?? 'open'
+      })
+      return updated ? normalizeGithubIssue(updated) : null
+    }
+    return adapter.updateIssue(credential, link.external_id, params, ctx)
+  }
+
+  const batchFetchRemoteIssuesNormalized = async (
+    adapter: ProviderAdapter,
+    credential: string,
+    links: ExternalLink[]
+  ): Promise<Map<string, NormalizedIssue>> => {
+    // For GitHub with mocks, fall back to individual fetches
+    if (adapter.provider === 'github' && githubTestIssuesByRepository.size > 0) {
+      const result = new Map<string, NormalizedIssue>()
+      for (const link of links) {
+        const issue = await fetchRemoteIssueNormalized(adapter, credential, link)
+        if (issue) result.set(link.external_id, issue)
+      }
+      return result
+    }
+    const refs = links.map((link) => ({
+      id: link.external_id,
+      context: adapter.parseExternalKey(link.external_key) ?? undefined
+    }))
+    return adapter.getIssuesBatch(credential, refs)
   }
 
   ipcMain.handle('integrations:connect-github', async (_event, input: ConnectGithubInput) => {
@@ -1074,20 +1086,9 @@ export function registerIntegrationHandlers(
     const credential = input.credential.trim()
     if (!credential) throw new Error('Credential is required')
 
-    if (connection.provider === 'github') {
-      await getGitHubViewer(credential)
-      const credentialRef = crypto.randomUUID()
-      storeCredential(db, credentialRef, credential)
-      deleteCredential(db, connection.credential_ref)
-      db.prepare(`
-        UPDATE integration_connections
-        SET credential_ref = ?, enabled = 1, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(credentialRef, connection.id)
-      return toPublicConnection(getConnection(db, connection.id))
-    }
+    const adapter = getAdapter(connection.provider)
+    await adapter.validateCredential(credential)
 
-    await getLinearViewer(credential)
     const credentialRef = crypto.randomUUID()
     storeCredential(db, credentialRef, credential)
     deleteCredential(db, connection.credential_ref)
@@ -1312,8 +1313,9 @@ export function registerIntegrationHandlers(
 
     if (input.provider === 'linear') {
       const apiKey = readCredential(db, connection.credential_ref)
-      const states = await listWorkflowStates(apiKey, input.externalTeamId)
-      refreshStateMappings(db, mappingId, input.projectId, states)
+      const adapter = getAdapter('linear')
+      const states = await adapter.fetchStatuses(apiKey, input.externalTeamId)
+      refreshStateMappings(db, mappingId, input.projectId, states.map((s) => ({ id: s.id, type: s.type ?? 'unknown' })))
     }
 
     return db.prepare('SELECT * FROM integration_project_mappings WHERE id = ?').get(mappingId) as IntegrationProjectMapping
@@ -1590,78 +1592,30 @@ export function registerIntegrationHandlers(
   })
 
   ipcMain.handle('integrations:get-task-sync-status', async (_event, taskId: string, provider: IntegrationProvider) => {
-    if (provider === 'linear') {
-      const link = db.prepare(`
-        SELECT * FROM external_links
-        WHERE task_id = ? AND provider = 'linear'
-      `).get(taskId) as ExternalLink | undefined
-
-      if (!link) {
-        return {
-          provider: 'linear',
-          taskId,
-          state: 'unknown',
-          fields: [],
-          comparedAt: new Date().toISOString()
-        }
-      }
-
-      const connection = getConnection(db, link.connection_id)
-      assertConnectionProvider(connection, 'linear')
-      const apiKey = readCredential(db, connection.credential_ref)
-      const remoteIssue = await getIssue(apiKey, link.external_id)
-      if (!remoteIssue) {
-        throw new Error('Linked Linear issue no longer exists')
-      }
-
-      const task = getTaskById(db, taskId)
-      return buildLinearTaskSyncStatus(db, link, task, remoteIssue)
-    }
-
-    if (provider !== 'github') {
-      return {
-        provider,
-        taskId,
-        state: 'unknown',
-        fields: [],
-        comparedAt: new Date().toISOString()
-      } as TaskSyncStatus
-    }
-
+    const adapter = getAdapter(provider)
     const link = db.prepare(`
-      SELECT * FROM external_links
-      WHERE task_id = ? AND provider = 'github'
-    `).get(taskId) as ExternalLink | undefined
+      SELECT * FROM external_links WHERE task_id = ? AND provider = ?
+    `).get(taskId, provider) as ExternalLink | undefined
 
     if (!link) {
-      return {
-        provider: 'github',
-        taskId,
-        state: 'unknown',
-        fields: [],
-        comparedAt: new Date().toISOString()
-      }
-    }
-
-    const key = parseGitHubExternalKey(link.external_key)
-    if (!key) {
-      throw new Error('Linked GitHub issue key is invalid')
+      return { provider, taskId, state: 'unknown', fields: [], comparedAt: new Date().toISOString() } as TaskSyncStatus
     }
 
     const connection = getConnection(db, link.connection_id)
-    assertConnectionProvider(connection, 'github')
-    const token = readCredential(db, connection.credential_ref)
-    const remoteIssue = await getGithubIssueWithMocks(token, key)
+    assertConnectionProvider(connection, provider)
+    const credential = readCredential(db, connection.credential_ref)
+    const remoteIssue = await fetchRemoteIssueNormalized(adapter, credential, link)
     if (!remoteIssue) {
-      throw new Error('Linked GitHub issue no longer exists or is not an issue')
+      throw new Error(`Linked ${provider} issue no longer exists`)
     }
 
     const task = getTaskById(db, taskId)
-    return buildGitHubTaskSyncStatus(db, link, task, remoteIssue)
+    return buildTaskSyncStatus(db, adapter, link, task, remoteIssue)
   })
 
   ipcMain.handle('integrations:get-batch-task-sync-status', async (_event, taskIds: string[], provider: IntegrationProvider): Promise<BatchTaskSyncStatusItem[]> => {
     if (taskIds.length === 0) return []
+    const adapter = getAdapter(provider)
     const placeholders = taskIds.map(() => '?').join(',')
     const links = db.prepare(`
       SELECT * FROM external_links WHERE task_id IN (${placeholders}) AND provider = ?
@@ -1672,50 +1626,24 @@ export function registerIntegrationHandlers(
     const results: BatchTaskSyncStatusItem[] = []
     const now = new Date().toISOString()
 
-    if (provider === 'linear') {
-      for (const connId of connectionIds) {
-        const connection = getConnection(db, connId)
-        assertConnectionProvider(connection, 'linear')
-        const apiKey = readCredential(db, connection.credential_ref)
-        const connLinks = links.filter(l => l.connection_id === connId)
-        const issueMap = await getIssuesBatch(apiKey, connLinks.map(l => l.external_id))
+    for (const connId of connectionIds) {
+      const connection = getConnection(db, connId)
+      assertConnectionProvider(connection, provider)
+      const credential = readCredential(db, connection.credential_ref)
+      const connLinks = links.filter(l => l.connection_id === connId)
+      const issueMap = await batchFetchRemoteIssuesNormalized(adapter, credential, connLinks)
 
-        for (const link of connLinks) {
-          const remoteIssue = issueMap.get(link.external_id)
-          if (!remoteIssue) {
-            results.push({ taskId: link.task_id, link, status: { provider, taskId: link.task_id, state: 'unknown', fields: [], comparedAt: now } })
-            continue
-          }
-          const task = getTaskById(db, link.task_id)
-          results.push({ taskId: link.task_id, link, status: buildLinearTaskSyncStatus(db, link, task, remoteIssue) })
+      for (const link of connLinks) {
+        const remoteIssue = issueMap.get(link.external_id)
+        if (!remoteIssue) {
+          results.push({ taskId: link.task_id, link, status: { provider, taskId: link.task_id, state: 'unknown', fields: [], comparedAt: now } })
+          continue
         }
-      }
-    } else if (provider === 'github') {
-      for (const connId of connectionIds) {
-        const connection = getConnection(db, connId)
-        assertConnectionProvider(connection, 'github')
-        const token = readCredential(db, connection.credential_ref)
-        const connLinks = links.filter(l => l.connection_id === connId)
-        const batchInput = connLinks.map(l => {
-          const key = parseGitHubExternalKey(l.external_key)
-          return key ? { id: l.external_id, ...key } : null
-        }).filter((x): x is NonNullable<typeof x> => x !== null)
-
-        const issueMap = await getGithubIssuesBatch(token, batchInput)
-
-        for (const link of connLinks) {
-          const remoteIssue = issueMap.get(link.external_id)
-          if (!remoteIssue) {
-            results.push({ taskId: link.task_id, link, status: { provider, taskId: link.task_id, state: 'unknown', fields: [], comparedAt: now } })
-            continue
-          }
-          const task = getTaskById(db, link.task_id)
-          results.push({ taskId: link.task_id, link, status: buildGitHubTaskSyncStatus(db, link, task, remoteIssue) })
-        }
+        const task = getTaskById(db, link.task_id)
+        results.push({ taskId: link.task_id, link, status: buildTaskSyncStatus(db, adapter, link, task, remoteIssue) })
       }
     }
 
-    // Unlinked tasks
     for (const taskId of taskIds) {
       if (!linkByTaskId.has(taskId)) {
         results.push({ taskId, link: null, status: { provider, taskId, state: 'unknown', fields: [], comparedAt: now } })
@@ -1726,77 +1654,28 @@ export function registerIntegrationHandlers(
   })
 
   ipcMain.handle('integrations:push-task', async (_event, input: PushTaskInput) => {
+    const adapter = getAdapter(input.provider)
     const link = db.prepare(`
-      SELECT * FROM external_links
-      WHERE task_id = ? AND provider = ?
+      SELECT * FROM external_links WHERE task_id = ? AND provider = ?
     `).get(input.taskId, input.provider) as ExternalLink | undefined
-    if (!link) {
-      throw new Error(`Task is not linked to ${input.provider}`)
-    }
+    if (!link) throw new Error(`Task is not linked to ${input.provider}`)
 
     const pushTaskRow = getTaskById(db, input.taskId)
     const pushMapping = db.prepare(`
-      SELECT * FROM integration_project_mappings
-      WHERE project_id = ? AND provider = ?
+      SELECT * FROM integration_project_mappings WHERE project_id = ? AND provider = ?
     `).get(pushTaskRow.project_id, input.provider) as IntegrationProjectMapping | undefined
-    if (pushMapping && !pushMapping.status_setup_complete) {
-      throw new Error('Status setup must be completed before pushing')
-    }
+    if (pushMapping && !pushMapping.status_setup_complete) throw new Error('Status setup must be completed before pushing')
 
     const connection = getConnection(db, link.connection_id)
     assertConnectionProvider(connection, input.provider)
     const credential = readCredential(db, connection.credential_ref)
     const task = getTaskById(db, input.taskId)
-    const providerName = input.provider === 'linear' ? 'Linear' : 'GitHub'
+    const providerName = input.provider.charAt(0).toUpperCase() + input.provider.slice(1)
 
-    if (input.provider === 'linear') {
-      const remoteIssue = await getIssue(credential, link.external_id)
-      if (!remoteIssue) {
-        throw new Error('Linked Linear issue no longer exists')
-      }
+    const remoteIssue = await fetchRemoteIssueNormalized(adapter, credential, link)
+    if (!remoteIssue) throw new Error(`Linked ${providerName} issue no longer exists`)
 
-      const statusBefore = buildLinearTaskSyncStatus(db, link, task, remoteIssue)
-      if (statusBefore.state === 'in_sync') {
-        return { pushed: false, status: statusBefore, message: `Task is already in sync with ${providerName}` } as PushTaskResult
-      }
-      if (!input.force && (statusBefore.state === 'remote_ahead' || statusBefore.state === 'conflict')) {
-        return { pushed: false, status: statusBefore, message: 'Remote changes detected. Refresh diff and resolve before pushing.' } as PushTaskResult
-      }
-
-      const stateId = getDesiredLinearStateId(db, pushMapping, task.project_id, task.status)
-      const updatedIssue = await updateLinearIssue(credential, link.external_id, {
-        title: task.title,
-        description: task.description ? htmlToMarkdown(task.description) : null,
-        priority: localPriorityToLinear(task.priority),
-        stateId
-      })
-      if (!updatedIssue) {
-        throw new Error('Failed to update Linear issue')
-      }
-
-      upsertFieldState(db, link.id, 'title', task.title, updatedIssue.title, task.updated_at, updatedIssue.updatedAt)
-      upsertFieldState(db, link.id, 'description', normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null), normalizeMarkdown(updatedIssue.description), task.updated_at, updatedIssue.updatedAt)
-      upsertFieldState(db, link.id, 'status', task.status, updatedIssue.state.type, task.updated_at, updatedIssue.updatedAt)
-
-      db.prepare(`UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(link.id)
-      db.prepare(`UPDATE integration_connections SET last_synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(connection.id)
-
-      const statusAfter = buildLinearTaskSyncStatus(db, link, task, updatedIssue)
-      return { pushed: true, status: statusAfter, message: `Pushed local changes to ${providerName}` } as PushTaskResult
-    }
-
-    // GitHub
-    const key = parseGitHubExternalKey(link.external_key)
-    if (!key) {
-      throw new Error('Linked GitHub issue key is invalid')
-    }
-
-    const remoteBefore = await getGithubIssueWithMocks(credential, key)
-    if (!remoteBefore) {
-      throw new Error('Linked GitHub issue no longer exists or is not an issue')
-    }
-
-    const statusBefore = buildGitHubTaskSyncStatus(db, link, task, remoteBefore)
+    const statusBefore = buildTaskSyncStatus(db, adapter, link, task, remoteIssue)
     if (statusBefore.state === 'in_sync') {
       return { pushed: false, status: statusBefore, message: `Task is already in sync with ${providerName}` } as PushTaskResult
     }
@@ -1804,100 +1683,53 @@ export function registerIntegrationHandlers(
       return { pushed: false, status: statusBefore, message: 'Remote changes detected. Refresh diff and resolve before pushing.' } as PushTaskResult
     }
 
-    const columns = getProjectColumns(db, task.project_id)
-    const updatedIssue = await updateGithubIssueWithMocks(credential, {
-      owner: key.owner,
-      repo: key.repo,
-      number: key.number,
-      title: task.title,
-      body: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
-      state: localStatusToGitHubState(task.status, columns)
-    })
-    if (!updatedIssue) {
-      throw new Error('Linked GitHub issue is a pull request and cannot be pushed as an issue')
+    const statusId = getDesiredRemoteStatusId(db, pushMapping, task.project_id, task.status)
+    const extras: Record<string, unknown> = {}
+    if (input.provider === 'linear') extras.priority = localPriorityToLinear(task.priority)
+    if (input.provider === 'github') {
+      const columns = getProjectColumns(db, task.project_id)
+      extras.state = localStatusToGitHubState(task.status, columns)
     }
 
-    persistGitHubBaseline(db, link.id, task, updatedIssue)
+    const updatedIssue = await updateRemoteIssueNormalized(adapter, credential, link, {
+      title: task.title,
+      description: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
+      statusId,
+      extras
+    })
+    if (!updatedIssue) throw new Error(`Failed to update ${providerName} issue`)
+
+    persistNormalizedBaseline(db, link.id, task, updatedIssue)
     db.prepare(`UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(link.id)
     db.prepare(`UPDATE integration_connections SET last_synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(connection.id)
 
-    const statusAfter = buildGitHubTaskSyncStatus(db, link, task, updatedIssue)
+    const statusAfter = buildTaskSyncStatus(db, adapter, link, task, updatedIssue)
     return { pushed: true, status: statusAfter, message: `Pushed local changes to ${providerName}` } as PushTaskResult
   })
 
   ipcMain.handle('integrations:pull-task', async (_event, input: PullTaskInput) => {
+    const adapter = getAdapter(input.provider)
     const link = db.prepare(`
-      SELECT * FROM external_links
-      WHERE task_id = ? AND provider = ?
+      SELECT * FROM external_links WHERE task_id = ? AND provider = ?
     `).get(input.taskId, input.provider) as ExternalLink | undefined
-    if (!link) {
-      throw new Error(`Task is not linked to ${input.provider}`)
-    }
+    if (!link) throw new Error(`Task is not linked to ${input.provider}`)
 
     const pullTaskRow = getTaskById(db, input.taskId)
     const pullMapping = db.prepare(`
-      SELECT * FROM integration_project_mappings
-      WHERE project_id = ? AND provider = ?
+      SELECT * FROM integration_project_mappings WHERE project_id = ? AND provider = ?
     `).get(pullTaskRow.project_id, input.provider) as IntegrationProjectMapping | undefined
-    if (pullMapping && !pullMapping.status_setup_complete) {
-      throw new Error('Status setup must be completed before pulling')
-    }
+    if (pullMapping && !pullMapping.status_setup_complete) throw new Error('Status setup must be completed before pulling')
 
     const connection = getConnection(db, link.connection_id)
     assertConnectionProvider(connection, input.provider)
     const credential = readCredential(db, connection.credential_ref)
     const task = getTaskById(db, input.taskId)
-    const providerName = input.provider === 'linear' ? 'Linear' : 'GitHub'
+    const providerName = input.provider.charAt(0).toUpperCase() + input.provider.slice(1)
 
-    if (input.provider === 'linear') {
-      const remoteIssue = await getIssue(credential, link.external_id)
-      if (!remoteIssue) {
-        throw new Error('Linked Linear issue no longer exists')
-      }
+    const remoteIssue = await fetchRemoteIssueNormalized(adapter, credential, link)
+    if (!remoteIssue) throw new Error(`Linked ${providerName} issue no longer exists`)
 
-      const statusBefore = buildLinearTaskSyncStatus(db, link, task, remoteIssue)
-      if (statusBefore.state === 'in_sync') {
-        return { pulled: false, status: statusBefore, message: `Task is already in sync with ${providerName}` } as PullTaskResult
-      }
-      if (!input.force && (statusBefore.state === 'local_ahead' || statusBefore.state === 'conflict')) {
-        return { pulled: false, status: statusBefore, message: 'Local changes detected. Push local changes or force pull to overwrite local fields.' } as PullTaskResult
-      }
-
-      const projectColumns = getProjectColumns(db, task.project_id)
-      const localStatus = linearStateToTaskStatus(remoteIssue.state.type, projectColumns)
-      db.prepare(`UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, assignee = ?, updated_at = ? WHERE id = ?`).run(
-        remoteIssue.title,
-        remoteIssue.description ? markdownToHtml(remoteIssue.description) : null,
-        localStatus,
-        linearPriorityToLocal(remoteIssue.priority),
-        remoteIssue.assignee?.name ?? null,
-        remoteIssue.updatedAt,
-        task.id
-      )
-      const updatedTask = getTaskById(db, task.id)
-      upsertFieldState(db, link.id, 'title', updatedTask.title, remoteIssue.title, updatedTask.updated_at, remoteIssue.updatedAt)
-      upsertFieldState(db, link.id, 'description', normalizeMarkdown(updatedTask.description ? htmlToMarkdown(updatedTask.description) : null), normalizeMarkdown(remoteIssue.description), updatedTask.updated_at, remoteIssue.updatedAt)
-      upsertFieldState(db, link.id, 'status', updatedTask.status, remoteIssue.state.type, updatedTask.updated_at, remoteIssue.updatedAt)
-
-      db.prepare(`UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(link.id)
-      db.prepare(`UPDATE integration_connections SET last_synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(connection.id)
-
-      const statusAfter = buildLinearTaskSyncStatus(db, link, updatedTask, remoteIssue)
-      return { pulled: true, status: statusAfter, message: `Pulled remote changes from ${providerName}` } as PullTaskResult
-    }
-
-    // GitHub
-    const key = parseGitHubExternalKey(link.external_key)
-    if (!key) {
-      throw new Error('Linked GitHub issue key is invalid')
-    }
-
-    const remoteIssue = await getGithubIssueWithMocks(credential, key)
-    if (!remoteIssue) {
-      throw new Error('Linked GitHub issue no longer exists or is not an issue')
-    }
-
-    const statusBefore = buildGitHubTaskSyncStatus(db, link, task, remoteIssue)
+    const statusBefore = buildTaskSyncStatus(db, adapter, link, task, remoteIssue)
     if (statusBefore.state === 'in_sync') {
       return { pulled: false, status: statusBefore, message: `Task is already in sync with ${providerName}` } as PullTaskResult
     }
@@ -1905,37 +1737,51 @@ export function registerIntegrationHandlers(
       return { pulled: false, status: statusBefore, message: 'Local changes detected. Push local changes or force pull to overwrite local fields.' } as PullTaskResult
     }
 
-    const projectColumns = getProjectColumns(db, task.project_id)
-    db.prepare(`UPDATE tasks SET title = ?, description = ?, status = ?, assignee = ?, updated_at = ? WHERE id = ?`).run(
-      remoteIssue.title,
-      remoteIssue.body ? markdownToHtml(remoteIssue.body) : null,
-      githubStateToLocal(remoteIssue.state, projectColumns),
-      remoteIssue.assignee?.login ?? null,
-      remoteIssue.updatedAt,
-      task.id
-    )
+    // Apply remote changes to local task
+    const localStatus = resolveLocalStatus(db, adapter, pullMapping, task.project_id, remoteIssue.status.type, remoteIssue.status.name)
+    const hasPriority = remoteIssue.extras.priority !== undefined
+    if (hasPriority) {
+      db.prepare(`UPDATE tasks SET title = ?, description = ?, status = ?, priority = ?, assignee = ?, updated_at = ? WHERE id = ?`).run(
+        remoteIssue.title,
+        remoteIssue.description ? markdownToHtml(remoteIssue.description) : null,
+        localStatus,
+        linearPriorityToLocal(remoteIssue.extras.priority as number),
+        remoteIssue.assignee?.name ?? null,
+        remoteIssue.updatedAt,
+        task.id
+      )
+    } else {
+      db.prepare(`UPDATE tasks SET title = ?, description = ?, status = ?, assignee = ?, updated_at = ? WHERE id = ?`).run(
+        remoteIssue.title,
+        remoteIssue.description ? markdownToHtml(remoteIssue.description) : null,
+        localStatus,
+        remoteIssue.assignee?.name ?? null,
+        remoteIssue.updatedAt,
+        task.id
+      )
+    }
     const updatedTask = getTaskById(db, task.id)
-    persistGitHubBaseline(db, link.id, updatedTask, remoteIssue)
+    persistNormalizedBaseline(db, link.id, updatedTask, remoteIssue)
 
     db.prepare(`UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(link.id)
     db.prepare(`UPDATE integration_connections SET last_synced_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).run(connection.id)
 
-    const statusAfter = buildGitHubTaskSyncStatus(db, link, updatedTask, remoteIssue)
+    const statusAfter = buildTaskSyncStatus(db, adapter, link, updatedTask, remoteIssue)
     return { pulled: true, status: statusAfter, message: `Pulled remote changes from ${providerName}` } as PullTaskResult
   })
 
   ipcMain.handle('integrations:sync-now', async (_event, input: SyncNowInput) => {
-    const [linear, github] = await Promise.all([
-      runSyncNow(db, input),
-      runGithubSyncNow(db, input)
-    ])
+    const providers = getRegisteredProviders()
+    const results = await Promise.all(
+      providers.map((provider) => runProviderSync(db, provider, input))
+    )
     return {
-      scanned: linear.scanned + github.scanned,
-      pushed: linear.pushed + github.pushed,
-      pulled: linear.pulled + github.pulled,
-      conflictsResolved: linear.conflictsResolved + github.conflictsResolved,
-      errors: [...linear.errors, ...github.errors],
-      at: linear.at
+      scanned: results.reduce((s, r) => s + r.scanned, 0),
+      pushed: results.reduce((s, r) => s + r.pushed, 0),
+      pulled: results.reduce((s, r) => s + r.pulled, 0),
+      conflictsResolved: results.reduce((s, r) => s + r.conflictsResolved, 0),
+      errors: results.flatMap((r) => r.errors),
+      at: results[0]?.at ?? new Date().toISOString()
     }
   })
 
@@ -1995,21 +1841,8 @@ export function registerIntegrationHandlers(
     const connection = getConnection(db, input.connectionId)
     assertConnectionProvider(connection, input.provider)
     const credential = readCredential(db, connection.credential_ref)
-
-    if (input.provider === 'linear') {
-      const states = await listWorkflowStates(credential, input.externalTeamId)
-      return states
-        .sort((a, b) => a.position - b.position)
-        .map((s) => ({ id: s.id, name: s.name, color: s.color, type: s.type, position: s.position }))
-    }
-
-    if (input.provider === 'github') {
-      if (!input.externalProjectId) throw new Error('externalProjectId required for GitHub')
-      const options = await listGitHubProjectStatusOptions(credential, input.externalProjectId)
-      return options.map((o, i) => ({ id: o.id, name: o.name, color: o.color, position: i }))
-    }
-
-    throw new Error(`Unsupported provider: ${input.provider}`)
+    const adapter = getAdapter(input.provider)
+    return adapter.fetchStatuses(credential, input.externalTeamId, input.externalProjectId)
   })
 
   ipcMain.handle('integrations:apply-status-sync', async (_event, input: ApplyStatusSyncInput) => {
@@ -2084,19 +1917,8 @@ export function registerIntegrationHandlers(
     const connection = getConnection(db, mapping.connection_id)
     const credential = readCredential(db, connection.credential_ref)
 
-    let providerStatuses: ProviderStatus[]
-    if (input.provider === 'linear') {
-      const states = await listWorkflowStates(credential, mapping.external_team_id)
-      providerStatuses = states
-        .sort((a, b) => a.position - b.position)
-        .map((s) => ({ id: s.id, name: s.name, color: s.color, type: s.type, position: s.position }))
-    } else if (input.provider === 'github') {
-      if (!mapping.external_project_id) throw new Error('No GitHub project ID in mapping')
-      const options = await listGitHubProjectStatusOptions(credential, mapping.external_project_id)
-      providerStatuses = options.map((o, i) => ({ id: o.id, name: o.name, color: o.color, position: i }))
-    } else {
-      throw new Error(`Unsupported provider: ${input.provider}`)
-    }
+    const adapter = getAdapter(input.provider)
+    const providerStatuses = await adapter.fetchStatuses(credential, mapping.external_team_id, mapping.external_project_id ?? undefined)
 
     // Build local_status -> provider_status_id map from integration_state_mappings
     const stateMappingRows = db.prepare(`
@@ -2113,6 +1935,7 @@ export function registerIntegrationHandlers(
   })
 
   async function pushGithubTask(taskId: string): Promise<void> {
+    const adapter = getAdapter('github')
     const link = db.prepare(
       "SELECT * FROM external_links WHERE task_id = ? AND provider = 'github'"
     ).get(taskId) as ExternalLink | undefined
@@ -2124,31 +1947,25 @@ export function registerIntegrationHandlers(
     ).get(task.project_id) as IntegrationProjectMapping | undefined
     if (!mapping?.status_setup_complete) return
 
-    const key = parseGitHubExternalKey(link.external_key)
-    if (!key) return
-
     const connection = getConnection(db, link.connection_id)
     assertConnectionProvider(connection, 'github')
-    const token = readCredential(db, connection.credential_ref)
+    const credential = readCredential(db, connection.credential_ref)
 
-    const remoteIssue = await getGithubIssueWithMocks(token, key)
+    const remoteIssue = await fetchRemoteIssueNormalized(adapter, credential, link)
     if (!remoteIssue) return
 
-    const status = buildGitHubTaskSyncStatus(db, link, task, remoteIssue)
+    const status = buildTaskSyncStatus(db, adapter, link, task, remoteIssue)
     if (status.state !== 'local_ahead') return
 
     const columns = getProjectColumns(db, task.project_id)
-    const updatedIssue = await updateGithubIssueWithMocks(token, {
-      owner: key.owner,
-      repo: key.repo,
-      number: key.number,
+    const updatedIssue = await updateRemoteIssueNormalized(adapter, credential, link, {
       title: task.title,
-      body: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
-      state: localStatusToGitHubState(task.status, columns)
+      description: normalizeMarkdown(task.description ? htmlToMarkdown(task.description) : null),
+      extras: { state: localStatusToGitHubState(task.status, columns) }
     })
     if (!updatedIssue) return
 
-    persistGitHubBaseline(db, link.id, task, updatedIssue)
+    persistNormalizedBaseline(db, link.id, task, updatedIssue)
     db.prepare(
       "UPDATE external_links SET sync_state = 'active', last_error = NULL, last_sync_at = datetime('now'), updated_at = datetime('now') WHERE id = ?"
     ).run(link.id)
