@@ -2,7 +2,7 @@
 import { app, shell, BrowserWindow, BrowserView, ipcMain, nativeTheme, session, webContents, dialog, Menu, protocol } from 'electron'
 import { join, extname, normalize, sep, resolve } from 'path'
 import { homedir } from 'os'
-import { readFileSync, promises as fsp, existsSync, unlinkSync, symlinkSync } from 'fs'
+import { readFileSync, promises as fsp, existsSync, mkdirSync, unlinkSync, symlinkSync } from 'fs'
 import { electronApp, is } from '@electron-toolkit/utils'
 import { registerBrowserPanel, unregisterBrowserPanel, clearBrowserRegistry } from './browser-registry'
 import {
@@ -36,6 +36,20 @@ const isPlaywright = process.env.PLAYWRIGHT === '1'
 if (is.dev && !isPlaywright) {
   app.commandLine.appendSwitch('remote-debugging-port', '0')
 }
+
+// Linux XDG Base Directory compliance: move state data from ~/.config to ~/.local/state
+import { migrateXdgIfNeeded, getStateDir } from '@slayzone/platform'
+if (process.platform === 'linux') {
+  const result = migrateXdgIfNeeded()
+  if (!result.failed) {
+    // Redirect userData on Linux — fresh install, post-migration, or already migrated.
+    // Skip only if migration failed (old dir exists but copy failed) — fall back to Electron default.
+    const stateDir = getStateDir()
+    mkdirSync(stateDir, { recursive: true })
+    app.setPath('userData', stateDir)
+  }
+}
+
 import icon from '../../resources/icon.png?asset'
 import logoSolid from '../../resources/logo-solid.svg?asset'
 import { getDatabase, closeDatabase, getDiagnosticsDatabase, closeDiagnosticsDatabase } from './db'

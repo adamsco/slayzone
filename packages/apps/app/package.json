@@ -37,6 +37,7 @@
     "@slayzone/icons": "workspace:*",
     "@slayzone/integrations": "workspace:*",
     "@slayzone/onboarding": "workspace:*",
+    "@slayzone/platform": "workspace:*",
     "@slayzone/projects": "workspace:*",
     "@slayzone/settings": "workspace:*",
     "@slayzone/suspense": "workspace:*",

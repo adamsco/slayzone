@@ -3,18 +3,18 @@ import http from 'node:http'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
-
-
+import { getStateDir } from '@slayzone/platform'
 
 function defaultDir(): string {
-  switch (process.platform) {
-    case 'darwin':
-      return path.join(os.homedir(), 'Library', 'Application Support', 'slayzone')
-    case 'win32':
-      return path.join(process.env.APPDATA ?? os.homedir(), 'slayzone')
-    default:
-      return path.join(os.homedir(), '.config', 'slayzone')
+  const dir = getStateDir()
+  if (fs.existsSync(dir)) return dir
+  // Fallback: CLI runs before app has migrated data on Linux
+  if (process.platform === 'linux') {
+    const configHome = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
+    const legacyDir = path.join(configHome, 'slayzone')
+    if (fs.existsSync(legacyDir)) return legacyDir
   }
+  return dir
 }
 
 function getDbPath(dev: boolean): string {

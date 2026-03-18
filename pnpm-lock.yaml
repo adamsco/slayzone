@@ -93,6 +93,9 @@ importers:
       '@slayzone/onboarding':
         specifier: workspace:*
         version: link:../../domains/onboarding
+      '@slayzone/platform':
+        specifier: workspace:*
+        version: link:../../shared/platform
       '@slayzone/projects':
         specifier: workspace:*
         version: link:../../domains/projects
@@ -253,6 +256,9 @@ importers:
 
   packages/apps/cli:
     dependencies:
+      '@slayzone/platform':
+        specifier: workspace:*
+        version: link:../../shared/platform
       commander:
         specifier: ^13.0.0
         version: 13.1.0
@@ -987,6 +993,12 @@ importers:
       '@types/react':
         specifier: ^19.2.7
         version: 19.2.8
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/shared/platform:
+    devDependencies:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
