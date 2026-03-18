@@ -79,9 +79,11 @@ export function EditorFileTree({ projectPath, onOpenFile, onFileRenamed, activeF
     [projectPath]
   )
 
-  // Load root on mount
+  // Load root + persisted expanded folders on mount
   useEffect(() => {
     loadDir('')
+    expandedFolders.forEach((dir) => loadDir(dir))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadDir])
 
   // Reload expanded dirs on external file changes + clear collapsed folder caches
