@@ -2,7 +2,7 @@
 import { app, shell, BrowserWindow, BrowserView, ipcMain, nativeTheme, session, webContents, dialog, Menu, protocol } from 'electron'
 import { join, extname, normalize, sep, resolve } from 'path'
 import { homedir } from 'os'
-import { readFileSync, promises as fsp, existsSync, mkdirSync, unlinkSync, symlinkSync } from 'fs'
+import { readFileSync, promises as fsp, mkdirSync } from 'fs'
 import { electronApp, is } from '@electron-toolkit/utils'
 import { registerBrowserPanel, unregisterBrowserPanel, clearBrowserRegistry } from './browser-registry'
 import {
@@ -38,7 +38,7 @@ if (is.dev && !isPlaywright) {
 }
 
 // Linux XDG Base Directory compliance: move state data from ~/.config to ~/.local/state
-import { migrateXdgIfNeeded, getStateDir } from '@slayzone/platform'
+import { migrateXdgIfNeeded, migrateCliBinIfNeeded, getStateDir, installCli, checkCliInstalled, getCliBinTarget, getManualInstallHint } from '@slayzone/platform'
 if (process.platform === 'linux') {
   const result = migrateXdgIfNeeded()
   if (!result.failed) {
@@ -555,8 +555,6 @@ function emitNewTemporaryTask(): void {
   mainWindow?.webContents.send('app:new-temporary-task')
 }
 
-const CLI_TARGET = '/usr/local/bin/slay'
-
 function getCliSrc(): string {
   return is.dev
     ? join(app.getAppPath(), '../cli/bin/slay')
@@ -564,30 +562,19 @@ function getCliSrc(): string {
 }
 
 function installSlayCli(): void {
-  const result = installSlayCliResult()
+  const result = installCli(getCliSrc())
   if (result.ok) {
-    dialog.showMessageBox({ message: `'slay' installed to ${CLI_TARGET}` })
+    let msg = `'slay' installed to ${result.path}`
+    if (result.pathNotInPATH) msg += `\n\nNote: ${getCliBinTarget()} dir is not in your PATH. Add it to use 'slay' from any terminal.`
+    dialog.showMessageBox({ message: msg })
   } else if (result.permissionDenied) {
     dialog.showMessageBox({
       type: 'warning',
       message: 'Permission denied',
-      detail: `Run this in Terminal to install manually:\n\nsudo ln -sf "${getCliSrc()}" ${CLI_TARGET}`
+      detail: `Run this in Terminal to install manually:\n\n${getManualInstallHint(getCliSrc())}`
     })
   } else {
     dialog.showErrorBox('Install failed', result.error ?? 'Unknown error')
-  }
-}
-
-function installSlayCliResult(): { ok: boolean; permissionDenied?: boolean; error?: string } {
-  const src = getCliSrc()
-  try {
-    if (existsSync(CLI_TARGET)) unlinkSync(CLI_TARGET)
-    symlinkSync(src, CLI_TARGET)
-    return { ok: true }
-  } catch (err: unknown) {
-    const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined
-    if (code === 'EACCES') return { ok: false, permissionDenied: true, error: `sudo ln -sf "${src}" ${CLI_TARGET}` }
-    return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
 
@@ -807,6 +794,11 @@ app.whenReady().then(async () => {
 
   registerProcessDiagnostics(app)
   logBoot('process diagnostics registered')
+
+  // Migrate CLI symlink from /usr/local/bin to ~/.local/bin on Linux
+  if (process.platform === 'linux') {
+    migrateCliBinIfNeeded(getCliSrc())
+  }
 
   // Load and apply persisted theme BEFORE creating window to prevent flash
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('theme') as
@@ -1294,8 +1286,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('app:get-protocol-client-status', () => protocolClientStatus)
   ipcMain.handle('app:restart-for-update', () => restartForUpdate())
   ipcMain.handle('app:check-for-updates', () => checkForUpdates())
-  ipcMain.handle('app:cli-status', () => ({ installed: existsSync(CLI_TARGET) }))
-  ipcMain.handle('app:install-cli', () => installSlayCliResult())
+  ipcMain.handle('app:cli-status', () => checkCliInstalled())
+  ipcMain.handle('app:install-cli', () => installCli(getCliSrc()))
 
   // Window close
   ipcMain.handle('window:close', (event) => {

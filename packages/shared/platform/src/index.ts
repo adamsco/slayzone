@@ -1,2 +1,3 @@
 export { getStateDir } from './dirs'
-export { migrateXdgIfNeeded, type MigrationResult } from './migrations'
+export { migrateXdgIfNeeded, migrateCliBinIfNeeded, type MigrationResult } from './migrations'
+export { installCli, checkCliInstalled, getCliBinTarget, getManualInstallHint, type CliInstallResult } from './cli-install'

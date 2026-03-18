@@ -5,12 +5,16 @@ import { SettingsTabIntro } from './SettingsTabIntro'
 export function AboutSettingsTab() {
   const [dbPath, setDbPath] = useState<string>('')
   const [cliInstalled, setCliInstalled] = useState(false)
+  const [cliPath, setCliPath] = useState<string>('')
   const [cliInstalling, setCliInstalling] = useState(false)
   const [cliMessage, setCliMessage] = useState('')
 
   useEffect(() => {
     window.api.settings.get('database_path').then(path => setDbPath(path ?? 'Default location (userData)'))
-    window.api.app.cliStatus().then(status => setCliInstalled(status.installed))
+    window.api.app.cliStatus().then(status => {
+      setCliInstalled(status.installed)
+      if (status.path) setCliPath(status.path)
+    })
   }, [])
 
   const handleInstallCli = async () => {
@@ -20,7 +24,10 @@ export function AboutSettingsTab() {
       const result = await window.api.app.installCli()
       if (result.ok) {
         setCliInstalled(true)
-        setCliMessage('Installed successfully.')
+        if (result.path) setCliPath(result.path)
+        let msg = 'Installed successfully.'
+        if (result.pathNotInPATH) msg += ' Note: the install directory is not in your PATH. Add it to use \'slay\' from any terminal.'
+        setCliMessage(msg)
       } else if (result.permissionDenied) {
         setCliMessage(`Permission denied. Run in Terminal:\n${result.error}`)
       } else {
@@ -52,7 +59,7 @@ export function AboutSettingsTab() {
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground flex items-center gap-1.5">
             <span className={cliInstalled ? 'text-green-500' : 'text-muted-foreground'}>●</span>
-            {cliInstalled ? 'Installed at /usr/local/bin/slay' : 'Not installed'}
+            {cliInstalled ? `Installed at ${cliPath || 'unknown path'}` : 'Not installed'}
           </span>
           <Button
             size="sm"

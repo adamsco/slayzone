@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { getStateDir } from './dirs'
+import { installCli } from './cli-install'
 
 export interface MigrationResult {
   migrated: boolean
@@ -75,5 +76,36 @@ export function migrateXdgIfNeeded(): MigrationResult {
     }
 
     return { migrated: false, failed: true }
+  }
+}
+
+/**
+ * Migrates CLI symlink from /usr/local/bin/slay to ~/.local/bin/slay on Linux.
+ * On non-Linux platforms, this is a no-op.
+ */
+export function migrateCliBinIfNeeded(cliSrcPath: string): void {
+  if (process.platform !== 'linux') return
+
+  const oldTarget = '/usr/local/bin/slay'
+  try {
+    const stat = fs.lstatSync(oldTarget)
+    if (!stat.isSymbolicLink()) return
+  } catch {
+    return // Doesn't exist or can't stat
+  }
+
+  // Install at new location first
+  const result = installCli(cliSrcPath)
+  if (!result.ok) {
+    console.error(`[slayzone] CLI bin migration: failed to install at new location: ${result.error}`)
+    return
+  }
+
+  // Try to remove old symlink (may need sudo)
+  try {
+    fs.unlinkSync(oldTarget)
+    console.error(`[slayzone] Migrated CLI from ${oldTarget} to ${result.path}`)
+  } catch {
+    console.error(`[slayzone] CLI installed at ${result.path} (old symlink at ${oldTarget} kept — remove manually with: sudo rm ${oldTarget})`)
   }
 }
