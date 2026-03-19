@@ -673,6 +673,28 @@ function createMainWindow(): void {
     mainWindow = null
   })
 
+  // Recover from renderer crashes (black screen) by reloading the page.
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    console.error('[renderer] process gone:', details.reason, details.exitCode)
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      // Small delay to let things settle before reload
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          console.log('[renderer] reloading after crash...')
+          mainWindow.webContents.reload()
+        }
+      }, 500)
+    }
+  })
+
+  mainWindow.webContents.on('unresponsive', () => {
+    console.warn('[renderer] unresponsive')
+  })
+
+  mainWindow.webContents.on('responsive', () => {
+    console.log('[renderer] responsive again')
+  })
+
   // Intercept Cmd+§ at Electron level (react-hotkeys-hook doesn't recognize §)
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown' && input.key === '§' && input.meta) {
