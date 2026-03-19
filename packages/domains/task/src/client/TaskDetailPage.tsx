@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { MoreHorizontal, Archive, Trash2, AlertTriangle, Loader2, Terminal as TerminalIcon, Globe, Settings2, GitBranch, FileCode, ChevronRight, Plus, GripVertical, Camera, X, Info, CheckCircle2, XCircle, Stethoscope, Cpu, Maximize2 } from 'lucide-react'
+import { MoreHorizontal, Archive, Trash2, AlertTriangle, Loader2, Terminal as TerminalIcon, Globe, Settings2, GitBranch, FileCode, ChevronRight, Plus, GripVertical, Camera, X, Info, CheckCircle2, XCircle, Stethoscope, Cpu, Maximize2, Circle } from 'lucide-react'
 import { DescriptionDialog } from './DescriptionDialog'
 import { DndContext, PointerSensor, useSensors, useSensor, closestCenter, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
@@ -10,7 +10,7 @@ import { BUILTIN_PANEL_IDS, getProviderConversationId, getProviderFlags, setProv
 import type { BrowserTabsState } from '@slayzone/task-browser/shared'
 import type { Tag } from '@slayzone/tags/shared'
 import type { Project } from '@slayzone/projects/shared'
-import { getDefaultStatus, getDoneStatus, getStatusByCategory, isTerminalStatus, resolveRepoPath } from '@slayzone/projects/shared'
+import { getDefaultStatus, getDoneStatus, isTerminalStatus, resolveRepoPath } from '@slayzone/projects/shared'
 import { useDetectedRepos } from '@slayzone/projects'
 import { DEV_SERVER_URL_PATTERN, SESSION_ID_COMMANDS, SESSION_ID_UNAVAILABLE } from '@slayzone/terminal/shared'
 import type { TerminalMode, ValidationResult } from '@slayzone/terminal/shared'
@@ -56,6 +56,7 @@ import {
 } from '@slayzone/ui'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@slayzone/ui'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@slayzone/ui'
+import { Popover, PopoverContent, PopoverTrigger } from '@slayzone/ui'
 import { TaskMetadataSidebar, ExternalSyncCard } from './TaskMetadataSidebar'
 import { RichTextEditor } from '@slayzone/editor'
 import { markSkipCache, usePty, useTerminalModes, getVisibleModes, getModeLabel, groupTerminalModes } from '@slayzone/terminal'
@@ -192,14 +193,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
   const [taskTagIds, setTaskTagIds] = useState<string[]>(initialData?.taskTagIds ?? [])
   const statusOptions = useMemo(() => buildStatusOptions(project?.columns_config), [project?.columns_config])
   const completedStatus = useMemo(() => getDoneStatus(project?.columns_config), [project?.columns_config])
-  const startedStatus = useMemo(
-    () => getStatusByCategory('started', project?.columns_config) ?? getDefaultStatus(project?.columns_config),
-    [project?.columns_config]
-  )
-  const startedStatusLabel = useMemo(
-    () => statusOptions.find((option) => option.value === startedStatus)?.label ?? 'In Progress',
-    [statusOptions, startedStatus]
-  )
+  const [statusPopoverOpen, setStatusPopoverOpen] = useState(false)
 
   // Sub-tasks
   const [subTasks, setSubTasks] = useState<Task[]>(initialData?.subTasks ?? [])
@@ -1240,12 +1234,6 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
     onBack()
   }
 
-  const handleConfirmInProgress = async (): Promise<void> => {
-    if (!task) return
-    const updated = await window.api.db.updateTask({ id: task.id, status: startedStatus })
-    handleTaskUpdate(updated)
-  }
-
   if (!task) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -1306,7 +1294,49 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
                   </p>
                 </div>
               </div>
-            ) : (
+            ) : (<div className="flex items-center gap-2 flex-1 min-w-0">
+              {(() => {
+                const statusStyle = getColumnStatusStyle(task.status, project?.columns_config)
+                if (!statusStyle) return null
+                const StatusIcon = statusStyle.icon
+                return (
+                  <Popover open={statusPopoverOpen} onOpenChange={setStatusPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type="button"
+                        className="shrink-0 cursor-pointer transition-opacity hover:opacity-70"
+                      >
+                        <StatusIcon className={cn('size-5', statusStyle.iconClass)} strokeWidth={3} />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-44 p-1" align="start">
+                      {statusOptions.map((opt) => {
+                        const optStyle = getColumnStatusStyle(opt.value, project?.columns_config)
+                        const OptIcon = optStyle?.icon ?? Circle
+                        const isCurrent = opt.value === task.status
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            className={cn(
+                              'flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm cursor-pointer hover:bg-accent',
+                              isCurrent && 'bg-accent font-medium'
+                            )}
+                            onClick={async () => {
+                              const updated = await window.api.db.updateTask({ id: task.id, status: opt.value })
+                              handleTaskUpdate(updated)
+                              setStatusPopoverOpen(false)
+                            }}
+                          >
+                            <OptIcon className={cn('size-4', optStyle?.iconClass)} />
+                            {opt.label}
+                          </button>
+                        )
+                      })}
+                    </PopoverContent>
+                  </Popover>
+                )
+              })()}
               <input
                 ref={titleInputRef}
                 value={titleValue}
@@ -1320,7 +1350,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
                   !editingTitle && 'cursor-pointer'
                 )}
               />
-            )}
+            </div>)}
 
             {task.linear_url && (
               <Tooltip>
@@ -1337,15 +1367,6 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
               </Tooltip>
             )}
 
-            {!task.is_temporary && task.status !== startedStatus && (
-              <button
-                type="button"
-                onClick={handleConfirmInProgress}
-                className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-500/10 text-yellow-600 hover:bg-yellow-500/20 dark:text-yellow-400 transition-colors cursor-pointer"
-              >
-                Set status to <em>{startedStatusLabel}</em>
-              </button>
-            )}
 
             <div className="flex items-center gap-2">
               <PanelToggle
