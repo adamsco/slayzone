@@ -53,9 +53,9 @@ if (process.platform === 'linux') {
 import icon from '../../resources/icon.png?asset'
 import logoSolid from '../../resources/logo-solid.svg?asset'
 import { getDatabase, closeDatabase, getDiagnosticsDatabase, closeDiagnosticsDatabase } from './db'
-import { runMigrations } from './db/migrations'
+import { runMigrations, LATEST_MIGRATION_VERSION } from './db/migrations'
 import { normalizeProjectStatusData } from './db/status-normalization'
-import { registerBackupHandlers, startAutoBackup, stopAutoBackup } from './backup'
+import { registerBackupHandlers, startAutoBackup, stopAutoBackup, createPreMigrationBackup } from './backup'
 // Domain handlers
 import { registerProjectHandlers } from '@slayzone/projects/main'
 import { configureTaskRuntimeAdapters, registerTaskHandlers, registerFilesHandlers } from '@slayzone/task/main'
@@ -814,6 +814,9 @@ app.whenReady().then(async () => {
   // Initialize databases
   logBoot('database init start')
   const db = getDatabase()
+  await createPreMigrationBackup(db, LATEST_MIGRATION_VERSION)
+  runMigrations(db)
+  normalizeProjectStatusData(db)
   const diagDb = getDiagnosticsDatabase()
   const isLabEnabled = (key: string): boolean => {
     const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined

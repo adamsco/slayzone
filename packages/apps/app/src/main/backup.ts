@@ -16,7 +16,7 @@ const DEFAULT_BACKUP_SETTINGS: BackupSettings = {
 }
 
 // Filename format: slayzone.dev.2026-03-07T12-30-00-000Z.manual.sqlite
-const BACKUP_REGEX = /^slayzone(?:\.dev)?\.(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.(auto|manual)\.sqlite$/
+const BACKUP_REGEX = /^slayzone(?:\.dev)?\.(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.(auto|manual|migration)\.sqlite$/
 
 function getBackupsDir(): string {
   const userDataPath = process.env.SLAYZONE_DB_DIR || app.getPath('userData')
@@ -25,13 +25,13 @@ function getBackupsDir(): string {
   return dir
 }
 
-function buildBackupFilename(type: 'auto' | 'manual'): string {
+function buildBackupFilename(type: 'auto' | 'manual' | 'migration'): string {
   const prefix = app.isPackaged ? 'slayzone' : 'slayzone.dev'
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   return `${prefix}.${timestamp}.${type}.sqlite`
 }
 
-function parseBackupFilename(filename: string): { timestamp: Date; type: 'auto' | 'manual' } | null {
+function parseBackupFilename(filename: string): { timestamp: Date; type: 'auto' | 'manual' | 'migration' } | null {
   const match = filename.match(BACKUP_REGEX)
   if (!match) return null
   // Restore ISO format: 2026-03-07T12-30-00-000Z → 2026-03-07T12:30:00.000Z
@@ -41,7 +41,7 @@ function parseBackupFilename(filename: string): { timestamp: Date; type: 'auto' 
   )
   const timestamp = new Date(isoStr)
   if (isNaN(timestamp.getTime())) return null
-  return { timestamp, type: match[2] as 'auto' | 'manual' }
+  return { timestamp, type: match[2] as 'auto' | 'manual' | 'migration' }
 }
 
 // Backup names stored as JSON map { [filename]: name } in settings table
@@ -206,6 +206,23 @@ export function stopAutoBackup(): void {
   if (autoBackupTimer) {
     clearInterval(autoBackupTimer)
     autoBackupTimer = null
+  }
+}
+
+export async function createPreMigrationBackup(
+  db: Database.Database,
+  targetVersion: number
+): Promise<void> {
+  const currentVersion = db.pragma('user_version', { simple: true }) as number
+  if (currentVersion === 0 || currentVersion >= targetVersion) return
+
+  const dir = getBackupsDir()
+  const filename = buildBackupFilename('migration')
+  try {
+    await db.backup(path.join(dir, filename))
+    console.error(`[slayzone] Pre-migration backup: v${currentVersion}→v${targetVersion} → ${filename}`)
+  } catch (err) {
+    console.error(`[slayzone] Pre-migration backup failed (continuing): ${err}`)
   }
 }
 

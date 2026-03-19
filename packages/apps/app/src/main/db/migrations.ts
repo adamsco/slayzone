@@ -1358,6 +1358,8 @@ const migrations: Migration[] = [
   }
 ]
 
+export const LATEST_MIGRATION_VERSION = migrations[migrations.length - 1].version
+
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number
 

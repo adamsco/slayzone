@@ -248,11 +248,11 @@ export function BackupSettingsTab() {
                     <span className="text-sm font-medium truncate">{backup.name}</span>
                   )}
                   <span
-                    className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
-                      backup.type === 'auto'
-                        ? 'bg-blue-500/10 text-blue-500'
-                        : 'bg-emerald-500/10 text-emerald-500'
-                    }`}
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${{
+                      auto: 'bg-blue-500/10 text-blue-500',
+                      manual: 'bg-emerald-500/10 text-emerald-500',
+                      migration: 'bg-amber-500/10 text-amber-500',
+                    }[backup.type]}`}
                   >
                     {backup.type}
                   </span>

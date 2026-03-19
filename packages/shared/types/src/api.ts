@@ -102,7 +102,7 @@ export interface BackupInfo {
   filename: string
   name: string
   timestamp: string
-  type: 'auto' | 'manual'
+  type: 'auto' | 'manual' | 'migration'
   sizeBytes: number
 }
 
