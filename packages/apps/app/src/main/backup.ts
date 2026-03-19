@@ -174,12 +174,12 @@ function setBackupSettings(db: Database.Database, partial: Partial<BackupSetting
   return merged
 }
 
-function cleanupOldAutoBackups(maxAutoBackups: number): void {
-  if (maxAutoBackups <= 0) return // 0 = unlimited
-  const backups = listBackups().filter((b) => b.type === 'auto')
-  if (backups.length <= maxAutoBackups) return
+function cleanupOldBackups(type: BackupInfo['type'], max: number): void {
+  if (max <= 0) return // 0 = unlimited
+  const backups = listBackups().filter((b) => b.type === type)
+  if (backups.length <= max) return
   // backups already sorted newest-first
-  const toDelete = backups.slice(maxAutoBackups)
+  const toDelete = backups.slice(max)
   for (const backup of toDelete) {
     deleteBackup(backup.filename)
   }
@@ -195,7 +195,7 @@ export function startAutoBackup(db: Database.Database): void {
   autoBackupTimer = setInterval(async () => {
     try {
       await createBackup(db, 'auto')
-      cleanupOldAutoBackups(settings.maxAutoBackups)
+      cleanupOldBackups('auto', settings.maxAutoBackups)
     } catch (err) {
       console.error('Auto-backup failed:', err)
     }
@@ -221,6 +221,7 @@ export async function createPreMigrationBackup(
   try {
     await db.backup(path.join(dir, filename))
     console.error(`[slayzone] Pre-migration backup: v${currentVersion}→v${targetVersion} → ${filename}`)
+    cleanupOldBackups('migration', 3)
   } catch (err) {
     console.error(`[slayzone] Pre-migration backup failed (continuing): ${err}`)
   }
