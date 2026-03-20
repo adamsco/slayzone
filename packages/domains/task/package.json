@@ -42,7 +42,7 @@
     "zod": "^4.3.5"
   },
   "peerDependencies": {
-    "electron": "^39.0.0",
+    "electron": "^41.0.0",
     "react": "^19.0.0"
   },
   "devDependencies": {

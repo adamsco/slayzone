@@ -41,7 +41,7 @@
     "remark-gfm": "^4.0.1"
   },
   "peerDependencies": {
-    "electron": "^39.0.0",
+    "electron": "^41.0.0",
     "react": "^19.0.0"
   },
   "devDependencies": {

@@ -15,7 +15,7 @@
     "typecheck": "tsgo --noEmit"
   },
   "peerDependencies": {
-    "electron": "^39.0.0"
+    "electron": "^41.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
