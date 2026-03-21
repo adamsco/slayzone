@@ -199,17 +199,22 @@
   .bp-card-val { font-size: 16px; font-weight: 700; font-family: 'Outfit', sans-serif; }
 
   /* ═══════ FEAT 4: WORKTREES ═══════ */
-  .feat-wt { flex: 1; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
-  .wt-lane { display: flex; align-items: center; gap: 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; opacity: 0; transform: translateX(-20px); transition: all 0.4s ease; }
-  .wt-lane.vis { opacity: 1; transform: translateX(0); }
-  .wt-icon { font-size: 18px; flex-shrink: 0; }
-  .wt-info { flex: 1; }
-  .wt-task { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
-  .wt-path { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-dim); }
-  .wt-branch { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 2px 8px; border-radius: 4px; background: rgba(77,166,255,0.1); color: var(--blue); }
-  .wt-status { font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 3px 8px; border-radius: 4px; }
-  .wt-status.active { background: rgba(77,255,136,0.1); color: var(--green); }
-  .wt-status.idle { background: var(--surface2); color: var(--text-dim); }
+  .feat-wt { flex: 1; display: flex; align-items: center; justify-content: center; padding: 24px 40px; font-family: 'JetBrains Mono', monospace; font-size: 13px; overflow: hidden; }
+  .wt-inner { display: flex; flex-direction: column; }
+  .wt-root { color: var(--text-dim); margin-bottom: 2px; opacity: 0; transition: opacity 0.4s ease; }
+  .wt-root.vis { opacity: 1; }
+  .wt-pipe { color: #3a3e5a; line-height: 1.4; }
+  .wt-row { display: flex; align-items: center; }
+  .wt-tree-line { color: #3a3e5a; width: 30px; flex-shrink: 0; }
+  .wt-folder { color: var(--amber); opacity: 0; transition: opacity 0.3s ease; }
+  .wt-folder.vis { opacity: 1; }
+  .wt-connector { width: 0; height: 1px; background: #3a3e5a; margin: 0 10px; transition: width 0.4s cubic-bezier(0.4,0,0.2,1); }
+  .wt-connector.vis { width: 30px; }
+  .wt-branch-badge { color: var(--blue); opacity: 0; transition: opacity 0.3s ease; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+  .wt-branch-badge.vis { opacity: 1; }
+  .wt-status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .wt-status-dot.active { background: var(--green); }
+  .wt-status-dot.idle { background: var(--text-dim); opacity: 0.4; }
 
   /* ═══════ FEAT 5: GIT PANEL ═══════ */
   .feat-git { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -596,17 +601,39 @@
       </div>
     </div>
 
-    <div style="display:none"> <!-- HIDDEN: sections 4-16 while implementing -->
     <!-- ═══════ 4. WORKTREES ═══════ -->
     <div class="feature-section" id="feat-4">
       <div class="feature-visual"><div class="scale-wrap">
         <div class="app-frame">
-          <div class="app-bar"><span class="app-dot r"></span><span class="app-dot y"></span><span class="app-dot g"></span><span class="app-bar-title">slayzone — worktrees</span></div>
           <div class="feat-wt" id="f4-wt">
-            <div class="wt-lane" data-d="0"><div class="wt-icon">📂</div><div class="wt-info"><div class="wt-task">Auth refactor</div><div class="wt-path">~/dev/api-v2-worktrees/auth-refactor/</div></div><div class="wt-branch">⎇ feat/auth</div><div class="wt-status active">active</div></div>
-            <div class="wt-lane" data-d="200"><div class="wt-icon">📂</div><div class="wt-info"><div class="wt-task">Search endpoint</div><div class="wt-path">~/dev/api-v2-worktrees/search-endpoint/</div></div><div class="wt-branch">⎇ feat/search</div><div class="wt-status active">active</div></div>
-            <div class="wt-lane" data-d="400"><div class="wt-icon">📂</div><div class="wt-info"><div class="wt-task">Rate limiting</div><div class="wt-path">~/dev/api-v2-worktrees/rate-limiting/</div></div><div class="wt-branch">⎇ feat/rate-limit</div><div class="wt-status idle">idle</div></div>
-            <div style="text-align:center;padding:12px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);">Each task runs in its own physical directory. No stashing. No conflicts.</div>
+            <div class="wt-inner">
+            <div class="wt-root" id="f4-root">~/dev/</div>
+            <div class="wt-pipe">│</div>
+            <div class="wt-row"><div class="wt-tree-line">├──</div><span style="color:var(--text);">api-v2/</span></div>
+            <div class="wt-pipe">│</div>
+            <div class="wt-row"><div class="wt-tree-line">└──</div><span style="color:var(--text);">api-v2-worktrees/</span></div>
+            <div class="wt-pipe" style="padding-left:30px;">│</div>
+            <div class="wt-row" style="padding-left:30px;">
+              <div class="wt-tree-line">├──</div>
+              <div class="wt-folder" id="f4-f1">auth-refactor/</div>
+              <div class="wt-connector" id="f4-c1"></div>
+              <div class="wt-branch-badge" id="f4-b1"><span class="wt-status-dot active"></span> ⎇ feat/auth</div>
+            </div>
+            <div class="wt-pipe" style="padding-left:30px;">│</div>
+            <div class="wt-row" style="padding-left:30px;">
+              <div class="wt-tree-line">├──</div>
+              <div class="wt-folder" id="f4-f2">search-endpoint/</div>
+              <div class="wt-connector" id="f4-c2"></div>
+              <div class="wt-branch-badge" id="f4-b2"><span class="wt-status-dot active"></span> ⎇ feat/search</div>
+            </div>
+            <div class="wt-pipe" style="padding-left:30px;">│</div>
+            <div class="wt-row" style="padding-left:30px;">
+              <div class="wt-tree-line">└──</div>
+              <div class="wt-folder" id="f4-f3">rate-limiting/</div>
+              <div class="wt-connector" id="f4-c3"></div>
+              <div class="wt-branch-badge" id="f4-b3"><span class="wt-status-dot idle"></span> ⎇ feat/rate-limit</div>
+            </div>
+            </div>
           </div>
         </div>
       </div></div>
@@ -616,6 +643,7 @@
       </div>
     </div>
 
+    <div style="display:none"> <!-- HIDDEN: sections 5-16 while implementing -->
     <!-- ═══════ 5. GIT PANEL ═══════ -->
     <div class="feature-section" id="feat-5">
       <div class="feature-visual"><div class="scale-wrap">
@@ -1231,15 +1259,38 @@
 
   // ═══════ FEAT 4: WORKTREES ═══════
   loopOnVisible(document.getElementById('feat-4'), async function() {
-    const lanes = document.querySelectorAll('#f4-wt .wt-lane');
-    lanes.forEach(l => l.classList.remove('vis'));
+    var root = document.getElementById('f4-root');
+    var ids = [
+      { f: 'f4-f1', c: 'f4-c1', b: 'f4-b1' },
+      { f: 'f4-f2', c: 'f4-c2', b: 'f4-b2' },
+      { f: 'f4-f3', c: 'f4-c3', b: 'f4-b3' }
+    ];
+
+    // Reset
+    root.classList.remove('vis');
+    ids.forEach(function(r) {
+      document.getElementById(r.f).classList.remove('vis');
+      document.getElementById(r.c).classList.remove('vis');
+      document.getElementById(r.b).classList.remove('vis');
+    });
+
     await sleep(400);
-    for (const l of lanes) {
-      const d = parseInt(l.dataset.d) || 0;
-      await sleep(d || 300);
-      l.classList.add('vis');
+
+    // Show root path
+    root.classList.add('vis');
+    await sleep(500);
+
+    // Reveal each row: folder → connector draws → branch badge
+    for (var i = 0; i < ids.length; i++) {
+      document.getElementById(ids[i].f).classList.add('vis');
+      await sleep(300);
+      document.getElementById(ids[i].c).classList.add('vis');
+      await sleep(350);
+      document.getElementById(ids[i].b).classList.add('vis');
+      await sleep(400);
     }
-    await sleep(3000);
+
+    await sleep(3500);
   });
 
   // ═══════ FEAT 5: GIT PANEL ═══════
