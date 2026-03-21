@@ -17,6 +17,20 @@ export interface IgnoredFileNode {
   children: IgnoredFileNode[]
 }
 
+// --- Copy presets ---
+
+export interface WorktreeCopyPreset {
+  id: string
+  name: string
+  pathGlobs: string[]  // empty = all ignored files
+}
+
+export const DEFAULT_COPY_PRESETS: WorktreeCopyPreset[] = [
+  { id: 'all-ignored', name: 'All ignored files', pathGlobs: [] },
+  { id: 'env-only', name: 'Env files only', pathGlobs: ['.env*', '*.local'] },
+  { id: 'docs-and-env', name: 'Docs + env', pathGlobs: ['docs/**', '*.md', '.env*', '*.local'] },
+]
+
 export interface DetectedWorktree {
   path: string
   branch: string | null

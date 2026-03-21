@@ -271,7 +271,7 @@ export function useConsolidatedGeneralData(
     })
     if (filesToCopy === 'all') {
       await window.api.git.copyIgnoredFiles(projectPath, worktreePath, [], 'all')
-    } else if (filesToCopy && filesToCopy.length > 0) {
+    } else if (Array.isArray(filesToCopy) && filesToCopy.length > 0) {
       await window.api.git.copyIgnoredFiles(projectPath, worktreePath, filesToCopy, 'custom')
     }
     await onUpdateTask({ id: task.id, worktreePath, worktreeParentBranch: currentBranch })
@@ -354,9 +354,7 @@ export function useConsolidatedGeneralData(
     setCreating(true)
     setCreateError(null)
     try {
-      if (choice.mode === 'all') {
-        await createWorktreeAndLink(pending.pendingWorktreePath, pending.pendingBranch, 'all', pending.useExistingBranch)
-      } else if (choice.mode === 'custom') {
+      if (choice.mode === 'custom') {
         await createWorktreeAndLink(pending.pendingWorktreePath, pending.pendingBranch, choice.paths, pending.useExistingBranch)
       } else {
         await createWorktreeAndLink(pending.pendingWorktreePath, pending.pendingBranch, undefined, pending.useExistingBranch)

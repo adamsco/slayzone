@@ -539,6 +539,7 @@ SUMMARY: <2-3 sentences explaining what each branch changed and why they conflic
     return copyIgnoredFiles(repoPath, worktreePath, mode ?? (paths.length > 0 ? 'custom' : 'all'), paths)
   })
 
+
   ipcMain.handle('git:getResolvedCommitDag', (_, path: string, limit: number, branches: string[] | undefined, baseBranch: string) => {
     return getResolvedCommitDag(path, limit, branches, baseBranch)
   })

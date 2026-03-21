@@ -1,21 +1,57 @@
-import { useState, useEffect } from 'react'
-import { AlertTriangle } from 'lucide-react'
-import { Input, Label, Tooltip, TooltipTrigger, TooltipContent, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@slayzone/ui'
+import { useState, useEffect, useCallback } from 'react'
+import { Plus, Trash2 } from 'lucide-react'
+import { Input, Label, Tooltip, TooltipTrigger, TooltipContent, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Button } from '@slayzone/ui'
 import type { WorktreeCopyBehavior } from '@slayzone/projects/shared'
 import { SettingsTabIntro } from './SettingsTabIntro'
+
+interface CopyPreset {
+  id: string
+  name: string
+  pathGlobs: string[]
+}
+
+const FALLBACK_PRESETS: CopyPreset[] = [
+  { id: 'all-ignored', name: 'All ignored files', pathGlobs: [] },
+  { id: 'env-only', name: 'Env files only', pathGlobs: ['.env*', '*.local'] },
+  { id: 'docs-and-env', name: 'Docs + env', pathGlobs: ['docs/**', '*.md', '.env*', '*.local'] },
+]
 
 export function WorktreesSettingsTab() {
   const [worktreeBasePath, setWorktreeBasePath] = useState('')
   const [autoCreateWorktreeOnTaskCreate, setAutoCreateWorktreeOnTaskCreate] = useState(false)
   const [copyBehavior, setCopyBehavior] = useState<WorktreeCopyBehavior>('ask')
-  const [customPaths, setCustomPaths] = useState('')
+  const [presets, setPresets] = useState<CopyPreset[]>([])
 
   useEffect(() => {
     window.api.settings.get('worktree_base_path').then(val => setWorktreeBasePath(val ?? ''))
     window.api.settings.get('auto_create_worktree_on_task_create').then(val => setAutoCreateWorktreeOnTaskCreate(val === '1'))
     window.api.settings.get('worktree_copy_behavior').then(val => setCopyBehavior((val as WorktreeCopyBehavior) ?? 'ask'))
-    window.api.settings.get('worktree_copy_paths').then(val => setCustomPaths(val ?? ''))
+    window.api.settings.get('worktree_copy_presets').then(val => {
+      const parsed = val ? JSON.parse(val) as CopyPreset[] : null
+      setPresets(parsed && parsed.length > 0 ? parsed : FALLBACK_PRESETS)
+    }).catch(() => setPresets(FALLBACK_PRESETS))
   }, [])
+
+  const savePresets = useCallback((updated: CopyPreset[]) => {
+    setPresets(updated)
+    window.api.settings.set('worktree_copy_presets', JSON.stringify(updated))
+  }, [])
+
+  const addPreset = () => {
+    const id = `preset-${Date.now()}`
+    savePresets([...presets, {
+      id, name: 'New preset',
+      pathGlobs: []
+    }])
+  }
+
+  const removePreset = (id: string) => {
+    savePresets(presets.filter(p => p.id !== id))
+  }
+
+  const updatePreset = (id: string, patch: Partial<CopyPreset>) => {
+    savePresets(presets.map(p => p.id === id ? { ...p, ...patch } : p))
+  }
 
   return (
     <>
@@ -70,12 +106,12 @@ export function WorktreesSettingsTab() {
       </div>
 
       <div className="space-y-3">
-        <Label className="text-base font-semibold">Copy ignored files</Label>
+        <Label className="text-base font-semibold">File copy behavior</Label>
         <p className="text-sm text-muted-foreground">
-          Files not tracked by git (e.g. <code className="font-mono text-xs">.env</code>, <code className="font-mono text-xs">node_modules</code>) that should be copied into new worktrees.
+          When creating a worktree, what should happen with local files?
         </p>
         <div className="grid grid-cols-[220px_minmax(0,1fr)] items-center gap-4">
-          <span className="text-sm">Behavior</span>
+          <span className="text-sm">Default behavior</span>
           <Select
             value={copyBehavior}
             onValueChange={(value) => {
@@ -90,37 +126,68 @@ export function WorktreesSettingsTab() {
             <SelectContent>
               <SelectItem value="ask">Ask every time</SelectItem>
               <SelectItem value="none">Don't copy</SelectItem>
-              <SelectItem value="all">Copy all ignored files</SelectItem>
-              <SelectItem value="custom">Custom paths</SelectItem>
             </SelectContent>
           </Select>
         </div>
-        {copyBehavior === 'all' && (
-          <div className="flex items-start gap-2 px-3 py-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 text-xs text-yellow-600 dark:text-yellow-400">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-            <span>This will copy all git-ignored files including potentially large directories like <code className="font-mono">node_modules</code>. This can be slow and use significant disk space.</span>
-          </div>
-        )}
-        {copyBehavior === 'custom' && (
-          <div className="grid grid-cols-[220px_minmax(0,1fr)] items-start gap-4">
-            <span className="text-sm pt-2">Paths</span>
-            <div className="space-y-1">
-              <Input
-                className="w-full max-w-lg"
-                placeholder=".env*, node_modules, packages/*/dist"
-                value={customPaths}
-                onChange={(e) => setCustomPaths(e.target.value)}
-                onBlur={() => {
-                  window.api.settings.set('worktree_copy_paths', customPaths.trim())
-                }}
-              />
-              <p className="text-xs text-muted-foreground">
-                Comma-separated paths relative to the repo root. Wildcards (*, ?) supported.
-              </p>
-            </div>
-          </div>
-        )}
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <Label className="text-base font-semibold">Copy presets</Label>
+          <Button variant="outline" size="sm" onClick={addPreset} className="gap-1.5 h-7">
+            <Plus className="h-3 w-3" />
+            Add preset
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Presets define which files to copy into new worktrees. They appear in the copy dialog when creating a worktree.
+        </p>
+
+        <div className="space-y-2">
+          {presets.map(preset => (
+            <PresetCard
+              key={preset.id}
+              preset={preset}
+              onUpdate={(patch) => updatePreset(preset.id, patch)}
+              onRemove={() => removePreset(preset.id)}
+            />
+          ))}
+          {presets.length === 0 && (
+            <p className="text-xs text-muted-foreground py-4 text-center">No presets. Click "Add preset" to create one.</p>
+          )}
+        </div>
       </div>
     </>
+  )
+}
+
+function PresetCard({ preset, onUpdate, onRemove }: {
+  preset: CopyPreset
+  onUpdate: (patch: Partial<CopyPreset>) => void
+  onRemove: () => void
+}) {
+  return (
+    <div className="rounded-md border p-3 space-y-3">
+      <div className="flex items-center gap-2">
+        <Input
+          value={preset.name}
+          onChange={(e) => onUpdate({ name: e.target.value })}
+          className="h-7 text-sm font-medium flex-1"
+        />
+        <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive">
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-[11px] text-muted-foreground">Path filter (comma-separated globs, empty = all ignored files)</label>
+        <Input
+          value={preset.pathGlobs.join(', ')}
+          onChange={(e) => onUpdate({ pathGlobs: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+          placeholder="docs/**, *.md, .env*"
+          className="h-7 text-xs font-mono"
+        />
+      </div>
+    </div>
   )
 }
