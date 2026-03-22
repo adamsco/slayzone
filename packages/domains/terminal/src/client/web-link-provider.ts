@@ -105,7 +105,7 @@ export class FileLinkProvider implements ILinkProvider {
           end: { x: startX + fullMatch.length + 1, y: bufferLineNumber }
         },
         text: fullMatch,
-        decorations: { underline: false, pointerCursor: true },
+        decorations: { underline: false, pointerCursor: false },
         activate: (event: MouseEvent) => this._activate(event, filePath, lineNum, colNum)
       })
     }
@@ -153,7 +153,7 @@ export class WebLinkProvider implements ILinkProvider {
           end: { x: endX, y: endY + 1 }
         },
         text: uri,
-        decorations: { underline: false, pointerCursor: true },
+        decorations: { underline: false, pointerCursor: false },
         activate: (event: MouseEvent) => this._activate(event, uri)
       })
     }
@@ -171,7 +171,7 @@ export class WebLinkProvider implements ILinkProvider {
             end: { x: offset + trimmed.length + 1, y: bufferLineNumber }
           },
           text: fullUri,
-          decorations: { underline: false, pointerCursor: true },
+          decorations: { underline: false, pointerCursor: false },
           activate: (event: MouseEvent) => this._activate(event, fullUri)
         })
       }

@@ -349,38 +349,31 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Termi
 
       // Clickable URLs — pointer cursor on hover, no underline decoration.
       // Underline disabled to avoid persistent-underline bugs with WebGL LinkRenderLayer.
-      // Click → browser panel, Cmd+Shift+Click → external browser
+      // Cmd+Click → browser panel, Cmd+Shift+Click → external browser
       const linkProvider = new WebLinkProvider(terminal, (event, uri) => {
         if (event.metaKey && event.shiftKey) {
           void window.api.shell.openExternal(uri)
-        } else if (onOpenUrlRef.current) {
+        } else if (event.metaKey && onOpenUrlRef.current) {
           onOpenUrlRef.current(uri)
-          if (!shownUrlToast) {
-            shownUrlToast = true
-            toast('⌘⇧+Click to open in external browser')
-          }
-        } else {
+        } else if (event.metaKey) {
           void window.api.shell.openExternal(uri)
         }
       })
       terminal.registerLinkProvider(linkProvider)
 
-      // Clickable file paths — Click → editor panel, Cmd+Shift+Click → external editor
+      // Clickable file paths — Cmd+Click → editor panel, Cmd+Shift+Click → Finder
       // Files outside the project path always open externally.
       terminal.registerLinkProvider(new FileLinkProvider(terminal, (event, filePath, _line, _col) => {
+        if (!event.metaKey) return
         // Resolve relative paths against terminal cwd
         const resolved = filePath.startsWith('/') ? filePath : `${cwd}/${filePath}`
         const isInProject = resolved.startsWith(cwd + '/') || resolved === cwd
-        if ((event.metaKey && event.shiftKey) || !isInProject) {
+        if (event.shiftKey || !isInProject) {
           void window.api.git.revealInFinder(resolved)
         } else if (onOpenFileRef.current) {
           // Pass relative path to editor panel
           const relative = resolved.startsWith(cwd + '/') ? resolved.slice(cwd.length + 1) : filePath
           onOpenFileRef.current(relative)
-          if (!shownFileToast) {
-            shownFileToast = true
-            toast('⌘⇧+Click to open in external editor')
-          }
         } else {
           void window.api.git.revealInFinder(resolved)
         }
