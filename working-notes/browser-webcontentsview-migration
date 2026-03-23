@@ -1,0 +1,164 @@
+# Browser Panel: WebContentsView Migration
+
+## Summary
+
+Migrated the browser panel from `<webview>` to `WebContentsView`. This resolved Google login, DevTools UX, Chrome extension support, and password manager detection. The multi-device responsive preview grid still uses `<webview>` (simpler, no auth needs).
+
+## Why WebContentsView
+
+`<webview>` is a guest/embedded browsing context. Sites detect this and block functionality:
+- Google BotGuard blocks sign-in
+- Extensions don't load properly (guest view behavior)
+- Password managers (1Password, Bitwarden) can't detect form fields
+- DevTools required a 150-line BrowserView host workaround
+
+`WebContentsView` is a first-class browsing context — same as a regular browser tab. Eliminates the entire class of embedded-context problems.
+
+## Architecture
+
+### Main process
+- `browser-view-manager.ts` — singleton managing all WebContentsViews
+  - One view per browser tab (not per task — each tab has its own view)
+  - LRU eviction: max 6 single-device views per task
+  - `removeChildView`/`addChildView` for visibility (not `setVisible`, not offscreen bounds — neither worked)
+  - `before-input-event` on each view intercepts Cmd/Ctrl shortcuts, forwards to renderer
+  - `will-prevent-unload` bypass + 1s `forcefullyCrashRenderer` fallback for process cleanup
+  - `reset()` called on `did-finish-load` and `render-process-gone` to clean orphaned views after reload
+
+### Renderer hooks (composable, single-responsibility)
+- `useBrowserViewLifecycle` — creates view on mount, destroys on unmount, retry on failure
+- `useBrowserViewBounds` — rAF loop for position/size tracking + dialog overlay detection
+- `useBrowserViewEvents` — subscribes to navigation/title/favicon events via IPC
+- `useBrowserView` — thin composition of the above three
+
+### Z-ordering (native views above DOM)
+**What works:** One `document.querySelector` per frame in the rAF bounds loop:
+```ts
+const hasOverlay = !!document.querySelector(
+  '[data-slot="dialog-overlay"], [data-slot="alert-dialog-overlay"], [data-slot="popover-content"]'
+)
+```
+Calls `hideAll()`/`showAll()` which remove/add views from the window.
+
+**What failed (3 attempts):**
+1. React Context counter — duplicate module instances in monorepo bundler
+2. Window global counter — counter leaks from startup dialogs
+3. `useEffect` in `DialogContent` — React Compiler defers/optimizes effects unpredictably
+
+**Key insight:** Never use React effects to control native Electron view visibility. The rAF loop is the single source of truth.
+
+### Keyboard shortcuts
+- `before-input-event` on each WebContentsView's webContents
+- When `keyboardPassthrough = false` (default): all Cmd/Ctrl shortcuts intercepted
+  - Main-process keys (Cmd+R, Cmd+,, etc.) → sent as same IPC the main handler would emit
+  - Cmd+R from WebContentsView → reloads that view directly (`wc.reload()`)
+  - All other Cmd/Ctrl → forwarded to renderer as synthetic `KeyboardEvent` on `window`
+- When `keyboardPassthrough = true`: page gets all keys (toggled via toolbar button)
+- Cmd+Shift+R → always reloads the app (renderer)
+
+### Focus management
+- `mainWindow.webContents.focus()` after `destroyView` and `hideAll` — prevents orphaned focus
+- Click on placeholder div → `browser:focus` IPC → `wc.focus()`
+
+### View lifecycle on reload
+- `browserViewManager.reset()` on `did-finish-load` — cleans orphaned views after HMR/manual reload
+- `browserViewManager.reset()` on `render-process-gone` — cleans before crash recovery
+
+## Google Login — SOLVED
+
+Google's BotGuard blocks Electron apps. Four changes required:
+
+1. `app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')` — `navigator.webdriver = false` natively
+2. `contextBridge.executeInMainWorld` in `browser-chrome-preload.ts` — provides `chrome.app/csi/loadTimes` before page scripts (not via `Object.defineProperty` which BotGuard detects)
+3. `app.userAgentFallback` — strips "Electron" and "slayzone" from UA
+4. `onBeforeSendHeaders` — strips Electron from UA header (belt-and-suspenders)
+
+**Key insight:** BotGuard needs REAL `chrome.runtime`, not stubs. `electron-chrome-extensions` provides this via session preload (same approach as Strawberry browser).
+
+### What didn't work
+- Spoofing `Sec-CH-UA` with "Google Chrome" — mismatch detected
+- Firefox UA — BotGuard still detects Chromium
+- CDP `Emulation.setUserAgentOverride` — debugger attachment is a bot signal
+- `Object.defineProperty` patches — BotGuard checks `getOwnPropertyDescriptor`
+- BrowserWindow instead of WebContentsView — same Chromium binary, same block
+
+## Chrome Extensions — MV2 WORKS, MV3 BLOCKED
+
+### Architecture
+- `electron-chrome-extensions` (GPL) — Chrome extension API support
+- `electron-chrome-web-store` (MIT) — extension directory, web store
+- Extensions loaded via `session.loadExtension()` on `persist:browser-tabs`
+- Tabs registered with `chromeExtensions.addTab(wc, win)` + `selectTab(wc)`
+
+### What works (MV2)
+- Content script injection, `chrome.runtime.sendMessage`, background pages
+- Extension persistence (`browser-extensions.json`)
+- Import from Chrome, Arc, Edge, Brave
+
+### What doesn't work (MV3)
+- `session.serviceWorkers.startWorkerForScope()` fails on partitioned sessions
+- MV3 extensions (1Password, MetaMask) can't run background service workers
+- Electron core limitation — not fixable in our code
+
+## Passkeys / WebAuthn
+
+Entitlements configured in `build/entitlements.mac.plist`:
+- `com.apple.developer.web-browser` — web browsing capability
+- `com.apple.developer.web-browser.public-key-credential` — passkey routing
+
+Needs testing with signed build. 1Password macOS platform authenticator (not browser extension) should work.
+
+## DevTools — SIMPLIFIED
+
+Old: 150 lines of BrowserView host + CDP injection + device toolbar disabling + popup suppression.
+New: `wc.openDevTools({ mode: 'bottom' | 'right' | 'undocked' | 'detach' })` — native docking inside the WebContentsView.
+
+## Multi-device grid — KEPT ON WEBVIEW
+
+`DeviceWebview.tsx` and `MultiDeviceGrid.tsx` still use `<webview>`. The responsive preview is for emulation, not auth/extensions. DOM-native layout is simpler for the drag-resize grid. `webviewTag: true` stays in `webPreferences`.
+
+## Tests
+
+63+ E2E tests across 8 files checking both bookkeeping AND native Electron state:
+- `72-browser-view-lifecycle` — create, destroy, process death, tab switch visibility, LRU, partition
+- `73-browser-view-bounds` — native bounds, setBounds, hideAll/showAll, rapid stress
+- `74-browser-view-devtools` — all modes, toggle cycle, destroyed view edge cases
+- `75-browser-view-navigation` — URL bar, IPC, back/forward, reload, tab isolation, invalid URL
+- `76-browser-view-zorder` — real dialog hide/show, dropdown immunity, cross-task z-index
+- `77-browser-view-focus` — focus IPC, click placeholder, queryable after focus
+- `78-browser-view-scripting` — executeJs, DOM query/modify, insertCss/removeCss, zoom
+- `79-browser-view-events` — did-navigate, canGoBack/Forward, title, dom-ready, did-fail-load
+- `80-browser-view-google-login` — Google login E2E
+- `81-browser-extension-usage` — MV2 extension content scripts + messaging
+
+**Key testing insight:** Always check native Electron state (`getNativeChildViewCount`, `getActualNativeBounds`), not just manager bookkeeping (Map entries). The Map can be empty while orphaned native views still render.
+
+## License
+
+Apache 2.0 → GPL v3 (required by `electron-chrome-extensions`). Reversible by removing the GPL dep.
+
+## Key files
+
+| File | Purpose |
+|------|---------|
+| `src/main/browser-view-manager.ts` | WebContentsView lifecycle, visibility, keyboard, LRU |
+| `src/main/index.ts` | IPC handles, UA spoofing, Chromium flags, extension init |
+| `src/preload/browser-chrome-preload.ts` | chrome.app/csi/loadTimes via executeInMainWorld |
+| `src/shared/webview-desktop-handoff-script.ts` | Non-Google site hardening |
+| `task-browser/src/client/useBrowserViewLifecycle.ts` | View create/destroy hook |
+| `task-browser/src/client/useBrowserViewBounds.ts` | rAF bounds + overlay detection |
+| `task-browser/src/client/useBrowserViewEvents.ts` | Event subscription hook |
+| `task-browser/src/client/useBrowserView.ts` | Composition hook |
+| `task-browser/src/client/BrowserTabPlaceholder.tsx` | Per-tab placeholder component |
+| `task-browser/src/client/BrowserPanel.tsx` | Panel UI, tab management, toolbar |
+| `task-browser/src/client/DeviceWebview.tsx` | Multi-device webview (unchanged) |
+| `shared/ui/src/native-view-layer.tsx` | No-op exports (z-ordering in rAF loop now) |
+| `build/entitlements.mac.plist` | Passkey/WebAuthn entitlements |
+
+## Next steps
+
+1. **MV3 service workers** — investigate Electron 42+ or different session approach
+2. **1Password** — use macOS platform authenticator (passkeys) instead of browser extension
+3. **Extension popup UI** — `browserAction.activate` for extension popups (1Password vault)
+4. **Signed build testing** — test passkeys/WebAuthn
+5. **Web panels** — consider migrating web panels from `<webview>` to WebContentsView (same benefits)
