@@ -323,9 +323,12 @@ export function updateTask(db: Database, data: UpdateTaskInput): Task | null {
   if (data.dueDate !== undefined) { fields.push('due_date = ?'); values.push(data.dueDate) }
   if (data.projectId !== undefined) {
     fields.push('project_id = ?'); values.push(data.projectId)
-    // Clear repo_name and worktree_path when moving to a different project — child repos may differ
-    if (data.repoName === undefined) { fields.push('repo_name = ?'); values.push(null) }
-    if (data.worktreePath === undefined) { fields.push('worktree_path = ?'); values.push(null) }
+    if (projectChanged) {
+      // Clear repo/worktree fields — child repos and worktrees may differ across projects
+      if (data.repoName === undefined) { fields.push('repo_name = ?'); values.push(null) }
+      if (data.worktreePath === undefined) { fields.push('worktree_path = ?'); values.push(null) }
+      if (data.worktreeParentBranch === undefined) { fields.push('worktree_parent_branch = ?'); values.push(null) }
+    }
   }
   if (data.claudeSessionId !== undefined) { fields.push('claude_session_id = ?'); values.push(data.claudeSessionId) }
   if (data.terminalMode !== undefined) { fields.push('terminal_mode = ?'); values.push(data.terminalMode) }
@@ -341,7 +344,7 @@ export function updateTask(db: Database, data: UpdateTaskInput): Task | null {
       { mode: 'opencode', col: 'opencode', convId: data.opencodeConversationId, flags: data.opencodeFlags, hasConvId: data.opencodeConversationId !== undefined, hasFlags: data.opencodeFlags !== undefined },
     ]
     const hasLegacyUpdate = legacyMappings.some(m => m.hasConvId || m.hasFlags)
-    const shouldResetConversationIds = data.worktreePath !== undefined && data.providerConfig === undefined && !hasLegacyUpdate
+    const shouldResetConversationIds = (data.worktreePath !== undefined || projectChanged) && data.providerConfig === undefined && !hasLegacyUpdate
 
     if (data.providerConfig !== undefined || hasLegacyUpdate || data.terminalMode !== undefined || shouldResetConversationIds) {
       // Read current provider_config
@@ -396,6 +399,7 @@ export function updateTask(db: Database, data: UpdateTaskInput): Task | null {
     }
   }
   if (data.panelVisibility !== undefined) { fields.push('panel_visibility = ?'); values.push(data.panelVisibility ? JSON.stringify(data.panelVisibility) : null) }
+  // Note: these also get cleared to null on project change (see projectChanged block above)
   if (data.worktreePath !== undefined) { fields.push('worktree_path = ?'); values.push(data.worktreePath) }
   if (data.worktreeParentBranch !== undefined) { fields.push('worktree_parent_branch = ?'); values.push(data.worktreeParentBranch) }
   if (data.browserUrl !== undefined) { fields.push('browser_url = ?'); values.push(data.browserUrl) }

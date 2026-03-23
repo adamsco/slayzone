@@ -358,6 +358,73 @@ describe('db:tasks:update', () => {
     }) as Task
     expect(updated.provider_config['claude-code']?.conversationId).toBe('new-session')
   })
+
+  test('project move clears worktree fields and conversation IDs', () => {
+    const sourceId = crypto.randomUUID()
+    const targetId = crypto.randomUUID()
+    h.db.prepare('INSERT INTO projects (id, name, color, path) VALUES (?, ?, ?, ?)').run(sourceId, 'WtSrc', '#a00', '/tmp/wt-src')
+    h.db.prepare('INSERT INTO projects (id, name, color, path) VALUES (?, ?, ?, ?)').run(targetId, 'WtTgt', '#b00', '/tmp/wt-tgt')
+
+    const t = h.invoke('db:tasks:create', { projectId: sourceId, title: 'MoveWorktree' }) as Task
+    // Set worktree fields + conversation ID
+    const setup = h.invoke('db:tasks:update', {
+      id: t.id,
+      worktreePath: '/tmp/wt-src/feat-branch',
+      worktreeParentBranch: 'main',
+      repoName: 'my-repo',
+      providerConfig: { 'claude-code': { conversationId: 'stale-conv' } }
+    }) as Task
+    expect(setup.worktree_path).toBe('/tmp/wt-src/feat-branch')
+
+    // Move to different project
+    const moved = h.invoke('db:tasks:update', { id: t.id, projectId: targetId }) as Task
+    expect(moved.project_id).toBe(targetId)
+    expect(moved.worktree_path).toBeNull()
+    expect(moved.worktree_parent_branch).toBeNull()
+    expect(moved.repo_name).toBeNull()
+    expect(moved.provider_config['claude-code']?.conversationId).toBeNull()
+  })
+
+  test('same-project update preserves worktree fields', () => {
+    const pid = crypto.randomUUID()
+    h.db.prepare('INSERT INTO projects (id, name, color, path) VALUES (?, ?, ?, ?)').run(pid, 'SameProj', '#c00', '/tmp/same')
+
+    const t = h.invoke('db:tasks:create', { projectId: pid, title: 'KeepWorktree' }) as Task
+    h.invoke('db:tasks:update', {
+      id: t.id,
+      worktreePath: '/tmp/same/wt',
+      worktreeParentBranch: 'develop',
+      repoName: 'keep-repo'
+    })
+
+    // Update with same projectId + title change — should NOT clear worktree fields
+    const updated = h.invoke('db:tasks:update', { id: t.id, projectId: pid, title: 'Renamed' }) as Task
+    expect(updated.title).toBe('Renamed')
+    expect(updated.worktree_path).toBe('/tmp/same/wt')
+    expect(updated.worktree_parent_branch).toBe('develop')
+    expect(updated.repo_name).toBe('keep-repo')
+  })
+
+  test('project move with explicit providerConfig preserves conversation IDs', () => {
+    const srcId = crypto.randomUUID()
+    const dstId = crypto.randomUUID()
+    h.db.prepare('INSERT INTO projects (id, name, color, path) VALUES (?, ?, ?, ?)').run(srcId, 'CfgSrc', '#d00', '/tmp/cfg-src')
+    h.db.prepare('INSERT INTO projects (id, name, color, path) VALUES (?, ?, ?, ?)').run(dstId, 'CfgDst', '#e00', '/tmp/cfg-dst')
+
+    const t = h.invoke('db:tasks:create', { projectId: srcId, title: 'MoveWithConfig' }) as Task
+    h.invoke('db:tasks:update', {
+      id: t.id,
+      providerConfig: { 'claude-code': { conversationId: 'old-conv' } }
+    })
+
+    // Move + explicit providerConfig — explicit config wins over reset
+    const moved = h.invoke('db:tasks:update', {
+      id: t.id,
+      projectId: dstId,
+      providerConfig: { 'claude-code': { conversationId: 'new-conv' } }
+    }) as Task
+    expect(moved.provider_config['claude-code']?.conversationId).toBe('new-conv')
+  })
 })
 
 // --- Archive ---
