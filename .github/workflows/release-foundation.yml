@@ -253,7 +253,7 @@ jobs:
 
       - name: Package
         shell: bash
-        timeout-minutes: 40
+        timeout-minutes: 90
         run: |
           set -euo pipefail
 
