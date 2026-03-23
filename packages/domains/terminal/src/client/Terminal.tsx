@@ -2,11 +2,7 @@ import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHand
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { toast } from '@slayzone/ui'
 import { WebLinkProvider, FileLinkProvider } from './web-link-provider'
-
-let shownUrlToast = false
-let shownFileToast = false
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
