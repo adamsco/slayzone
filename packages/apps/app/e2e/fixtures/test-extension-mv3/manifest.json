@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "SlayZone Test Extension MV3",
+  "version": "1.0",
+  "description": "E2E test fixture — verifies MV3 service worker messaging",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

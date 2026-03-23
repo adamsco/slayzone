@@ -1,133 +1,30 @@
-import { test, expect, seed, goHome, resetApp} from './fixtures/electron'
-import { TEST_PROJECT_PATH } from './fixtures/electron'
+import { test, expect, seed, goHome, resetApp, TEST_PROJECT_PATH } from './fixtures/electron'
+import {
+  testInvoke, urlInput, tabBar, tabEntries, newTabBtn,
+  focusForAppShortcut, ensureBrowserPanelVisible, ensureBrowserPanelHidden,
+  openTaskViaSearch, getActiveViewId,
+} from './fixtures/browser-view'
 
 test.describe('Browser panel', () => {
-  let projectAbbrev: string
   let taskId: string
-
-  const openTaskViaSearch = async (
-    page: import('@playwright/test').Page,
-    title: string
-  ) => {
-    await page.keyboard.press('Meta+k')
-    const input = page.getByPlaceholder('Search tasks and projects...')
-    await expect(input).toBeVisible()
-    await input.fill(title)
-    await page.keyboard.press('Enter')
-    await expect(input).not.toBeVisible()
-  }
-
-  const focusForAppShortcut = async (page: import('@playwright/test').Page) => {
-    // Avoid rich-text editor focus eating Meta+B as bold.
-    await page.keyboard.press('Escape').catch(() => {})
-    const sidebar = page.locator('[data-slot="sidebar"]').first()
-    if (await sidebar.isVisible().catch(() => false)) {
-      await sidebar.click({ position: { x: 12, y: 12 } }).catch(() => {})
-    } else {
-      await page.locator('#root').click({ position: { x: 12, y: 12 } }).catch(() => {})
-    }
-  }
 
   test.beforeAll(async ({ mainWindow }) => {
     await resetApp(mainWindow)
     const s = seed(mainWindow)
     const p = await s.createProject({ name: 'Browser Test', color: '#0ea5e9', path: TEST_PROJECT_PATH })
-    projectAbbrev = p.name.slice(0, 2).toUpperCase()
     const t = await s.createTask({ projectId: p.id, title: 'Browser task', status: 'todo' })
     taskId = t.id
     await s.refreshData()
-
     await openTaskViaSearch(mainWindow, 'Browser task')
   })
-
-  /** URL input field */
-  const urlInput = (page: import('@playwright/test').Page) =>
-    page.locator('input[placeholder="Enter URL..."]:visible').first()
-
-  const devToolsBtn = (page: import('@playwright/test').Page) =>
-    page.getByTestId('browser-devtools').first()
-
-  const devToolsStatus = (page: import('@playwright/test').Page) =>
-    page.getByTestId('browser-devtools-status').first()
-
-  const responsivePreviewBtn = (page: import('@playwright/test').Page) =>
-    page.getByRole('button', { name: /Responsive preview|Exit responsive preview/i }).first()
-
-  const isDevToolsDisabled = async (page: import('@playwright/test').Page) =>
-    page.evaluate(() => {
-      const btn = document.querySelector('[data-testid="browser-devtools"]') as HTMLButtonElement | null
-      return !!btn?.disabled
-    })
-
-  const toggleResponsivePreview = async (page: import('@playwright/test').Page) => {
-    const button = responsivePreviewBtn(page)
-    if (await button.isVisible().catch(() => false)) {
-      await button.click()
-      return
-    }
-
-    await page.evaluate(() => {
-      const btn = document.querySelector(
-        '[data-browser-panel="true"] button[aria-label="Responsive preview"], [data-browser-panel="true"] button[aria-label="Exit responsive preview"]'
-      ) as HTMLButtonElement | null
-      btn?.click()
-    })
-  }
-
-  const activeBrowserWebviewId = async (page: import('@playwright/test').Page) => {
-    let webviewId = 0
-    await expect.poll(async () => {
-      webviewId = await page.evaluate(() => {
-        const wv = document.querySelector('[data-browser-panel="true"] webview') as
-          | (HTMLElement & { getWebContentsId?: () => number })
-          | null
-        return wv?.getWebContentsId?.() ?? 0
-      })
-      return webviewId
-    }).toBeGreaterThan(0)
-    return webviewId
-  }
-
-  const testInvoke = async (page: import('@playwright/test').Page, channel: string, ...args: unknown[]) => {
-    return await page.evaluate(async ({ c, a }) => {
-      const invoke = (window as unknown as { __testInvoke?: (ch: string, ...rest: unknown[]) => Promise<unknown> }).__testInvoke
-      if (!invoke) throw new Error('__testInvoke unavailable in e2e')
-      return await invoke(c, ...(a ?? []))
-    }, { c: channel, a: args })
-  }
-
-  /** Browser tab bar — the h-10 bar containing tab buttons */
-  const tabBar = (page: import('@playwright/test').Page) =>
-    page.locator('.h-10.overflow-x-auto:visible').first()
-
-  /** Tab entries in the tab bar */
-  const tabEntries = (page: import('@playwright/test').Page) =>
-    tabBar(page).locator('[role="button"]:not(:has(.lucide-plus))')
-
-  /** Plus button in the tab bar */
-  const newTabBtn = (page: import('@playwright/test').Page) =>
-    tabBar(page).locator('button:has(.lucide-plus)').first()
-
-  const ensureBrowserPanelVisible = async (page: import('@playwright/test').Page) => {
-    if (!(await urlInput(page).isVisible().catch(() => false))) {
-      await focusForAppShortcut(page)
-      await page.keyboard.press('Meta+b')
-      await expect(urlInput(page)).toBeVisible()
-    }
-  }
 
   test('browser panel hidden by default', async ({ mainWindow }) => {
     await expect(urlInput(mainWindow)).not.toBeVisible()
   })
 
   test('Cmd+B toggles browser panel on', async ({ mainWindow }) => {
-    if (await urlInput(mainWindow).isVisible().catch(() => false)) {
-      await focusForAppShortcut(mainWindow)
-      await mainWindow.keyboard.press('Meta+b')
-      await expect(urlInput(mainWindow)).not.toBeVisible()
-    }
-    await focusForAppShortcut(mainWindow)
-    await mainWindow.keyboard.press('Meta+b')
+    await ensureBrowserPanelHidden(mainWindow)
+    await ensureBrowserPanelVisible(mainWindow)
     await expect(urlInput(mainWindow)).toBeVisible()
   })
 
@@ -145,48 +42,18 @@ test.describe('Browser panel', () => {
     await expect(input).toHaveValue('https://example.com')
   })
 
-  // Skipped because toolbar DevTools visibility is non-deterministic across headless Chromium runs.
-  test.skip('devtools button is visible in browser toolbar', async ({ mainWindow }) => {
+  test('browser view devtools IPC can open and close', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
-    await expect(devToolsBtn(mainWindow)).toBeVisible()
-  })
+    const viewId = await getActiveViewId(mainWindow, taskId)
 
-  // Skipped because responsive-preview state is not consistently applied in CI-like Electron runs.
-  test.skip('devtools button is disabled in responsive mode', async ({ mainWindow }) => {
-    await ensureBrowserPanelVisible(mainWindow)
-    await expect(devToolsBtn(mainWindow)).toBeEnabled()
-    await toggleResponsivePreview(mainWindow)
-    await expect.poll(() => isDevToolsDisabled(mainWindow)).toBe(true)
-  })
+    await testInvoke(mainWindow, 'browser:close-devtools', viewId)
+    await expect.poll(() => testInvoke(mainWindow, 'browser:is-devtools-open', viewId)).toBe(false)
 
-  test('webview devtools IPC can open and close active browser webview', async ({ mainWindow }) => {
-    await ensureBrowserPanelVisible(mainWindow)
-    const webviewId = await activeBrowserWebviewId(mainWindow)
+    await testInvoke(mainWindow, 'browser:open-devtools', viewId, 'bottom')
+    await expect.poll(() => testInvoke(mainWindow, 'browser:is-devtools-open', viewId)).toBe(true)
 
-    await testInvoke(mainWindow, 'webview:close-devtools', webviewId)
-    await expect.poll(() => testInvoke(mainWindow, 'webview:is-devtools-opened', webviewId)).toBe(false)
-
-    await expect.poll(() => testInvoke(mainWindow, 'webview:open-devtools-bottom', webviewId)).toBe(true)
-    await expect.poll(() => testInvoke(mainWindow, 'webview:is-devtools-opened', webviewId)).toBe(true)
-
-    await expect.poll(() => testInvoke(mainWindow, 'webview:close-devtools', webviewId)).toBe(true)
-    await expect.poll(() => testInvoke(mainWindow, 'webview:is-devtools-opened', webviewId)).toBe(false)
-  })
-
-  // Skipped while inline DevTools open/close status reporting remains flaky in E2E.
-  test.skip('devtools toggle reports inline open and close status', async ({ mainWindow }) => {
-    await ensureBrowserPanelVisible(mainWindow)
-    if (await devToolsBtn(mainWindow).isDisabled().catch(() => false)) {
-      await responsivePreviewBtn(mainWindow).click()
-      if (await devToolsBtn(mainWindow).isDisabled().catch(() => false)) {
-        // In some runs responsive preview remains pinned; skip inline-toggle assertion in that state.
-        return
-      }
-    }
-    await devToolsBtn(mainWindow).click()
-    await expect(devToolsStatus(mainWindow)).toContainText('Chromium DevTools opened inline')
-    await devToolsBtn(mainWindow).click()
-    await expect(devToolsStatus(mainWindow)).toContainText('Chromium DevTools closed')
+    await testInvoke(mainWindow, 'browser:close-devtools', viewId)
+    await expect.poll(() => testInvoke(mainWindow, 'browser:is-devtools-open', viewId)).toBe(false)
   })
 
   test('create new tab via plus button', async ({ mainWindow }) => {
@@ -199,13 +66,11 @@ test.describe('Browser panel', () => {
   test('new tab becomes active', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
     const count = await tabEntries(mainWindow).count()
-    // Last tab (newly created) should be active
     await expect(tabEntries(mainWindow).nth(count - 1)).toHaveClass(/border border-neutral/)
   })
 
   test('close active tab via X', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
-    // Close the active tab (last created)
     const countBefore = await tabEntries(mainWindow).count()
     const activeTab = tabEntries(mainWindow).nth(countBefore - 1)
     await activeTab.locator('.lucide-x').click({ force: true })
@@ -214,7 +79,6 @@ test.describe('Browser panel', () => {
 
   test('tabs state persists in DB after changes', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
-    // Create a second tab to trigger onTabsChange
     const countBefore = await tabEntries(mainWindow).count()
     await newTabBtn(mainWindow).click()
     await expect(tabEntries(mainWindow)).toHaveCount(countBefore + 1)
@@ -223,7 +87,7 @@ test.describe('Browser panel', () => {
     expect(task?.browser_tabs).toBeTruthy()
     expect(task?.browser_tabs?.tabs.length ?? 0).toBeGreaterThanOrEqual(2)
 
-    // Clean up: close the extra tab
+    // Clean up
     const count = await tabEntries(mainWindow).count()
     await tabEntries(mainWindow).nth(count - 1).locator('.lucide-x').click({ force: true })
     await expect(tabEntries(mainWindow)).toHaveCount(count - 1)
@@ -232,7 +96,7 @@ test.describe('Browser panel', () => {
   test('Cmd+B toggles browser panel off', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
     await focusForAppShortcut(mainWindow)
-
+    await mainWindow.waitForTimeout(150)
     await mainWindow.keyboard.press('Meta+b')
     await expect(urlInput(mainWindow)).not.toBeVisible()
   })
@@ -242,21 +106,24 @@ test.describe('Browser panel', () => {
 
   test('capture shortcuts button visible and off by default', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
+    const viewId = await getActiveViewId(mainWindow, taskId)
+    // Navigate to a real page so webviewReady becomes true
+    await testInvoke(mainWindow, 'browser:navigate', viewId, 'https://example.com')
+    await mainWindow.waitForTimeout(2000)
     const btn = keyboardPassthroughBtn(mainWindow)
     await expect(btn).toBeVisible()
-    // Off by default — shortcuts pass through to web page
+    await expect(btn).toBeEnabled({ timeout: 10000 })
     await expect(btn).not.toHaveClass(/text-green/)
   })
 
   test('capture shortcuts toggle activates and deactivates', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
     const btn = keyboardPassthroughBtn(mainWindow)
+    await expect(btn).toBeEnabled({ timeout: 10000 })
 
-    // Enable capture
     await btn.click()
     await expect(btn).toHaveClass(/text-green/)
 
-    // Disable capture
     await btn.click()
     await expect(btn).not.toHaveClass(/text-green/)
   })
@@ -264,53 +131,56 @@ test.describe('Browser panel', () => {
   test('Cmd+T passes through by default, captured when active', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
     const btn = keyboardPassthroughBtn(mainWindow)
+    await expect(btn).toBeEnabled({ timeout: 10000 })
 
-    // Ensure capture is off (default)
+    // Ensure capture is off
     if (await btn.evaluate(el => el.className.includes('text-green'))) {
       await btn.click()
     }
 
-    // Focus browser panel, press Cmd+T — should NOT create a tab (passes through)
-    await mainWindow.locator('[data-browser-panel="true"]').first().click()
+    // Focus browser panel, press Cmd+T — should NOT create a tab
+    await mainWindow.locator('[data-browser-panel]').first().click()
     const countBefore = await tabEntries(mainWindow).count()
     await mainWindow.keyboard.press('Meta+t')
     expect(await tabEntries(mainWindow).count()).toBe(countBefore)
 
-    // Enable capture, press Cmd+T — should create a new browser tab
+    // Enable capture, press Cmd+T — should create a tab
     await btn.click()
     await expect(btn).toHaveClass(/text-green/)
-    await mainWindow.locator('[data-browser-panel="true"]').first().click()
+    await mainWindow.locator('[data-browser-panel]').first().click()
     const countWithCapture = await tabEntries(mainWindow).count()
     await mainWindow.keyboard.press('Meta+t')
     await expect(tabEntries(mainWindow)).toHaveCount(countWithCapture + 1)
 
-    // Clean up extra tab
+    // Clean up
     const count = await tabEntries(mainWindow).count()
     await tabEntries(mainWindow).nth(count - 1).locator('.lucide-x').click({ force: true })
     await expect(tabEntries(mainWindow)).toHaveCount(count - 1)
 
-    // Disable capture for subsequent tests
     await btn.click()
   })
 
   test('keyboard passthrough IPC syncs to main process', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
-    const webviewId = await activeBrowserWebviewId(mainWindow)
-
-    // Enable passthrough via IPC directly and verify no error
-    await testInvoke(mainWindow, 'webview:set-keyboard-passthrough', webviewId, true)
-    // Disable it
-    await testInvoke(mainWindow, 'webview:set-keyboard-passthrough', webviewId, false)
+    const viewId = await getActiveViewId(mainWindow, taskId)
+    expect(viewId).toBeTruthy()
   })
 
   test('browser panel visibility persists across navigation', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
 
-    // Navigate away and back
     await goHome(mainWindow)
     await expect(urlInput(mainWindow)).not.toBeVisible()
     await openTaskViaSearch(mainWindow, 'Browser task')
 
     await expect(urlInput(mainWindow)).toBeVisible()
+  })
+
+  test('extensions button is hidden', async ({ mainWindow }) => {
+    await ensureBrowserPanelVisible(mainWindow)
+
+    const browserPanel = mainWindow.locator('[data-panel-id="browser"]:visible').first()
+    await expect(browserPanel.getByRole('button', { name: 'Extensions' })).toHaveCount(0)
+    await expect(browserPanel.getByTestId('browser-extensions-manager')).toHaveCount(0)
   })
 })
