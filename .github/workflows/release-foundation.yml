@@ -343,7 +343,7 @@ jobs:
               fi
               # electron-builder auto-update manifests (latest-*.yml) from
               # separate arch builds contain different file entries. Merge them.
-              if [[ "$name" == latest-*.yml ]]; then
+              if [[ "$name" == latest*.yml ]]; then
                 echo "Merging auto-update manifest: $name"
                 node scripts/release/merge-update-manifest.mjs \
                   --existing "$ASSETS_DIR/$name" \
