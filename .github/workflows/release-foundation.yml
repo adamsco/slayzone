@@ -174,24 +174,16 @@ jobs:
         include:
           - name: macos-arm64
             os: macos-latest
-            arch: arm64
             build_args: --mac --arm64
           - name: macos-x64
             os: macos-latest
-            arch: x64
             build_args: --mac --x64
           - name: linux-x64
             os: ubuntu-latest
-            arch: x64
             build_args: --linux --x64
-          - name: windows-x64
+          - name: windows
             os: windows-latest
-            arch: x64
-            build_args: --win --x64
-          - name: windows-arm64
-            os: windows-latest
-            arch: arm64
-            build_args: --win --arm64
+            build_args: --win --x64 --arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -261,13 +253,12 @@ jobs:
 
       - name: Package
         shell: bash
-        timeout-minutes: 180
+        timeout-minutes: 40
         run: |
           set -euo pipefail
 
           pnpm --filter @slayzone/app exec electron-builder ${{ matrix.build_args }} -c.electronVersion=${{ env.ELECTRON_VERSION }} --publish never
         env:
-          NODE_OPTIONS: "--max-old-space-size=8192"
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -297,10 +288,8 @@ jobs:
         run: |
           set -euo pipefail
           TAG="dry-run-${{ needs.resolve.outputs.release_tag }}"
-          # Create draft release if it doesn't exist
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Dry Run ${{ needs.resolve.outputs.release_tag }}" --notes "Test build — not a real release" --draft
-          # Upload all assets for this platform
           for file in "${{ runner.temp }}/release-assets/${{ matrix.name }}"/*; do
             [ -f "$file" ] && gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber
           done
