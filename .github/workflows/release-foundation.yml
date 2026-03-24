@@ -254,9 +254,27 @@ jobs:
       - name: Strip workspace deps (bundled by electron-vite)
         run: node -e "const fs=require('fs'),p='packages/apps/app/package.json',pkg=JSON.parse(fs.readFileSync(p));Object.keys(pkg.dependencies).filter(k=>k.startsWith('@slayzone/')).forEach(k=>delete pkg.dependencies[k]);fs.writeFileSync(p,JSON.stringify(pkg,null,2)+'\n')"
 
+      - name: Deploy app to standalone directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOY_DIR="${{ runner.temp }}/app-deploy"
+          pnpm --filter @slayzone/app deploy "$DEPLOY_DIR"
+          # Copy build output (electron-vite bundles) into deployed dir
+          cp -r packages/apps/app/out "$DEPLOY_DIR/out"
+          cp -r packages/apps/app/build "$DEPLOY_DIR/build"
+          cp packages/apps/app/electron-builder.yml "$DEPLOY_DIR/electron-builder.yml"
+          # Copy CLI artifacts and fix extraResources paths (../cli → ./cli in deploy dir)
+          mkdir -p "$DEPLOY_DIR/cli/dist" "$DEPLOY_DIR/cli/bin"
+          cp packages/apps/cli/dist/slay.js "$DEPLOY_DIR/cli/dist/slay.js"
+          cp packages/apps/cli/bin/slay "$DEPLOY_DIR/cli/bin/slay"
+          node -e "const f='$DEPLOY_DIR/electron-builder.yml';require('fs').writeFileSync(f,require('fs').readFileSync(f,'utf8').replace(/\.\.\/cli\//g,'./cli/'))"
+          echo "DEPLOY_DIR=$DEPLOY_DIR" >> "$GITHUB_ENV"
+
       - name: Package
         shell: bash
         timeout-minutes: 90
+        working-directory: ${{ env.DEPLOY_DIR }}
         run: |
           set -euo pipefail
 
@@ -265,7 +283,8 @@ jobs:
             EXTRA_ARGS="-c.mac.notarize=false"
           fi
 
-          pnpm --filter @slayzone/app exec electron-builder ${{ matrix.build_args }} $EXTRA_ARGS -c.electronVersion=${{ env.ELECTRON_VERSION }} --publish never
+          ELECTRON_BUILDER="$(node -e "console.log(require.resolve('electron-builder/out/cli/cli.js',{paths:['${{ github.workspace }}/packages/apps/app']}))")"
+          node "$ELECTRON_BUILDER" ${{ matrix.build_args }} $EXTRA_ARGS -c.electronVersion=${{ env.ELECTRON_VERSION }} --publish never
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ needs.resolve.outputs.mode == 'dry-run' && 'false' || '' }}
@@ -279,7 +298,7 @@ jobs:
         shell: bash
         run: |
           node scripts/release/collect-release-assets.mjs \
-            --input packages/apps/app/dist \
+            --input "${{ env.DEPLOY_DIR }}/dist" \
             --output "${{ runner.temp }}/release-assets/${{ matrix.name }}"
 
       - name: Upload build assets
