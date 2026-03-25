@@ -25,7 +25,19 @@ export default defineConfig(
     },
     rules: {
       ...eslintPluginReactHooks.configs.recommended.rules,
-      ...eslintPluginReactRefresh.configs.vite.rules
+      ...eslintPluginReactRefresh.configs.vite.rules,
+      'no-restricted-imports': ['error', {
+        paths: [{
+          name: 'react-hotkeys-hook',
+          message: 'Use useGuardedHotkeys from @slayzone/ui instead.'
+        }]
+      }]
+    }
+  },
+  {
+    files: ['**/ui/src/useGuardedHotkeys.ts'],
+    rules: {
+      'no-restricted-imports': 'off'
     }
   },
   eslintConfigPrettier

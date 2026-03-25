@@ -1192,6 +1192,9 @@ importers:
       react-hook-form:
         specifier: ^7.71.1
         version: 7.71.1(react@19.2.3)
+      react-hotkeys-hook:
+        specifier: ^5.2.3
+        version: 5.2.3(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       sonner:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.3(react@19.2.3))(react@19.2.3)

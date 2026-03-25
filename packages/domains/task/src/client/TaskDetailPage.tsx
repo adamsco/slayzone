@@ -62,7 +62,7 @@ import { RichTextEditor } from '@slayzone/editor'
 import { markSkipCache, usePty, useTerminalModes, getVisibleModes, getModeLabel, groupTerminalModes } from '@slayzone/terminal'
 import { TerminalContainer, type TerminalContainerHandle } from '@slayzone/task-terminals'
 import { UnifiedGitPanel, type UnifiedGitPanelHandle, type GitTabId } from '@slayzone/worktrees'
-import { buildStatusOptions, cn, getColumnStatusStyle, projectColorBg, useAppearance, matchesShortcut, useShortcutStore, useShortcutDisplay, isModalDialogOpen } from '@slayzone/ui'
+import { buildStatusOptions, cn, getColumnStatusStyle, projectColorBg, useAppearance, matchesShortcut, useShortcutStore, useShortcutDisplay, withModalGuard } from '@slayzone/ui'
 import { BrowserPanel, type BrowserPanelHandle } from '@slayzone/task-browser'
 import { FileEditorView, type FileEditorViewHandle } from '@slayzone/file-editor/client'
 import { QuickOpenDialog } from '@slayzone/file-editor/client/QuickOpenDialog'
@@ -671,10 +671,9 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
       return !!active.closest('.xterm')
     }
 
-    const handleKeyDown = (e: KeyboardEvent): void => {
+    const handleKeyDown = withModalGuard((e: KeyboardEvent): void => {
       if (!isActive) return
       if (useShortcutStore.getState().isRecording) return
-      if (isModalDialogOpen()) return
       if (matchesShortcut(e, useShortcutStore.getState().getKeys('terminal-inject-desc'))) {
         if (!isTerminalFocused()) return
         e.preventDefault()
@@ -687,7 +686,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
         e.preventDefault()
         handleRestartTerminal()
       }
-    }
+    })
     window.addEventListener('keydown', handleKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
   }, [isActive, handleInjectTitle, handleInjectDescription, handleRestartTerminal])
@@ -886,11 +885,10 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
 
   // Cmd+T/B/G/S/E/P + web panel shortcuts for panel toggles
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent): void => {
+    const handleKeyDown = withModalGuard((e: KeyboardEvent): void => {
       if (!isActive) return
       // Cmd+Shift+G: git diff tab toggle
       if (useShortcutStore.getState().isRecording) return
-      if (isModalDialogOpen()) return
       const keys = (id: string) => useShortcutStore.getState().getKeys(id)
 
       if (matchesShortcut(e, keys('editor-search')) && isBuiltinEnabled('editor', 'task')) {
@@ -979,7 +977,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
           }
         }
       }
-    }
+    })
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isActive, panelVisibility, handlePanelToggle, isBuiltinEnabled, enabledWebPanels])

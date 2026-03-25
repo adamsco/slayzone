@@ -6,7 +6,7 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { PanelLeftIcon } from 'lucide-react'
 
 import { useIsMobile } from './use-mobile'
-import { isModalDialogOpen } from './is-modal-dialog-open'
+import { withModalGuard } from './with-modal-guard'
 import { cn } from './utils'
 import { Button } from './button'
 import { Input } from './input'
@@ -91,13 +91,12 @@ function SidebarProvider({
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
+    const handleKeyDown = withModalGuard((event: KeyboardEvent) => {
       if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
-        if (isModalDialogOpen()) return
         event.preventDefault()
         toggleSidebar()
       }
-    }
+    })
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)

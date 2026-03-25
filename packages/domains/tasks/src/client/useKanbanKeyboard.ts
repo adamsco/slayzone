@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useHotkeys } from 'react-hotkeys-hook'
+import { useGuardedHotkeys } from '@slayzone/ui'
 import type { Task } from '@slayzone/task/shared'
 import type { Column } from './kanban'
 
@@ -149,38 +149,38 @@ export function useKanbanKeyboard({
 
   const enabled = isActive && !pickerState && !isDragging
 
-  useHotkeys('j, ArrowDown', (e) => { e.preventDefault(); navigate('down') }, { enabled })
-  useHotkeys('k, ArrowUp', (e) => { e.preventDefault(); navigate('up') }, { enabled })
-  useHotkeys('h, ArrowLeft', (e) => { e.preventDefault(); navigate('left') }, { enabled })
-  useHotkeys('l, ArrowRight', (e) => { e.preventDefault(); navigate('right') }, { enabled })
+  useGuardedHotkeys('j, ArrowDown', (e) => { e.preventDefault(); navigate('down') }, { enabled })
+  useGuardedHotkeys('k, ArrowUp', (e) => { e.preventDefault(); navigate('up') }, { enabled })
+  useGuardedHotkeys('h, ArrowLeft', (e) => { e.preventDefault(); navigate('left') }, { enabled })
+  useGuardedHotkeys('l, ArrowRight', (e) => { e.preventDefault(); navigate('right') }, { enabled })
 
-  useHotkeys('enter', (e) => {
+  useGuardedHotkeys('enter', (e) => {
     if (!focusedTaskId) return
     e.preventDefault()
     const task = findTask(focusedTaskId)
     if (task) onTaskClick?.(task, { metaKey: false })
   }, { enabled })
 
-  useHotkeys('mod+enter', (e) => {
+  useGuardedHotkeys('mod+enter', (e) => {
     if (!focusedTaskId) return
     e.preventDefault()
     const task = findTask(focusedTaskId)
     if (task) onTaskClick?.(task, { metaKey: true })
   }, { enabled })
 
-  useHotkeys('s', (e) => {
+  useGuardedHotkeys('s', (e) => {
     if (!focusedTaskId || !onUpdateTask) return
     e.preventDefault()
     setPickerState({ type: 'status', taskId: focusedTaskId })
   }, { enabled })
 
-  useHotkeys('p', (e) => {
+  useGuardedHotkeys('p', (e) => {
     if (!focusedTaskId || !onUpdateTask) return
     e.preventDefault()
     setPickerState({ type: 'priority', taskId: focusedTaskId })
   }, { enabled })
 
-  useHotkeys('escape', (e) => {
+  useGuardedHotkeys('escape', (e) => {
     if (pickerState) {
       e.preventDefault()
       pickerClosingRef.current = true

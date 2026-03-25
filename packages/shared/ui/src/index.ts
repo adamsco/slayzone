@@ -1,6 +1,8 @@
 // Utilities
 export { cn } from './utils'
 export { isModalDialogOpen } from './is-modal-dialog-open'
+export { withModalGuard } from './with-modal-guard'
+export { useGuardedHotkeys } from './useGuardedHotkeys'
 export {
   shortcutDefinitions,
   formatKeysForDisplay,
