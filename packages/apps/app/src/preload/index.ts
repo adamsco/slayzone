@@ -143,6 +143,11 @@ const api: ElectronAPI = {
       ipcRenderer.on('app:close-task', handler)
       return () => ipcRenderer.removeListener('app:close-task', handler)
     },
+    onBrowserEnsurePanelOpen: (callback: (taskId: string, url?: string) => void) => {
+      const handler = (_: unknown, taskId: string, url?: string) => callback(taskId, url)
+      ipcRenderer.on('browser:ensure-panel-open', handler)
+      return () => ipcRenderer.removeListener('browser:ensure-panel-open', handler)
+    },
     onOpenTask: (callback: (taskId: string) => void) => {
       const handler = (_: unknown, taskId: string) => callback(taskId)
       ipcRenderer.on('app:open-task', handler)

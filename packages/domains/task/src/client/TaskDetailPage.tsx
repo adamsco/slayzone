@@ -1190,6 +1190,19 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
     devServerAutoOpenCallbackRef.current = openDevServerInBrowser
   }, [openDevServerInBrowser])
 
+  // CLI: open browser panel when requested by main process (slay tasks browser --panel=visible)
+  useEffect(() => {
+    if (!isActive || !task) return
+    return window.api.app.onBrowserEnsurePanelOpen((taskId, url) => {
+      if (taskId !== task.id) return
+      if (url) {
+        openDevServerInBrowser(url)
+      } else {
+        handlePanelToggle('browser', true)
+      }
+    })
+  }, [isActive, task?.id, openDevServerInBrowser, handlePanelToggle])
+
   const handleTagsChange = (newTagIds: string[]): void => {
     setTaskTagIds(newTagIds)
   }

@@ -12,7 +12,7 @@ import type { ProviderConfig } from '@slayzone/task/shared'
 import type { ColumnConfig } from '@slayzone/projects/shared'
 import { getDefaultStatus, isKnownStatus, parseColumnsConfig } from '@slayzone/projects/shared'
 import { listAllProcesses, killProcess, subscribeToProcessLogs } from './process-manager'
-import { getBrowserWebContents } from './browser-registry'
+import { getBrowserWebContents, waitForBrowserRegistration } from './browser-registry'
 import { app as electronApp } from 'electron'
 import { join } from 'node:path'
 import { mkdirSync, writeFileSync, readdirSync, unlinkSync, statSync } from 'node:fs'
@@ -419,11 +419,36 @@ export function startMcpServer(db: Database): void {
   // Browser control API for CLI (`slay browser *`)
   const BROWSER_JS_TIMEOUT = 10_000
 
-  function resolveBrowserWc(taskId: string | undefined, res: express.Response): Electron.WebContents | null {
+  interface BrowserWcResult {
+    wc: Electron.WebContents
+    /** true when the panel was just auto-opened (renderer already navigated to `url`) */
+    autoOpened: boolean
+  }
+
+  async function ensureBrowserWc(
+    taskId: string | undefined,
+    panel: 'visible' | 'hidden' | undefined,
+    res: express.Response,
+    url?: string,
+  ): Promise<BrowserWcResult | null> {
     if (!taskId) { res.status(400).json({ error: 'taskId required' }); return null }
     const wc = getBrowserWebContents(taskId)
-    if (!wc) { res.status(404).json({ error: 'Browser panel not found. Is the browser panel open on the first tab?' }); return null }
-    return wc
+    if (wc) return { wc, autoOpened: false }
+
+    if (panel === 'visible') {
+      BrowserWindow.getAllWindows().forEach((win) => {
+        win.webContents.send('browser:ensure-panel-open', taskId, url)
+      })
+      try {
+        return { wc: await waitForBrowserRegistration(taskId), autoOpened: !!url }
+      } catch (err) {
+        res.status(408).json({ error: err instanceof Error ? err.message : String(err) })
+        return null
+      }
+    }
+
+    res.status(404).json({ error: 'Browser panel not found. Is the browser panel open on the first tab?' })
+    return null
   }
 
   function execJs<T>(wc: Electron.WebContents, code: string): Promise<T> {
@@ -437,14 +462,14 @@ export function startMcpServer(db: Database): void {
 
   const ALLOWED_NAVIGATE_SCHEMES = ['http:', 'https:', 'file:']
 
-  app.get('/api/browser/url', (req, res) => {
-    const wc = resolveBrowserWc(req.query.taskId as string, res)
-    if (!wc) return
-    res.json({ url: wc.getURL() })
+  app.get('/api/browser/url', async (req, res) => {
+    const result = await ensureBrowserWc(req.query.taskId as string, (req.query.panel as 'visible' | 'hidden') ?? 'hidden', res)
+    if (!result) return
+    res.json({ url: result.wc.getURL() })
   })
 
   app.post('/api/browser/navigate', async (req, res) => {
-    const { taskId, url } = req.body ?? {}
+    const { taskId, url, panel = 'visible' } = req.body ?? {}
     if (!url) { res.status(400).json({ error: 'url required' }); return }
     try {
       const parsed = new URL(url)
@@ -454,23 +479,24 @@ export function startMcpServer(db: Database): void {
     } catch {
       res.status(400).json({ error: 'Invalid URL' }); return
     }
-    const wc = resolveBrowserWc(taskId, res)
-    if (!wc) return
+    const result = await ensureBrowserWc(taskId, panel, res, url)
+    if (!result) return
     try {
-      await wc.loadURL(url)
-      res.json({ ok: true, url: wc.getURL() })
+      // Skip loadURL when panel was just auto-opened — the renderer already created a tab with this URL
+      if (!result.autoOpened) await result.wc.loadURL(url)
+      res.json({ ok: true, url: result.wc.getURL() })
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
     }
   })
 
   app.post('/api/browser/click', async (req, res) => {
-    const { taskId, selector } = req.body ?? {}
+    const { taskId, selector, panel = 'hidden' } = req.body ?? {}
     if (!selector) { res.status(400).json({ error: 'selector required' }); return }
-    const wc = resolveBrowserWc(taskId, res)
-    if (!wc) return
+    const bwc = await ensureBrowserWc(taskId, panel, res)
+    if (!bwc) return
     try {
-      const result = await execJs<{ ok: boolean; error?: string; tag?: string; text?: string }>(wc, `(() => {
+      const result = await execJs<{ ok: boolean; error?: string; tag?: string; text?: string }>(bwc.wc, `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return { ok: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
         el.scrollIntoView({ block: 'center' });
@@ -485,12 +511,12 @@ export function startMcpServer(db: Database): void {
   })
 
   app.post('/api/browser/type', async (req, res) => {
-    const { taskId, selector, text } = req.body ?? {}
+    const { taskId, selector, text, panel = 'hidden' } = req.body ?? {}
     if (!selector || text == null) { res.status(400).json({ error: 'selector and text required' }); return }
-    const wc = resolveBrowserWc(taskId, res)
-    if (!wc) return
+    const bwc = await ensureBrowserWc(taskId, panel, res)
+    if (!bwc) return
     try {
-      const result = await execJs<{ ok: boolean; error?: string }>(wc, `(() => {
+      const result = await execJs<{ ok: boolean; error?: string }>(bwc.wc, `(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return { ok: false, error: 'Element not found: ' + ${JSON.stringify(selector)} };
         el.scrollIntoView({ block: 'center' });
@@ -511,12 +537,12 @@ export function startMcpServer(db: Database): void {
   })
 
   app.post('/api/browser/eval', async (req, res) => {
-    const { taskId, code } = req.body ?? {}
+    const { taskId, code, panel = 'hidden' } = req.body ?? {}
     if (!code) { res.status(400).json({ error: 'code required' }); return }
-    const wc = resolveBrowserWc(taskId, res)
-    if (!wc) return
+    const bwc = await ensureBrowserWc(taskId, panel, res)
+    if (!bwc) return
     try {
-      const result = await execJs(wc, code)
+      const result = await execJs(bwc.wc, code)
       res.json({ ok: true, result })
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
@@ -524,10 +550,10 @@ export function startMcpServer(db: Database): void {
   })
 
   app.get('/api/browser/content', async (req, res) => {
-    const wc = resolveBrowserWc(req.query.taskId as string, res)
-    if (!wc) return
+    const bwc = await ensureBrowserWc(req.query.taskId as string, (req.query.panel as 'visible' | 'hidden') ?? 'hidden', res)
+    if (!bwc) return
     try {
-      const content = await execJs(wc, `(() => {
+      const content = await execJs(bwc.wc, `(() => {
         const url = location.href;
         const title = document.title;
         const text = (document.body?.innerText || '').slice(0, 50000);
@@ -554,11 +580,11 @@ export function startMcpServer(db: Database): void {
   })
 
   app.post('/api/browser/screenshot', async (req, res) => {
-    const { taskId } = req.body ?? {}
-    const wc = resolveBrowserWc(taskId, res)
-    if (!wc) return
+    const { taskId, panel = 'hidden' } = req.body ?? {}
+    const bwc = await ensureBrowserWc(taskId, panel, res)
+    if (!bwc) return
     try {
-      const image = await wc.capturePage()
+      const image = await bwc.wc.capturePage()
       if (image.isEmpty()) { res.status(500).json({ error: 'Captured image is empty' }); return }
       const dir = join(electronApp.getPath('temp'), 'slayzone', 'browser-screenshots')
       mkdirSync(dir, { recursive: true })
