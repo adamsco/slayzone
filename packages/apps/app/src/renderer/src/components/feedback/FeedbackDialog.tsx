@@ -209,7 +209,7 @@ export function FeedbackDialog(): React.JSX.Element {
         <TooltipContent side="right">Feedback</TooltipContent>
       </Tooltip>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex h-[70vh] max-h-[70vh] flex-col overflow-hidden p-0 sm:max-w-[720px]">
+        <DialogContent className="flex h-[80vh] max-h-[80vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[720px]">
           <DialogHeader className="sr-only">
             <DialogTitle>Feedback</DialogTitle>
             <DialogDescription>Send feedback to the developers</DialogDescription>
@@ -393,6 +393,12 @@ export function FeedbackDialog(): React.JSX.Element {
                 </div>
               )}
             </div>
+          </div>
+          <div className="border-t border-amber-500/20 bg-amber-500/5 px-5 py-4 text-center text-[13px] font-semibold text-amber-400">
+            Want a discussion? Create a{' '}
+            <a href="https://github.com/debuglebowski/slayzone/issues" target="_blank" rel="noopener noreferrer" className="underline decoration-amber-400/40 hover:decoration-amber-400">GitHub issue</a>
+            {' '}or join our{' '}
+            <a href="https://discord.gg/g7xPHXaU98" target="_blank" rel="noopener noreferrer" className="underline decoration-amber-400/40 hover:decoration-amber-400">Discord</a>!
           </div>
         </DialogContent>
       </Dialog>
