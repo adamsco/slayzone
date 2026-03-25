@@ -670,11 +670,14 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
         if (!isTerminalFocused()) return
         e.preventDefault()
         handleInjectTitle()
+      } else if (matchesShortcut(e, useShortcutStore.getState().getKeys('terminal-restart'))) {
+        e.preventDefault()
+        handleRestartTerminal()
       }
     }
     window.addEventListener('keydown', handleKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
-  }, [isActive, handleInjectTitle, handleInjectDescription])
+  }, [isActive, handleInjectTitle, handleInjectDescription, handleRestartTerminal])
 
   // Cmd+Shift+S screenshot trigger from main process
   useEffect(() => {
@@ -890,6 +893,11 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
       if (matchesShortcut(e, keys('browser-element-picker')) && isBuiltinEnabled('browser', 'task') && panelVisibility.browser) {
         e.preventDefault()
         browserPanelRef.current?.pickElement()
+        return
+      }
+      if (matchesShortcut(e, keys('browser-focus-url')) && isBuiltinEnabled('browser', 'task') && panelVisibility.browser) {
+        e.preventDefault()
+        browserPanelRef.current?.focusUrlBar()
         return
       }
       if (matchesShortcut(e, keys('panel-git-diff')) && isBuiltinEnabled('diff', 'task')) {

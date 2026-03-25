@@ -93,6 +93,17 @@ test.describe('Browser panel', () => {
     await expect(tabEntries(mainWindow)).toHaveCount(count - 1)
   })
 
+  test('Cmd+L focuses URL bar when browser is open', async ({ mainWindow }) => {
+    await ensureBrowserPanelVisible(mainWindow)
+
+    // Move focus away from the URL input
+    await focusForAppShortcut(mainWindow)
+    await expect(urlInput(mainWindow)).not.toBeFocused()
+
+    await mainWindow.keyboard.press('Meta+l')
+    await expect(urlInput(mainWindow)).toBeFocused()
+  })
+
   test('Cmd+B toggles browser panel off', async ({ mainWindow }) => {
     await ensureBrowserPanelVisible(mainWindow)
     await focusForAppShortcut(mainWindow)

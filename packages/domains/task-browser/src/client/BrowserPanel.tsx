@@ -3,6 +3,7 @@ import { track } from '@slayzone/telemetry/client'
 import { ArrowLeft, ArrowRight, RotateCw, X, Plus, Import, Smartphone, Monitor, Tablet, LayoutGrid, ChevronDown, Crosshair, Bug, Sun, Moon, PaintbrushVertical, Keyboard, Puzzle, Trash2, Download, TriangleAlert } from 'lucide-react'
 import type { BrowserTabTheme } from '../shared'
 import { BrowserTabPlaceholder, type BrowserTabPlaceholderHandle } from './BrowserTabPlaceholder'
+import { BrowserLoadingAnimation } from './BrowserLoadingAnimation'
 import type { BrowserViewState } from './useBrowserView'
 import {
   Button,
@@ -97,6 +98,7 @@ interface BrowserPanelProps {
 export interface BrowserPanelHandle {
   pickElement: () => void
   reload: () => void
+  focusUrlBar: () => void
 }
 
 function generateTabId(): string {
@@ -354,6 +356,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
   canUseDomPicker = true,
 }: BrowserPanelProps, ref) {
   const { browserDefaultUrl, browserDefaultZoom, browserDeviceDefaults } = useAppearance()
+  const urlInputRef = useRef<HTMLInputElement>(null)
   const [inputUrl, setInputUrl] = useState('')
   const [isFocused, setIsFocused] = useState(false)
   const [otherTaskUrls, setOtherTaskUrls] = useState<TaskUrlEntry[]>([])
@@ -862,6 +865,10 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
     },
     reload: () => {
       activeActions?.reload()
+    },
+    focusUrlBar: () => {
+      urlInputRef.current?.focus()
+      urlInputRef.current?.select()
     }
   }), [handlePickElement, activeActions])
 
@@ -1003,6 +1010,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
         </ContextMenu>
 
         <Input
+          ref={urlInputRef}
           value={inputUrl}
           onChange={(e) => setInputUrl(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -1282,13 +1290,18 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
               url={tab.url || 'about:blank'}
               partition="persist:browser-tabs"
               visible={tab.id === tabs.activeTabId && isActive !== false && !extensionsManagerOpen}
-              hidden={!!loadError || extensionsManagerOpen}
+              hidden={!!loadError || extensionsManagerOpen || (isLoading && !activeViewState.domReady)}
               isResizing={isResizing}
               className="absolute inset-0"
               onStateChange={tab.id === tabs.activeTabId ? setActiveViewState : undefined}
               onOverlayChange={tab.id === tabs.activeTabId ? setHiddenByOverlay : undefined}
             />
           ))}
+          {isLoading && !activeViewState.domReady && !loadError && !hiddenByOverlay && (
+            <div className="absolute inset-0 z-10 bg-[#0a0a0a]">
+              <BrowserLoadingAnimation />
+            </div>
+          )}
           {loadError && (
             <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#1a1a1a] text-neutral-400 gap-3">
               <div className="text-sm font-medium text-neutral-300">Failed to load page</div>

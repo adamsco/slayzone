@@ -255,6 +255,54 @@ test.describe('Terminal clear buffer', () => {
   })
 })
 
+// ── Restart via shortcut ────────────────────────────────────────────────────
+
+test.describe('Terminal restart shortcut', () => {
+  let projectAbbrev: string
+  let taskId: string
+
+  test.beforeAll(async ({ mainWindow }) => {
+    const s = seed(mainWindow)
+    const p = await s.createProject({ name: 'Qr Restart', color: '#a855f7', path: TEST_PROJECT_PATH })
+    projectAbbrev = p.name.slice(0, 2).toUpperCase()
+
+    const t = await s.createTask({ projectId: p.id, title: 'Restart shortcut task', status: 'in_progress' })
+    taskId = t.id
+
+    await mainWindow.evaluate((id) => window.api.db.updateTask({ id, terminalMode: 'terminal' }), taskId)
+    await s.refreshData()
+  })
+
+  test('Cmd+Alt+R kills PTY and spawns a fresh session', async ({ mainWindow }) => {
+    const marker = `PRE_RESTART_${Date.now()}`
+
+    await openTaskTerminal(mainWindow, { projectAbbrev, taskTitle: 'Restart shortcut task' })
+
+    const sessionId = getMainSessionId(taskId)
+    await waitForPtySession(mainWindow, sessionId)
+    await runCommand(mainWindow, sessionId, `echo ${marker}`)
+    await waitForBufferContains(mainWindow, sessionId, marker)
+    await waitForPtyState(mainWindow, sessionId, 'attention')
+
+    // Focus terminal so shortcut reaches the handler
+    await mainWindow.evaluate(() => {
+      const textareas = document.querySelectorAll('.xterm-helper-textarea')
+      const target = textareas[textareas.length - 1] as HTMLTextAreaElement | null
+      target?.focus()
+    })
+
+    await mainWindow.keyboard.press('Meta+Alt+r')
+
+    // PTY should respawn — wait for a fresh session
+    await waitForPtySession(mainWindow, sessionId)
+    await waitForPtyState(mainWindow, sessionId, 'attention')
+
+    // Old buffer content should be gone
+    const buffer = await readFullBuffer(mainWindow, sessionId)
+    expect(buffer).not.toContain(marker)
+  })
+})
+
 // ── Trailing output on exit ─────────────────────────────────────────────────
 
 test.describe('Trailing PTY output on exit', () => {

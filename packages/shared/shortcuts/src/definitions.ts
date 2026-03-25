@@ -57,6 +57,10 @@ export const shortcutDefinitions: ShortcutDefinition[] = [
   { id: 'terminal-clear', label: 'Clear Buffer', group: 'Terminal', defaultKeys: 'mod+shift+k', scope: 'terminal' },
   { id: 'terminal-new-group', label: 'New Group', group: 'Terminal', defaultKeys: 'mod+t', scope: 'terminal' },
   { id: 'terminal-split', label: 'Split', group: 'Terminal', defaultKeys: 'mod+d', scope: 'terminal' },
+  { id: 'terminal-restart', label: 'Restart', group: 'Terminal', defaultKeys: 'mod+alt+r', scope: 'terminal' },
+
+  // Browser (task-panel scope)
+  { id: 'browser-focus-url', label: 'Focus URL Bar', group: 'Task Panels', defaultKeys: 'mod+l', scope: 'task-panel' },
 ]
 
 /** Shortcut IDs that are driven by Electron native menu accelerators. */
