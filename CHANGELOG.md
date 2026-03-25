@@ -1,6 +1,41 @@
 # Changelog
 
 
+## v0.10.0
+
+[compare changes](https://github.com/debuglebowski/slayzone/compare/v0.9.0...v0.10.0)
+
+### 🚀 Enhancements
+
+- Add Qwen Code CLI integration - Add qwen-code terminal adapter with session detection, error handling, and validation - Register Qwen Code in AI config provider registry with MCP support - Update onboarding dialog and task detail UI to include Qwen Code option ([dda85049](https://github.com/debuglebowski/slayzone/commit/dda85049))
+- **usage-analytics:** Add Qwen Code usage tracking parser - Add parseQwenFiles() to parse ~/.qwen/projects/<project>/chats/*.jsonl - Integrate Qwen parser into refreshUsageData cache refresh - Add qwen-code provider to PROVIDER_USAGE_SUPPORT - Update UI messaging to include Qwen in supported providers ([9b27735c](https://github.com/debuglebowski/slayzone/commit/9b27735c))
+- **provider:** Add support for Qwen ([7493dd1f](https://github.com/debuglebowski/slayzone/commit/7493dd1f))
+- **release:** Group discord notification items by category ([cb784232](https://github.com/debuglebowski/slayzone/commit/cb784232))
+- **browser:** Screenshot browser view directly instead of region selection ([d6633816](https://github.com/debuglebowski/slayzone/commit/d6633816))
+
+### 🩹 Fixes
+
+- Add missing Qwen entry for migration ([23bd7af8](https://github.com/debuglebowski/slayzone/commit/23bd7af8))
+- Improve terminal adapters and usage analytics parsers ([760d5d5d](https://github.com/debuglebowski/slayzone/commit/760d5d5d))
+- **provider:** Qwen adapter error check on stripped data, parser dedup collision ([f5fd4253](https://github.com/debuglebowski/slayzone/commit/f5fd4253))
+- **shortcuts:** Disable global shortcuts when modal dialogs are open ([#46](https://github.com/debuglebowski/slayzone/pull/46))
+- **browser:** Let native edit shortcuts pass through to browser view ([d310f2c8](https://github.com/debuglebowski/slayzone/commit/d310f2c8))
+- **browser:** Use mainFrame.executeJavaScript for browser view JS execution ([8b0ae88c](https://github.com/debuglebowski/slayzone/commit/8b0ae88c))
+
+### 💅 Refactors
+
+- **shortcuts:** Replace manual modal guards with useGuardedHotkeys + withModalGuard ([9f743695](https://github.com/debuglebowski/slayzone/commit/9f743695))
+
+### 🏡 Chore
+
+- **nix:** Update sources to 0.9.0 ([1545845c](https://github.com/debuglebowski/slayzone/commit/1545845c))
+
+### ❤️ Contributors
+
+- Debuglebowski
+- Adam Scott ([@adamsco](https://github.com/adamsco))
+- Kdrapel ([@kdrapel](https://github.com/kdrapel))
+
 ## v0.9.0
 
 [compare changes](https://github.com/debuglebowski/slayzone/compare/v0.8.0...v0.9.0)

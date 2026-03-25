@@ -1,5 +1,37 @@
 [
   {
+    "version": "0.10.0",
+    "date": "2026-03-25",
+    "tagline": "Qwen Code & browser upgrades",
+    "items": [
+      {
+        "category": "feature",
+        "title": "Qwen Code CLI integration",
+        "description": "Full support for Qwen Code as an AI coding assistant with session detection, usage tracking, and MCP support."
+      },
+      {
+        "category": "feature",
+        "title": "Browser screenshot capture",
+        "description": "Screenshot the browser view directly instead of requiring region selection."
+      },
+{
+        "category": "fix",
+        "title": "Shortcuts blocked by modals",
+        "description": "Global keyboard shortcuts no longer fire when a modal dialog is open."
+      },
+      {
+        "category": "fix",
+        "title": "Browser edit shortcuts",
+        "description": "Native edit shortcuts (cut, copy, paste) now pass through to the browser view correctly."
+      },
+      {
+        "category": "fix",
+        "title": "Browser JS execution",
+        "description": "Fixed browser view JavaScript execution to use the correct frame context."
+      }
+    ]
+  },
+  {
     "version": "0.9.0",
     "date": "2026-03-25",
     "tagline": "Shortcuts & polish",
