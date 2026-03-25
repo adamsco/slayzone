@@ -1,33 +1,30 @@
-import { ipcMain, app, BrowserWindow } from 'electron'
+import { ipcMain, app, webContents } from 'electron'
 import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { mkdirSync, writeFileSync } from 'fs'
+import type { BrowserViewManager } from './browser-view-manager'
 
-export function registerScreenshotHandlers(): void {
+export function registerScreenshotHandlers(browserViewManager: BrowserViewManager): void {
   ipcMain.handle(
-    'screenshot:captureRegion',
-    async (event, rect: { x: number; y: number; width: number; height: number }) => {
-      const win = BrowserWindow.fromWebContents(event.sender)
-      if (!win) return { success: false }
+    'screenshot:captureView',
+    async (_event, viewId: string) => {
+      const wcId = browserViewManager.getWebContentsId(viewId)
+      if (wcId == null) return { success: false }
+      const wc = webContents.fromId(wcId)
+      if (!wc || wc.isDestroyed()) return { success: false }
 
-      // Account for device pixel ratio (Retina)
-      const scaleFactor = win.webContents.getZoomFactor()
-      const captureRect = {
-        x: Math.round(rect.x * scaleFactor),
-        y: Math.round(rect.y * scaleFactor),
-        width: Math.round(rect.width * scaleFactor),
-        height: Math.round(rect.height * scaleFactor)
+      try {
+        const image = await wc.capturePage()
+        if (image.isEmpty()) return { success: false }
+
+        const dir = join(app.getPath('temp'), 'slayzone')
+        mkdirSync(dir, { recursive: true })
+        const filePath = join(dir, `${randomUUID()}.png`)
+        writeFileSync(filePath, image.toPNG())
+        return { success: true, path: filePath }
+      } catch {
+        return { success: false }
       }
-
-      const image = await win.webContents.capturePage(captureRect)
-      if (image.isEmpty()) return { success: false }
-
-      const dir = join(app.getPath('temp'), 'slayzone')
-      mkdirSync(dir, { recursive: true })
-      const filePath = join(dir, `${randomUUID()}.png`)
-      writeFileSync(filePath, image.toPNG())
-
-      return { success: true, path: filePath }
     }
   )
 }

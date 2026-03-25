@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle, createRef } from 'react'
 import { track } from '@slayzone/telemetry/client'
-import { ArrowLeft, ArrowRight, RotateCw, X, Plus, Import, Smartphone, Monitor, Tablet, LayoutGrid, ChevronDown, Crosshair, Bug, Sun, Moon, PaintbrushVertical, Keyboard, Puzzle, Trash2, Download, TriangleAlert } from 'lucide-react'
+import { ArrowLeft, ArrowRight, RotateCw, X, Plus, Import, Smartphone, Monitor, Tablet, LayoutGrid, ChevronDown, Crosshair, Camera, Bug, Sun, Moon, PaintbrushVertical, Keyboard, Puzzle, Trash2, Download, TriangleAlert } from 'lucide-react'
 import type { BrowserTabTheme } from '../shared'
 import { BrowserTabPlaceholder, type BrowserTabPlaceholderHandle } from './BrowserTabPlaceholder'
 import { BrowserLoadingAnimation } from './BrowserLoadingAnimation'
@@ -93,6 +93,7 @@ interface BrowserPanelProps {
   isResizing?: boolean
   isActive?: boolean
   onElementSnippet?: (snippet: string) => void
+  onScreenshot?: (viewId: string) => void
   canUseDomPicker?: boolean
 }
 
@@ -100,6 +101,7 @@ export interface BrowserPanelHandle {
   pickElement: () => void
   reload: () => void
   focusUrlBar: () => void
+  getActiveViewId: () => string | null
 }
 
 function generateTabId(): string {
@@ -354,6 +356,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
   isResizing,
   isActive,
   onElementSnippet,
+  onScreenshot,
   canUseDomPicker = true,
 }: BrowserPanelProps, ref) {
   const { browserDefaultUrl, browserDefaultZoom, browserDeviceDefaults } = useAppearance()
@@ -885,7 +888,8 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
     focusUrlBar: () => {
       urlInputRef.current?.focus()
       urlInputRef.current?.select()
-    }
+    },
+    getActiveViewId: () => activeViewId
   }), [handlePickElement, activeActions])
 
   useEffect(() => {
@@ -1121,6 +1125,26 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
                 : `Pick element (${elementPickerShortcut})`}
           </TooltipContent>
         </Tooltip>
+
+        {onScreenshot && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <IconButton
+                  aria-label="Screenshot to terminal"
+                  data-testid="browser-screenshot"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={extensionsManagerOpen || !activeViewId || !webviewReady}
+                  onClick={() => activeViewId && onScreenshot(activeViewId)}
+                >
+                  <Camera className="size-4" />
+                </IconButton>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>Screenshot to terminal</TooltipContent>
+          </Tooltip>
+        )}
 
         <Tooltip>
           <TooltipTrigger asChild>

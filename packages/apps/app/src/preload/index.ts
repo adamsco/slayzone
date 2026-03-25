@@ -498,7 +498,7 @@ const api: ElectronAPI = {
     test: (config: any) => ipcRenderer.invoke('usage:test', config)
   },
   screenshot: {
-    captureRegion: (rect) => ipcRenderer.invoke('screenshot:captureRegion', rect)
+    captureView: (viewId: string) => ipcRenderer.invoke('screenshot:captureView', viewId)
   },
   webview: {
     registerShortcuts: (webviewId) =>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { MoreHorizontal, Archive, Trash2, AlertTriangle, Loader2, Terminal as TerminalIcon, Globe, Settings2, GitBranch, FileCode, ChevronRight, Plus, GripVertical, Camera, X, Info, CheckCircle2, XCircle, Stethoscope, Cpu, Maximize2, Circle } from 'lucide-react'
+import { MoreHorizontal, Archive, Trash2, AlertTriangle, Loader2, Terminal as TerminalIcon, Globe, Settings2, GitBranch, FileCode, ChevronRight, Plus, GripVertical, X, Info, CheckCircle2, XCircle, Stethoscope, Cpu, Maximize2, Circle } from 'lucide-react'
 import { DescriptionDialog } from './DescriptionDialog'
 import { DndContext, PointerSensor, useSensors, useSensor, closestCenter, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable'
@@ -72,7 +72,6 @@ import { usePanelSizes, resolveWidths } from './usePanelSizes'
 import { usePanelConfig } from './usePanelConfig'
 import { WebPanelView } from './WebPanelView'
 import { ResizeHandle } from './ResizeHandle'
-import { RegionSelector } from './RegionSelector'
 import { ProcessesPanel } from './ProcessesPanel'
 // ErrorBoundary should be provided by the app when rendering this component
 
@@ -234,7 +233,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
   const panelGitShortcut = useShortcutDisplay('panel-git')
   const panelProcessesShortcut = useShortcutDisplay('panel-processes')
   const panelSettingsShortcut = useShortcutDisplay('panel-settings')
-  const terminalScreenshotShortcut = useShortcutDisplay('terminal-screenshot')
+
   const terminalInjectTitleShortcut = useShortcutDisplay('terminal-inject-title')
   const terminalInjectDescShortcut = useShortcutDisplay('terminal-inject-desc')
   const terminalRestartShortcut = useShortcutDisplay('terminal-restart')
@@ -619,26 +618,13 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
     await terminalApiRef.current.sendInput(task.title)
   }, [task])
 
-  // Screenshot: show region selector, then capture and inject
-  const [showRegionSelector, setShowRegionSelector] = useState(false)
-
-  const handleScreenshot = useCallback(() => {
-    setShowRegionSelector(true)
-  }, [])
-
-  const handleRegionSelect = useCallback(async (rect: { x: number; y: number; width: number; height: number }) => {
-    setShowRegionSelector(false)
-    // Small delay to let the overlay unmount before capturing
-    await new Promise(r => setTimeout(r, 50))
-    const result = await window.api.screenshot.captureRegion(rect)
+  // Screenshot: capture browser view and inject path into terminal
+  const handleScreenshot = useCallback(async (viewId: string) => {
+    const result = await window.api.screenshot.captureView(viewId)
     if (!result.success || !result.path) return
     track('screenshot_captured')
     const escaped = result.path.includes(' ') ? `"${result.path}"` : result.path
     await terminalApiRef.current?.write(escaped)
-  }, [])
-
-  const handleRegionCancel = useCallback(() => {
-    setShowRegionSelector(false)
   }, [])
 
   const handleInsertElementSnippet = useCallback(async (snippet: string) => {
@@ -695,7 +681,8 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
   useEffect(() => {
     if (!isActive) return
     return window.api.app.onScreenshotTrigger(() => {
-      void handleScreenshot()
+      const viewId = browserPanelRef.current?.getActiveViewId()
+      if (viewId) void handleScreenshot(viewId)
     })
   }, [isActive, handleScreenshot])
 
@@ -1271,9 +1258,6 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
           <span className="text-[10px] text-muted-foreground shrink-0">{task.terminal_mode}</span>
         </div>
       )}
-      {!compact && showRegionSelector && (
-        <RegionSelector onSelect={handleRegionSelect} onCancel={handleRegionCancel} />
-      )}
       {/* Header */}
       {!compact && <header className="shrink-0 relative">
         <div>
@@ -1709,15 +1693,6 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
                             )
                           )}
 
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <IconButton variant="ghost" aria-label="Screenshot to terminal" className="size-7" onClick={() => void handleScreenshot()}>
-                                <Camera className="size-3.5" />
-                              </IconButton>
-                            </TooltipTrigger>
-                            <TooltipContent>Screenshot to terminal ({terminalScreenshotShortcut})</TooltipContent>
-                          </Tooltip>
-
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <IconButton data-testid="terminal-menu-trigger" variant="ghost" aria-label="Terminal menu" className="size-7">
@@ -1803,6 +1778,7 @@ export const TaskDetailPage = React.memo(function TaskDetailPage({
               isResizing={isResizing}
               isActive={isActive}
               onElementSnippet={handleInsertElementSnippet}
+              onScreenshot={handleScreenshot}
               canUseDomPicker={panelVisibility.terminal}
             />
           </div>

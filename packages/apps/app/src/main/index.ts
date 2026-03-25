@@ -1011,7 +1011,7 @@ app.whenReady().then(async () => {
   registerAiConfigHandlers(ipcMain, db)
   const integrationHandles = registerIntegrationHandlers(ipcMain, db, { enableTestChannels: isPlaywright })
   registerFileEditorHandlers(ipcMain)
-  registerScreenshotHandlers()
+  registerScreenshotHandlers(browserViewManager)
   registerExportImportHandlers(ipcMain, db, isPlaywright)
   registerLeaderboardHandlers(ipcMain, db)
   registerTestPanelHandlers(ipcMain, db)

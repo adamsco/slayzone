@@ -556,12 +556,7 @@ export interface ElectronAPI {
     onFileChanged: (callback: (rootPath: string, relPath: string) => void) => () => void
   }
   screenshot: {
-    captureRegion: (rect: {
-      x: number
-      y: number
-      width: number
-      height: number
-    }) => Promise<{ success: boolean; path?: string }>
+    captureView: (viewId: string) => Promise<{ success: boolean; path?: string }>
   }
   leaderboard: {
     getLocalStats: () => Promise<LocalLeaderboardStats>
