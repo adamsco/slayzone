@@ -46,11 +46,25 @@ if (!entry) {
   process.exit(0)
 }
 
-const icons = { feature: '🚀', improvement: '✨', fix: '🐛' }
+const groups = {
+  feature: { label: '🚀  New', items: [] },
+  improvement: { label: '✨  Improved', items: [] },
+  fix: { label: '🐛  Fixed', items: [] },
+}
 
-const description = entry.items
-  .map((i) => `${icons[i.category] || '•'}  **${i.title}** — ${i.description}`)
-  .join('\n')
+for (const item of entry.items) {
+  const group = groups[item.category]
+  if (group) group.items.push(item)
+}
+
+const description = Object.values(groups)
+  .filter((g) => g.items.length > 0)
+  .map(
+    (g) =>
+      `**${g.label}**\n` +
+      g.items.map((i) => `> **${i.title}** — ${i.description}`).join('\n')
+  )
+  .join('\n\n')
 
 const payload = {
   embeds: [
