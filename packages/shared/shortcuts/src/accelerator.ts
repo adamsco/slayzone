@@ -50,6 +50,11 @@ export function matchesShortcut(e: KeyboardEvent, keys: string): boolean {
   if (wantShift !== e.shiftKey) return false
   if (wantAlt !== e.altKey) return false
 
+  // On macOS, Alt produces special characters (e.g. Alt+R → ®), so e.key won't
+  // match the shortcut letter. Fall back to e.code (e.g. "KeyR" → "r") when Alt is held.
+  if (wantAlt && isMac && e.code && key.length === 1) {
+    return e.code.replace(/^Key/, '').toLowerCase() === key
+  }
   return e.key.toLowerCase() === key
 }
 
@@ -57,6 +62,7 @@ export function matchesShortcut(e: KeyboardEvent, keys: string): boolean {
 export interface ElectronInput {
   type: string
   key: string
+  code?: string
   meta: boolean
   control: boolean
   shift: boolean
@@ -89,5 +95,9 @@ export function matchesElectronInput(input: ElectronInput, keys: string): boolea
   if (wantShift !== input.shift) return false
   if (wantAlt !== input.alt) return false
 
+  // On macOS, Alt produces special characters (e.g. Alt+R → ®). Fall back to code.
+  if (wantAlt && isMac && input.code && key.length === 1) {
+    return input.code.replace(/^Key/, '').toLowerCase() === key
+  }
   return input.key.toLowerCase() === key
 }

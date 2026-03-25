@@ -83,6 +83,14 @@ describe('matchesShortcut', () => {
   it('does not match mod+k when extra modifiers pressed', () => {
     expect(matchesShortcut(makeKeyEvent({ key: 'k', metaKey: true, shiftKey: true }), 'mod+k')).toBe(false)
   })
+
+  it('matches mod+alt+r via e.code when macOS Alt produces dead key (®)', () => {
+    expect(matchesShortcut(makeKeyEvent({ key: '®', code: 'KeyR', metaKey: true, altKey: true }), 'mod+alt+r')).toBe(true)
+  })
+
+  it('matches mod+alt+r when e.key is already correct', () => {
+    expect(matchesShortcut(makeKeyEvent({ key: 'r', code: 'KeyR', metaKey: true, altKey: true }), 'mod+alt+r')).toBe(true)
+  })
 })
 
 describe('shortcutDefinitions', () => {
@@ -188,6 +196,10 @@ describe('matchesElectronInput', () => {
 
   it('key comparison is case-insensitive', () => {
     expect(matchesElectronInput(makeInput({ key: 'S', meta: true, shift: true }), 'mod+shift+s')).toBe(true)
+  })
+
+  it('matches mod+alt+r via code when macOS Alt produces dead key (®)', () => {
+    expect(matchesElectronInput(makeInput({ key: '®', code: 'KeyR', meta: true, alt: true }), 'mod+alt+r')).toBe(true)
   })
 })
 
