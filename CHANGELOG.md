@@ -1,6 +1,56 @@
 # Changelog
 
 
+## v0.8.0
+
+[compare changes](https://github.com/debuglebowski/slayzone/compare/v0.7.0...v0.8.0)
+
+### 🚀 Enhancements
+
+- **cli:** Add --description flag to create, update, subtask-add ([#43](https://github.com/debuglebowski/slayzone/pull/43))
+- **task:** Set converted temporary tasks to in-progress status ([9fb165a](https://github.com/debuglebowski/slayzone/commit/9fb165a))
+- **ui:** Add close button to toast notifications ([dd75c79](https://github.com/debuglebowski/slayzone/commit/dd75c79))
+- Add shortcut definitions registry and display utilities ([3c67aad](https://github.com/debuglebowski/slayzone/commit/3c67aad))
+- Add Zustand shortcut store with IPC wiring ([f63880b](https://github.com/debuglebowski/slayzone/commit/f63880b))
+- Add KeyRecorder component for shortcut capture ([819c605](https://github.com/debuglebowski/slayzone/commit/819c605))
+- Make shortcuts dialog interactive with rebinding support ([da51bb0](https://github.com/debuglebowski/slayzone/commit/da51bb0))
+- Use dynamic shortcut bindings in App.tsx hotkey handlers ([fd76ad2](https://github.com/debuglebowski/slayzone/commit/fd76ad2))
+- Rebuild Electron menu on shortcut changes ([49d76be](https://github.com/debuglebowski/slayzone/commit/49d76be))
+- Wire Task Panels and Terminal shortcuts to shortcut store ([816d695](https://github.com/debuglebowski/slayzone/commit/816d695))
+- Warn about cross-scope shortcut shadows ([951c2dd](https://github.com/debuglebowski/slayzone/commit/951c2dd))
+- **worktree:** Multi-fallback branch cleanup on worktree removal ([fa9fb72](https://github.com/debuglebowski/slayzone/commit/fa9fb72))
+- **shortcuts:** Register missing shortcuts, wire TaskDetailPage to store ([66b8232](https://github.com/debuglebowski/slayzone/commit/66b8232))
+- **changelog:** Auto-expand all new versions in What's New dialog ([77a1876](https://github.com/debuglebowski/slayzone/commit/77a1876))
+
+### 🩹 Fixes
+
+- **task:** Make task/project props instead of local state to fix stale cwd ([#38](https://github.com/debuglebowski/slayzone/pull/38))
+- **cli:** Use uniform === undefined guard in tasks update ([19007e2](https://github.com/debuglebowski/slayzone/commit/19007e2))
+- Swap keys on conflict reassign instead of removing override ([dcac80b](https://github.com/debuglebowski/slayzone/commit/dcac80b))
+- Ensure App.tsx re-renders on shortcut override changes ([c98ad72](https://github.com/debuglebowski/slayzone/commit/c98ad72))
+- Address PR review feedback ([fdba31e](https://github.com/debuglebowski/slayzone/commit/fdba31e))
+- **ci:** Grant contents:write to release PR dry-run workflow ([033cf6b](https://github.com/debuglebowski/slayzone/commit/033cf6b))
+
+### 💅 Refactors
+
+- Remove unused isCustomized and removeOverride from shortcut store ([b4e0c34](https://github.com/debuglebowski/slayzone/commit/b4e0c34))
+- **shortcuts:** Extract @slayzone/shortcuts package, fix before-input-event overrides ([dd1ac20](https://github.com/debuglebowski/slayzone/commit/dd1ac20))
+
+### 🏡 Chore
+
+- **nix:** Update sources to 0.7.0 ([3d98c4c](https://github.com/debuglebowski/slayzone/commit/3d98c4c))
+- **website:** Replace legacy build with @astrojs/sitemap ([f5f4ae0](https://github.com/debuglebowski/slayzone/commit/f5f4ae0))
+
+### ✅ Tests
+
+- Add unit tests for shortcut utilities and E2E for custom shortcuts ([a1abd98](https://github.com/debuglebowski/slayzone/commit/a1abd98))
+
+### ❤️ Contributors
+
+- Debuglebowski
+- Adam Scott ([@adamsco](https://github.com/adamsco))
+- TheoBerglin
+
 ## v0.7.0
 
 [compare changes](https://github.com/debuglebowski/slayzone/compare/v0.6.1...v0.7.0)

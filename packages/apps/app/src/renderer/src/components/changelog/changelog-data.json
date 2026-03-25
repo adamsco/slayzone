@@ -1,5 +1,47 @@
 [
   {
+    "version": "0.8.0",
+    "date": "2026-03-25",
+    "tagline": "Your keys, your way",
+    "items": [
+      {
+        "category": "feature",
+        "title": "Custom keyboard shortcuts",
+        "description": "Rebind any shortcut from the new shortcuts dialog — conflicts are detected and swapped automatically."
+      },
+      {
+        "category": "feature",
+        "title": "CLI --description flag",
+        "description": "Set task descriptions directly from the Slay CLI with --description on create, update, and subtask-add."
+      },
+      {
+        "category": "improvement",
+        "title": "Closable toast notifications",
+        "description": "Toast notifications now have a close button so you can dismiss them immediately."
+      },
+      {
+        "category": "improvement",
+        "title": "Smarter worktree branch cleanup",
+        "description": "Removing a worktree now tries multiple strategies to clean up its branch."
+      },
+      {
+        "category": "improvement",
+        "title": "What's New auto-expands new versions",
+        "description": "The changelog dialog automatically expands all versions you haven't seen yet."
+      },
+      {
+        "category": "fix",
+        "title": "Stale task CWD",
+        "description": "Task and project are now props instead of local state, fixing stale working directories."
+      },
+      {
+        "category": "fix",
+        "title": "Temporary task conversion",
+        "description": "Converting a temporary task now correctly sets it to in-progress status."
+      }
+    ]
+  },
+  {
     "version": "0.7.0",
     "date": "2026-03-23",
     "tagline": "Browse better",
