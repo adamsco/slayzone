@@ -209,7 +209,7 @@ export function FeedbackDialog(): React.JSX.Element {
         <TooltipContent side="right">Feedback</TooltipContent>
       </Tooltip>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex h-[80vh] max-h-[80vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[720px]">
+        <DialogContent className="flex h-[60vh] max-h-[60vh] w-[1100px] !max-w-[1100px] flex-col gap-0 overflow-hidden p-0">
           <DialogHeader className="sr-only">
             <DialogTitle>Feedback</DialogTitle>
             <DialogDescription>Send feedback to the developers</DialogDescription>
