@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Check, AlertCircle, Circle, Trash2, Sparkles } from 'lucide-react'
 import { cn } from '@slayzone/ui'
+import { buildDefaultSkillContent } from '../shared'
 import type { AiConfigItem, AiConfigItemType, CliProvider, ProjectSkillStatus, SyncHealth, UpdateAiConfigItemInput } from '../shared'
 import { PROVIDER_LABELS } from '../shared/provider-registry'
 import { GlobalItemPicker } from './GlobalItemPicker'
@@ -88,13 +89,13 @@ export function ProjectSkills({ projectId, projectPath, type, openPickerTrigger,
   }
 
   const handleCreate = async () => {
-    const defaultContent = '---\ndescription: \ntrigger: auto\n---\n\n'
+    const slug = 'new-skill'
     const created = await window.api.aiConfig.createItem({
       type: 'skill',
       scope: 'project',
       projectId,
-      slug: 'new-skill',
-      content: defaultContent
+      slug,
+      content: buildDefaultSkillContent(slug)
     })
     setLocalItems(prev => [created, ...prev])
     setEditingId(created.id)

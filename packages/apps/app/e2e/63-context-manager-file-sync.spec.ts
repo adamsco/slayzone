@@ -30,6 +30,14 @@ const codexOnlyWithUnmanagedClaudeContent = '# Codex-only with unmanaged claude 
 const manageableUnmanagedSkillContent = '# unmanaged skill to manage\n'
 const frontmatterMismatchSkillInitialContent = '# Frontmatter mismatch body\n\nSame body.\n'
 const frontmatterMismatchSkillDbContent = '---\nname: e2e-frontmatter-mismatch-skill\ndescription: DB frontmatter mismatch\n---\n# Frontmatter mismatch body\n\nSame body.\n'
+const releasePromptBody = `Create a new release for SlayZone. The version argument is: patch
+
+## Steps
+
+1. Determine version
+2. Bump version
+3. Generate changelog
+`
 
 // Disk paths
 const claudeInstructionsPath = () => path.join(TEST_PROJECT_PATH, 'CLAUDE.md')
@@ -324,36 +332,37 @@ test.describe('Context manager file sync', () => {
       // Verify content editor visible
       const content = dialog.getByTestId('skill-detail-content')
       await expect(content).toBeVisible({ timeout: 5_000 })
-      await expect(content).toHaveValue(skillContentV1, { timeout: 5_000 })
+      await expect(content).toHaveValue(new RegExp(`---\\nname: ${skillSlug}[\\s\\S]*${skillContentV1.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`), { timeout: 5_000 })
 
       // Edit and verify auto-save
-      await content.fill(skillContentV2)
+      await content.fill(skillDocument(skillSlug, skillContentV2))
 
       await expect.poll(async () => {
-        return await mainWindow.evaluate(async (slug) => {
+        return await mainWindow.evaluate(async ({ slug, expectedBody }) => {
           const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
           const match = items.find((i) => i.slug === slug)
-          return match?.content ?? null
-        }, skillSlug)
-      }, { timeout: 5_000 }).toBe(skillContentV2)
+          return !!match?.content.includes(`name: ${slug}`) && !!match?.content.includes(expectedBody.trim())
+        }, { slug: skillSlug, expectedBody: skillContentV2 })
+      }, { timeout: 5_000 }).toBe(true)
 
       await closeTopDialog(mainWindow)
     })
 
     test('Config → File pushes skill to specific provider', async ({ mainWindow }) => {
-      const pendingContent = `# File sync skill provider push\n\n${Date.now()}\n`
+      const pendingBody = `# File sync skill provider push\n\n${Date.now()}\n`
+      const pendingContent = skillDocument(skillSlug, pendingBody)
       const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       await openSkillEditPanel(dialog, skillSlug)
       const content = dialog.getByTestId('skill-detail-content')
       await expect(content).toBeVisible({ timeout: 5_000 })
       await content.fill(pendingContent)
       await expect.poll(async () => {
-        return await mainWindow.evaluate(async (slug) => {
+        return await mainWindow.evaluate(async ({ slug, expectedBody }) => {
           const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
           const match = items.find((i) => i.slug === slug)
-          return match?.content ?? null
-        }, skillSlug)
-      }, { timeout: 5_000 }).toBe(pendingContent)
+          return !!match?.content.includes(`name: ${slug}`) && !!match?.content.includes(expectedBody.trim())
+        }, { slug: skillSlug, expectedBody: pendingBody })
+      }, { timeout: 5_000 }).toBe(true)
       await openSkillSyncPanel(dialog, skillSlug)
 
       const pushClaude = dialog.getByTestId(`skill-push-claude-${skillSlug}`)
@@ -363,7 +372,7 @@ test.describe('Context manager file sync', () => {
       // Verify .claude/skills/{slug}/SKILL.md written with frontmatter
       await expect.poll(() => {
         const content = readFileSafe(claudeSkillPath())
-        return content.includes(`name: ${skillSlug}`) && content.includes(pendingContent.trim())
+        return content.includes(`name: ${skillSlug}`) && content.includes(pendingBody.trim())
       }).toBe(true)
 
       // Verify claude card shows synced
@@ -374,19 +383,20 @@ test.describe('Context manager file sync', () => {
     })
 
     test('Config → All Files pushes to all providers', async ({ mainWindow }) => {
-      const pendingContent = `# File sync skill push all\n\n${Date.now()}\n`
+      const pendingBody = `# File sync skill push all\n\n${Date.now()}\n`
+      const pendingContent = skillDocument(skillSlug, pendingBody)
       const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
       await openSkillEditPanel(dialog, skillSlug)
       const content = dialog.getByTestId('skill-detail-content')
       await expect(content).toBeVisible({ timeout: 5_000 })
       await content.fill(pendingContent)
       await expect.poll(async () => {
-        return await mainWindow.evaluate(async (slug) => {
+        return await mainWindow.evaluate(async ({ slug, expectedBody }) => {
           const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
           const match = items.find((i) => i.slug === slug)
-          return match?.content ?? null
-        }, skillSlug)
-      }, { timeout: 5_000 }).toBe(pendingContent)
+          return !!match?.content.includes(`name: ${slug}`) && !!match?.content.includes(expectedBody.trim())
+        }, { slug: skillSlug, expectedBody: pendingBody })
+      }, { timeout: 5_000 }).toBe(true)
       await openSkillSyncPanel(dialog, skillSlug)
 
       const pushAll = dialog.getByTestId(`skill-push-all-${skillSlug}`)
@@ -396,9 +406,9 @@ test.describe('Context manager file sync', () => {
       // Verify both provider files on disk
       await expect.poll(() => {
         const content = readFileSafe(claudeSkillPath())
-        return content.includes(`name: ${skillSlug}`) && content.includes(pendingContent.trim())
+        return content.includes(`name: ${skillSlug}`) && content.includes(pendingBody.trim())
       }).toBe(true)
-      await expect.poll(() => readFileSafe(codexSkillPath())).toBe(pendingContent)
+      await expect.poll(() => readFileSafe(codexSkillPath())).toBe(pendingBody)
 
       // Verify both cards show synced
       await expect(dialog.getByTestId(`skill-provider-card-claude-${skillSlug}`)).toContainText('Synced', { timeout: 5_000 })
@@ -443,7 +453,7 @@ test.describe('Context manager file sync', () => {
       await closeTopDialog(mainWindow)
     })
 
-    test('File → Config pulls from disk and strips frontmatter', async ({ mainWindow }) => {
+    test('File → Config pulls from disk and keeps raw frontmatter', async ({ mainWindow }) => {
       const modified = '---\nname: modified\n---\n# Modified externally\n'
       fs.writeFileSync(claudeSkillPath(), modified)
 
@@ -455,14 +465,14 @@ test.describe('Context manager file sync', () => {
       await expect(pullClaude).toBeVisible({ timeout: 5_000 })
       await pullClaude.click()
 
-      // Verify DB content updated with frontmatter stripped
+      // Verify DB content updated with the raw skill document
       await expect.poll(async () => {
-        return await mainWindow.evaluate(async (slug) => {
+        return await mainWindow.evaluate(async ({ slug, expectedBody }) => {
           const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
           const match = items.find((i) => i.slug === slug)
-          return match?.content ?? null
-        }, skillSlug)
-      }, { timeout: 5_000 }).toBe('# Modified externally\n')
+          return !!match?.content.includes('name: modified') && !!match?.content.includes(expectedBody.trim())
+        }, { slug: skillSlug, expectedBody: '# Modified externally\n' })
+      }, { timeout: 5_000 }).toBe(true)
 
       await closeTopDialog(mainWindow)
     })
@@ -506,8 +516,44 @@ test.describe('Context manager file sync', () => {
       await closeTopDialog(mainWindow)
     })
 
+    test('existing managed skill shows frontmatter in the editor and becomes invalid if it is removed', async ({ mainWindow }) => {
+      const dialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
+      await openSkillEditPanel(dialog, skillSlug)
+
+      const contentInput = dialog.getByTestId('skill-detail-content')
+      await expect(contentInput).toBeVisible({ timeout: 5_000 })
+      await expect(contentInput).toHaveValue(/---\nname: /, { timeout: 5_000 })
+      await contentInput.fill(releasePromptBody)
+
+      await expect.poll(async () => {
+        return await mainWindow.evaluate(async (slug) => {
+          const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
+          const match = items.find((item) => item.slug === slug)
+          if (!match) return null
+          const metadata = JSON.parse(match.metadata_json) as {
+            skillValidation?: { status?: string }
+          }
+          return metadata.skillValidation?.status ?? null
+        }, skillSlug)
+      }, { timeout: 5_000 }).toBe('invalid')
+
+      await expect(dialog.getByText('Frontmatter is invalid')).toBeVisible({ timeout: 5_000 })
+      await expect(dialog.getByText(/Skill content must start with YAML frontmatter/i)).toBeVisible({ timeout: 5_000 })
+      await expect(dialog.getByTestId(`project-context-item-skill-${skillSlug}`)).toContainText('Invalid frontmatter')
+
+      await closeTopDialog(mainWindow)
+
+      const dialog2 = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
+      await expect(dialog2.getByTestId(`project-context-item-skill-${skillSlug}`)).toContainText('Invalid frontmatter')
+      await openSkillSyncPanel(dialog2, skillSlug)
+      await expect(dialog2.getByTestId(`skill-push-all-${skillSlug}`)).toBeDisabled({ timeout: 5_000 })
+
+      await closeTopDialog(mainWindow)
+    })
+
     test('Config → File after pull re-syncs to disk', async ({ mainWindow }) => {
-      const resyncedContent = '# Re-synced after pull\n'
+      const resyncedBody = '# Re-synced after pull\n'
+      const resyncedContent = skillDocument(skillSlug, resyncedBody)
       await mainWindow.evaluate(async ({ slug, content }) => {
         const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
         const item = items.find((entry) => entry.slug === slug)
@@ -528,8 +574,8 @@ test.describe('Context manager file sync', () => {
       await expect(dialog.getByTestId(`skill-provider-card-codex-${skillSlug}`)).toContainText('Synced', { timeout: 5_000 })
 
       // Verify files on disk
-      await expect.poll(() => readFileSafe(claudeSkillPath()).includes(resyncedContent.trim())).toBe(true)
-      await expect.poll(() => readFileSafe(codexSkillPath())).toBe(resyncedContent)
+      await expect.poll(() => readFileSafe(claudeSkillPath()).includes(resyncedBody.trim())).toBe(true)
+      await expect.poll(() => readFileSafe(codexSkillPath())).toBe(resyncedBody)
 
       await closeTopDialog(mainWindow)
     })

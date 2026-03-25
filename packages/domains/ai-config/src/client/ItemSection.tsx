@@ -7,6 +7,7 @@ import {
   Button, IconButton, Input, Label,
   Textarea, Tooltip, TooltipContent, TooltipTrigger, cn, toast
 } from '@slayzone/ui'
+import { repairSkillFrontmatter } from '../shared'
 import type {
   AiConfigItem, AiConfigItemType, CliProvider,
   ProjectSkillStatus, SyncHealth
@@ -14,9 +15,10 @@ import type {
 import type { GlobalContextManagerSection } from './ContextManagerSettings'
 import { PROVIDER_PATHS } from '../shared/provider-registry'
 import { AddItemPicker } from './AddItemPicker'
+import { SkillHelpCard } from './SkillHelpCard'
 import { StatusBadge, ProviderFileCard } from './SyncComponents'
 import { aggregateProviderSyncHealth, hasPendingProviderSync } from './sync-view-model'
-import { getSkillValidation } from './skill-validation'
+import { getSkillFrontmatterActionLabel, getSkillValidation } from './skill-validation'
 
 // ============================================================
 // Types & Helpers
@@ -98,10 +100,14 @@ function useSkillItem({
   projectPath: string
   onChanged: () => void
 }) {
-  const validation = getSkillValidation(item)
-  const hasValidationErrors = validation?.status === 'invalid'
   const [slug, setSlugRaw] = useState(item.slug)
   const [content, setContent] = useState(item.content)
+  const validation = getSkillValidation({
+    type: item.type,
+    slug: item.slug,
+    content
+  })
+  const hasValidationErrors = validation?.status === 'invalid'
   const [slugDirty, setSlugDirty] = useState(false)
   const [savingSlug, setSavingSlug] = useState(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -238,6 +244,18 @@ function useSkillItem({
     }
   }
 
+  const handleFixFrontmatter = async () => {
+    const nextContent = repairSkillFrontmatter(item.slug, content)
+    setContent(nextContent)
+    try {
+      await window.api.aiConfig.updateItem({ id: item.id, content: nextContent })
+      setExpectedContents({})
+      onChanged()
+    } catch {
+      toast.error('Failed to update skill frontmatter')
+    }
+  }
+
   return {
     item, slug, content, slugDirty, savingSlug, isLocal,
     validation,
@@ -246,6 +264,7 @@ function useSkillItem({
     syncingProvider, pullingProvider, syncingAll,
     setSlug: (v: string) => { setSlugRaw(v); setSlugDirty(v !== item.slug) },
     handleContentChange, handleSlugSave, handleRevert,
+    handleFixFrontmatter,
     toggleExpanded, handlePush, handlePull, handleSyncAll,
   }
 }
@@ -267,6 +286,7 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
   const validationStatus = sk.validation?.status === 'invalid' || sk.validation?.status === 'warning'
     ? sk.validation.status
     : null
+  const fixFrontmatterLabel = getSkillFrontmatterActionLabel(sk.validation)
 
   const handleToggleExpanded = () => setExpanded((prev) => !prev)
 
@@ -379,9 +399,22 @@ function SkillItemDetail({ item, providers, enabledProviders, isLocal, projectId
               />
               {sk.validation && sk.validation.status !== 'valid' && (
                 <div className="rounded border border-destructive/20 bg-destructive/5 px-2.5 py-2">
-                  <p className="text-xs font-medium text-destructive">
-                    {sk.validation.status === 'invalid' ? 'Frontmatter is invalid' : 'Frontmatter warning'}
-                  </p>
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-xs font-medium text-destructive">
+                      {sk.validation.status === 'invalid' ? 'Frontmatter is invalid' : 'Frontmatter warning'}
+                    </p>
+                    {fixFrontmatterLabel && (
+                      <Button
+                        data-testid="skill-detail-fix-frontmatter"
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => void sk.handleFixFrontmatter()}
+                      >
+                        {fixFrontmatterLabel}
+                      </Button>
+                    )}
+                  </div>
                   <div className="mt-1 space-y-0.5">
                     {sk.validation.issues.map((issue, index) => (
                       <p key={`${issue.code}-${index}`} className="text-[11px] text-destructive/90">
@@ -766,8 +799,8 @@ export function ItemSection({
   }
 
   return (
-    <div>
-      <div className="space-y-1">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
         {allItems.map(({ item, providers, isLocal }) => (
           <SkillItemDetail
             key={item.id}
@@ -786,16 +819,17 @@ export function ItemSection({
             onManage={handleManageUnmanaged}
           />
         ))}
-      </div>
 
-      <div
-        data-testid={`project-context-add-${type}`}
-        className="flex items-center gap-2 rounded-md border border-dashed px-3 py-2 cursor-pointer text-muted-foreground transition-colors hover:bg-muted/15 hover:text-foreground mt-1"
-        onClick={() => setShowPicker(true)}
-      >
-        <Plus className="size-3 shrink-0" />
-        <span className="text-xs">Add skill</span>
+        <div
+          data-testid={`project-context-add-${type}`}
+          className="mt-1 flex items-center gap-2 rounded-md border border-dashed px-3 py-2 cursor-pointer text-muted-foreground transition-colors hover:bg-muted/15 hover:text-foreground"
+          onClick={() => setShowPicker(true)}
+        >
+          <Plus className="size-3 shrink-0" />
+          <span className="text-xs">Add skill</span>
+        </div>
       </div>
+      <SkillHelpCard testId="project-skill-help-card" className="mt-3 shrink-0" />
 
       <AddItemPicker
         open={showPicker}

@@ -15,6 +15,14 @@ const skillContentV1 = '# E2E context skill v1\n'
 const skillContentV2 = '# E2E context skill v2\n'
 const localSkillSlug = 'e2e-local-project-skill'
 const localSkillBody = '# E2E local project skill\n'
+const releasePromptBody = `Create a new release for SlayZone. The version argument is: patch
+
+## Steps
+
+1. Determine version
+2. Bump version
+3. Generate changelog
+`
 const localSkillContent = `---
 name: ${localSkillSlug}
 description: E2E local project skill
@@ -57,12 +65,12 @@ async function upsertGlobalSkill(mainWindow: Page, content: string, electronApp?
   await dialog.getByTestId('context-item-editor-content').blur()
 
   await expect.poll(async () => {
-    return await mainWindow.evaluate(async (slug) => {
+    return await mainWindow.evaluate(async ({ slug, expectedBody }) => {
       const skills = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
       const match = skills.find((item) => item.slug === slug)
-      return match?.content ?? null
-    }, skillSlug)
-  }).toBe(content)
+      return !!match?.content.includes(`name: ${slug}`) && !!match?.content.includes(expectedBody.trim())
+    }, { slug: skillSlug, expectedBody: content })
+  }).toBe(true)
 
   await dialog.getByTestId('context-item-editor-close').click()
   await closeTopDialog(mainWindow)
@@ -101,24 +109,122 @@ test.describe('Context manager sync flow', () => {
     await dialog.getByTestId('global-files-new-name').fill(slug)
     await dialog.getByTestId('global-files-create').click()
 
-    let createdPath: string | null = null
-    await expect.poll(async () => {
-      createdPath = await mainWindow.evaluate(async ({ candidate }) => {
-        const files = await window.api.aiConfig.getGlobalFiles()
-        const match = files.find((entry) =>
-          entry.category === 'skill' &&
-          entry.name.endsWith(`/${candidate}.md`)
-        )
-        return match?.path ?? null
-      }, { candidate: slug })
-      return createdPath ? 1 : 0
-    }).toBe(1)
+    await expect(dialog.getByText(`${slug}.md`, { exact: true })).toBeVisible({ timeout: 5_000 })
+
+    const createdPath = await mainWindow.evaluate(async ({ candidate }) => {
+      const files = await window.api.aiConfig.getGlobalFiles()
+      const match = files.find((entry) =>
+        entry.category === 'skill' &&
+        entry.name.endsWith(`/${candidate}.md`)
+      )
+      return match?.path ?? null
+    }, { candidate: slug })
 
     if (createdPath) {
       await mainWindow.evaluate(async ({ filePath }) => {
         await window.api.aiConfig.deleteGlobalFile(filePath)
       }, { filePath: createdPath })
     }
+
+    await closeTopDialog(mainWindow)
+  })
+
+  test('global body-only skill can be repaired from the UI by adding frontmatter', async ({ mainWindow, electronApp }) => {
+    const slug = `e2e-body-only-invalid-${Date.now()}`
+    await mainWindow.evaluate(async ({ targetSlug, content }) => {
+      await window.api.aiConfig.createItem({
+        type: 'skill',
+        scope: 'global',
+        slug: targetSlug,
+        content
+      })
+    }, { targetSlug: slug, content: releasePromptBody })
+
+    const dialog = await openGlobalContextManager(mainWindow, electronApp)
+    await dialog.getByTestId('context-overview-skills').click()
+    await expect.poll(async () => {
+      return await mainWindow.evaluate(async (targetSlug) => {
+        const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
+        const match = items.find((item) => item.slug === targetSlug)
+        if (!match) return null
+        const metadata = JSON.parse(match.metadata_json) as {
+          skillValidation?: { status?: string }
+        }
+        return metadata.skillValidation?.status ?? null
+      }, slug)
+    }, { timeout: 5_000 }).toBe('invalid')
+
+    const skillRow = dialog.getByTestId(`context-global-item-${slug}`)
+    await expect(skillRow).toContainText('Invalid frontmatter')
+
+    await skillRow.click()
+    await expect(dialog.getByText('Frontmatter is invalid')).toBeVisible({ timeout: 5_000 })
+    await expect(dialog.getByText(/Skill content must start with YAML frontmatter/i)).toBeVisible({ timeout: 5_000 })
+    const addFrontmatterButton = mainWindow.getByRole('button', { name: 'Add frontmatter', exact: true })
+    await expect(addFrontmatterButton).toBeVisible({ timeout: 5_000 })
+
+    await addFrontmatterButton.click()
+
+    await expect(dialog.getByTestId('context-item-editor-content')).toHaveValue(new RegExp(`^---\\nname: ${slug}\\n`), { timeout: 5_000 })
+    await expect.poll(async () => {
+      return await mainWindow.evaluate(async (targetSlug) => {
+        const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
+        const match = items.find((item) => item.slug === targetSlug)
+        if (!match) return null
+        const metadata = JSON.parse(match.metadata_json) as {
+          skillValidation?: { status?: string }
+        }
+        return metadata.skillValidation?.status ?? null
+      }, slug)
+    }, { timeout: 5_000 }).toBe('valid')
+    await expect(dialog.getByText('Frontmatter is invalid')).toHaveCount(0)
+
+    await mainWindow.evaluate(async (targetSlug) => {
+      const items = await window.api.aiConfig.listItems({ scope: 'global', type: 'skill' })
+      const match = items.find((item) => item.slug === targetSlug)
+      if (match) await window.api.aiConfig.deleteItem(match.id)
+    }, slug)
+
+    await closeTopDialog(mainWindow)
+  })
+
+  test('skills section shows a brief help card', async ({ mainWindow, electronApp }) => {
+    const dialog = await openGlobalContextManager(mainWindow, electronApp)
+    await dialog.getByTestId('context-overview-skills').click()
+
+    const helpCard = mainWindow.getByTestId('global-skill-help-card')
+    await expect(helpCard).toBeVisible({ timeout: 5_000 })
+    await expect(helpCard).toContainText('Skill file')
+    await expect(helpCard).toContainText('Frontmatter comes first, followed by the instruction body')
+    await expect(helpCard).toContainText('name')
+    await expect(helpCard).toContainText('description')
+    await expect(helpCard).toContainText('trigger')
+    await expect(helpCard).toContainText('Options: any value')
+    await expect(helpCard).toContainText('Default: auto')
+
+    await helpCard.getByTestId('global-skill-help-card-toggle').click()
+    await expect(helpCard).not.toContainText('Options: any value')
+
+    await helpCard.getByTestId('global-skill-help-card-toggle').click()
+    await expect(helpCard).toContainText('body')
+
+    await closeTopDialog(mainWindow)
+  })
+
+  test('project skills help card is pinned to the modal bottom', async ({ mainWindow }) => {
+    const projectDialog = await openProjectContextSection(mainWindow, projectAbbrev, 'skills')
+
+    const helpCard = projectDialog.getByTestId('project-skill-help-card')
+    await expect(helpCard).toBeVisible({ timeout: 5_000 })
+
+    const dialogBox = await projectDialog.boundingBox()
+    const helpCardBox = await helpCard.boundingBox()
+
+    expect(dialogBox).not.toBeNull()
+    expect(helpCardBox).not.toBeNull()
+
+    const modalBottomGap = Math.round(dialogBox!.y + dialogBox!.height - (helpCardBox!.y + helpCardBox!.height))
+    expect(modalBottomGap).toBeLessThanOrEqual(40)
 
     await closeTopDialog(mainWindow)
   })

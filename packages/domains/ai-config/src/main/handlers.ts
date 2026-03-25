@@ -1,7 +1,6 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { createHash } from 'node:crypto'
-import * as yaml from 'js-yaml'
 import { app } from 'electron'
 import type { IpcMain } from 'electron'
 import type { Database } from 'better-sqlite3'
@@ -23,7 +22,6 @@ import type {
   ProviderFileContent,
   SyncHealth,
   SyncReason,
-  SkillValidationIssue,
   SkillValidationState,
   RootInstructionsResult,
   SetAiConfigProjectSelectionInput,
@@ -33,6 +31,11 @@ import type {
   UpdateAiConfigItemInput,
   WriteMcpServerInput,
   RemoveMcpServerInput
+} from '../shared'
+import {
+  parseSkillFrontmatter,
+  deriveSkillValidation,
+  renderSkillFrontmatter
 } from '../shared'
 import {
   PROVIDER_PATHS,
@@ -165,24 +168,6 @@ function removeLegacySkillFileIfPresent(
   fs.unlinkSync(legacyFilePath)
 }
 
-interface ParsedFrontmatter {
-  frontmatter: Record<string, string>
-  body: string
-  issues: SkillValidationIssue[]
-}
-
-interface CanonicalSkillMetadata {
-  frontmatter: Record<string, string>
-  explicitFrontmatter: boolean
-}
-
-interface CanonicalSkillDocument {
-  body: string
-  frontmatter: Record<string, string>
-  explicitFrontmatter: boolean
-}
-
-const SKILL_CANONICAL_METADATA_KEY = 'skillCanonical'
 const SKILL_VALIDATION_METADATA_KEY = 'skillValidation'
 
 function parseJsonObject(raw: string): Record<string, unknown> {
@@ -197,162 +182,10 @@ function parseJsonObject(raw: string): Record<string, unknown> {
   return {}
 }
 
-interface YamlExceptionLike extends Error {
-  reason?: string
-  mark?: { line?: number }
-}
-
-function normalizeFrontmatterValue(value: unknown): string {
-  if (value === undefined || value === null) return ''
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    return String(value)
-  }
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return String(value)
-  }
-}
-
-function parseLeadingFrontmatter(content: string): ParsedFrontmatter | null {
-  const normalized = content.replace(/\r\n/g, '\n').replace(/^\uFEFF/, '')
-  const lines = normalized.split('\n')
-  let startLine = 0
-  while (startLine < lines.length && lines[startLine].trim().length === 0) {
-    startLine += 1
-  }
-  if (lines[startLine]?.trim() !== '---') return null
-
-  const frontmatter: Record<string, string> = {}
-  const issues: SkillValidationIssue[] = []
-  let closingLine = -1
-  for (let i = startLine + 1; i < lines.length; i += 1) {
-    if (lines[i].trim() === '---' || lines[i].trim() === '...') {
-      closingLine = i
-      break
-    }
-  }
-
-  if (closingLine === -1) {
-    issues.push({
-      code: 'frontmatter_unclosed',
-      severity: 'error',
-      message: 'Frontmatter starts with "---" but has no closing delimiter.',
-      line: startLine + 1
-    })
-    return { frontmatter, body: normalized, issues }
-  }
-
-  const rawFrontmatter = lines.slice(startLine + 1, closingLine).join('\n')
-  try {
-    const parsed = yaml.load(rawFrontmatter)
-    if (parsed === null || parsed === undefined) {
-      // Empty frontmatter is valid; defaults are derived later.
-    } else if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      issues.push({
-        code: 'frontmatter_invalid_line',
-        severity: 'error',
-        message: 'Frontmatter must be a YAML object (key: value pairs).',
-        line: startLine + 2
-      })
-    } else {
-      for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-        frontmatter[key] = normalizeFrontmatterValue(value)
-      }
-    }
-  } catch (error) {
-    const yamlError = error as YamlExceptionLike
-    const reason = typeof yamlError.reason === 'string'
-      ? yamlError.reason
-      : (yamlError.message || 'Invalid YAML frontmatter.')
-    const markLine = typeof yamlError.mark?.line === 'number'
-      ? startLine + yamlError.mark.line + 2
-      : null
-    if (/duplicated mapping key/i.test(reason)) {
-      issues.push({
-        code: 'frontmatter_duplicate_key',
-        severity: 'error',
-        message: 'Duplicate frontmatter key.',
-        line: markLine
-      })
-    } else {
-      issues.push({
-        code: 'frontmatter_invalid_line',
-        severity: 'error',
-        message: `Invalid YAML frontmatter: ${reason}`,
-        line: markLine
-      })
-    }
-  }
-
-  const body = lines.slice(closingLine + 1).join('\n')
-  return { frontmatter, body, issues }
-}
-
-function readCanonicalSkillMetadata(metadataJson: string): CanonicalSkillMetadata | null {
+function stripCanonicalSkillMetadata(metadataJson: string): string {
   const parsed = parseJsonObject(metadataJson)
-  const rawMeta = parsed[SKILL_CANONICAL_METADATA_KEY]
-  if (!rawMeta || typeof rawMeta !== 'object' || Array.isArray(rawMeta)) return null
-
-  const metaObj = rawMeta as Record<string, unknown>
-  const rawFrontmatter = metaObj.frontmatter
-  const frontmatter: Record<string, string> = {}
-  if (rawFrontmatter && typeof rawFrontmatter === 'object' && !Array.isArray(rawFrontmatter)) {
-    for (const [key, value] of Object.entries(rawFrontmatter as Record<string, unknown>)) {
-      if (typeof value === 'string') frontmatter[key] = value
-      else if (value !== undefined && value !== null) frontmatter[key] = String(value)
-    }
-  }
-
-  return {
-    frontmatter,
-    explicitFrontmatter: metaObj.explicitFrontmatter === true,
-  }
-}
-
-function writeCanonicalSkillMetadata(metadataJson: string, canonical: CanonicalSkillMetadata): string {
-  const parsed = parseJsonObject(metadataJson)
-  parsed[SKILL_CANONICAL_METADATA_KEY] = {
-    frontmatter: canonical.frontmatter,
-    explicitFrontmatter: canonical.explicitFrontmatter
-  }
+  delete parsed.skillCanonical
   return JSON.stringify(parsed)
-}
-
-function readSkillValidationMetadata(metadataJson: string): SkillValidationState | null {
-  const parsed = parseJsonObject(metadataJson)
-  const raw = parsed[SKILL_VALIDATION_METADATA_KEY]
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-
-  const obj = raw as Record<string, unknown>
-  const status =
-    obj.status === 'valid' || obj.status === 'warning' || obj.status === 'invalid'
-      ? obj.status
-      : null
-  const rawIssues = Array.isArray(obj.issues) ? obj.issues : []
-  const issues: SkillValidationIssue[] = []
-  for (const rawIssue of rawIssues) {
-    if (!rawIssue || typeof rawIssue !== 'object' || Array.isArray(rawIssue)) continue
-    const issue = rawIssue as Record<string, unknown>
-    const severity = issue.severity
-    if (severity !== 'error' && severity !== 'warning') continue
-    const code = typeof issue.code === 'string' ? issue.code : 'unknown'
-    const message = typeof issue.message === 'string' ? issue.message : 'Validation issue'
-    const line = typeof issue.line === 'number' ? issue.line : null
-    issues.push({ code, severity, message, line })
-  }
-
-  if (status) {
-    return { status, issues }
-  }
-
-  const hasErrors = issues.some((issue) => issue.severity === 'error')
-  const hasWarnings = issues.some((issue) => issue.severity === 'warning')
-  return {
-    status: hasErrors ? 'invalid' : hasWarnings ? 'warning' : 'valid',
-    issues
-  }
 }
 
 function writeSkillValidationMetadata(metadataJson: string, validation: SkillValidationState): string {
@@ -361,75 +194,8 @@ function writeSkillValidationMetadata(metadataJson: string, validation: SkillVal
   return JSON.stringify(parsed)
 }
 
-function toTitleCaseFromSlug(slug: string): string {
-  const words = slug.replace(/[-_]+/g, ' ').trim().split(/\s+/).filter(Boolean)
-  if (words.length === 0) return 'Skill'
-  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
-}
-
-function escapeYamlDoubleQuoted(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-}
-
-function toYamlKey(key: string): string {
-  if (/^[A-Za-z0-9_.-]+$/.test(key)) return key
-  return `"${escapeYamlDoubleQuoted(key)}"`
-}
-
-function deriveSkillDescription(itemSlug: string, body: string): string {
-  const firstContentLine = body.split('\n').find((line) => line.trim().length > 0)
-  const headingText = firstContentLine?.replace(/^#+\s*/, '').trim() ?? ''
-  return headingText || toTitleCaseFromSlug(itemSlug)
-}
-
-function validateSkillFrontmatter(
-  slug: string,
-  parsedFrontmatter: ParsedFrontmatter | null,
-  options?: { allowMissing?: boolean }
-): SkillValidationState {
-  if (!parsedFrontmatter) {
-    if (options?.allowMissing) return { status: 'valid', issues: [] }
-    return {
-      status: 'invalid',
-      issues: [{
-        code: 'frontmatter_missing',
-        severity: 'error',
-        message: `Skill "${slug}" is missing frontmatter. Add a leading "---" block with at least name/description.`,
-        line: 1
-      }]
-    }
-  }
-
-  const issues: SkillValidationIssue[] = [...parsedFrontmatter.issues]
-  const parsedName = parsedFrontmatter.frontmatter.name?.trim() ?? ''
-  if (parsedName && parsedName !== slug) {
-    issues.push({
-      code: 'frontmatter_name_mismatch',
-      severity: 'warning',
-      message: `Frontmatter name "${parsedName}" does not match skill slug "${slug}".`,
-      line: null
-    })
-  }
-
-  const hasErrors = issues.some((issue) => issue.severity === 'error')
-  const hasWarnings = issues.some((issue) => issue.severity === 'warning')
-  return {
-    status: hasErrors ? 'invalid' : hasWarnings ? 'warning' : 'valid',
-    issues
-  }
-}
-
-function ensureSkillValidationForSync(itemSlug: string, itemContent: string, itemMetadataJson: string): void {
-  const canonical = readCanonicalSkillMetadata(itemMetadataJson)
-  const parsed = parseLeadingFrontmatter(itemContent.replace(/\r\n/g, '\n'))
-  const validation = readSkillValidationMetadata(itemMetadataJson) ?? validateSkillFrontmatter(itemSlug, parsed, {
-    allowMissing: canonical?.explicitFrontmatter === true
-  })
-  if (!parsed && canonical?.explicitFrontmatter !== true) {
-    throw new Error(
-      `Cannot sync skill "${itemSlug}" because frontmatter is invalid (line 1): Skill "${itemSlug}" is missing frontmatter. Add a leading "---" block with at least name/description.`
-    )
-  }
+function ensureSkillValidationForSync(itemSlug: string, itemContent: string, _itemMetadataJson: string): void {
+  const validation = deriveSkillValidation(itemSlug, itemContent)
   if (validation?.status !== 'invalid') return
 
   const firstError = validation.issues.find((issue) => issue.severity === 'error')
@@ -438,124 +204,69 @@ function ensureSkillValidationForSync(itemSlug: string, itemContent: string, ite
   throw new Error(`Cannot sync skill "${itemSlug}" because frontmatter is invalid${lineHint}: ${message}`)
 }
 
-function normalizeCanonicalSkillForPersistence(
+function normalizeSkillForPersistence(
   slug: string,
   rawContent: string,
   metadataJson: string,
   previousSlug?: string
 ): {
-  body: string
+  content: string
   metadataJson: string
 } {
   const normalizedContent = rawContent.replace(/\r\n/g, '\n')
-  const parsedFrontmatter = parseLeadingFrontmatter(normalizedContent)
-  const existingCanonical = readCanonicalSkillMetadata(metadataJson)
+  const parsedFrontmatter = parseSkillFrontmatter(normalizedContent)
+  let persistedContent = normalizedContent
 
-  const body = (parsedFrontmatter?.body ?? normalizedContent).replace(/^\n+/, '')
-  const frontmatter = parsedFrontmatter
-    ? { ...parsedFrontmatter.frontmatter }
-    : { ...(existingCanonical?.frontmatter ?? {}) }
-
-  const previous = previousSlug ?? slug
-  if (!frontmatter.name || frontmatter.name === previous) {
-    frontmatter.name = slug
-  }
-  if (!frontmatter.description || frontmatter.description.trim().length === 0) {
-    frontmatter.description = deriveSkillDescription(slug, body)
+  if (parsedFrontmatter && !parsedFrontmatter.issues.some((issue) => issue.severity === 'error')) {
+    const previous = previousSlug ?? slug
+    const nextFrontmatter = { ...parsedFrontmatter.frontmatter }
+    if (!nextFrontmatter.name || nextFrontmatter.name === previous) {
+      nextFrontmatter.name = slug
+      persistedContent = renderSkillFrontmatter(nextFrontmatter)
+      const body = parsedFrontmatter.body.replace(/^\n+/, '')
+      persistedContent = body ? `${persistedContent}\n${body}` : `${persistedContent}\n`
+    }
   }
 
-  const parsedHasErrors = parsedFrontmatter?.issues.some((issue) => issue.severity === 'error') ?? false
-  const explicitFrontmatter = parsedFrontmatter
-    ? !parsedHasErrors
-    : (existingCanonical?.explicitFrontmatter ?? false)
-  const validation = validateSkillFrontmatter(slug, parsedFrontmatter, {
-    allowMissing: existingCanonical?.explicitFrontmatter === true
-  })
-  const metadataWithCanonical = writeCanonicalSkillMetadata(metadataJson, {
-    frontmatter,
-    explicitFrontmatter
-  })
+  const validation = deriveSkillValidation(slug, persistedContent)
+  const metadataWithoutCanonical = stripCanonicalSkillMetadata(metadataJson)
 
   return {
-    body,
-    metadataJson: writeSkillValidationMetadata(metadataWithCanonical, validation)
+    content: persistedContent,
+    metadataJson: writeSkillValidationMetadata(metadataWithoutCanonical, validation)
   }
-}
-
-function getCanonicalSkillDocument(itemSlug: string, itemContent: string, itemMetadataJson: string): CanonicalSkillDocument {
-  const normalizedContent = itemContent.replace(/\r\n/g, '\n')
-  const parsedFrontmatter = parseLeadingFrontmatter(normalizedContent)
-  const canonicalMeta = readCanonicalSkillMetadata(itemMetadataJson)
-  const body = (parsedFrontmatter?.body ?? normalizedContent).replace(/^\n+/, '')
-
-  const frontmatter = canonicalMeta
-    ? { ...canonicalMeta.frontmatter }
-    : { ...(parsedFrontmatter?.frontmatter ?? {}) }
-
-  if (!frontmatter.name || frontmatter.name.trim().length === 0) {
-    frontmatter.name = itemSlug
-  }
-  if (!frontmatter.description || frontmatter.description.trim().length === 0) {
-    frontmatter.description = deriveSkillDescription(itemSlug, body)
-  }
-
-  return {
-    body,
-    frontmatter,
-    explicitFrontmatter: canonicalMeta
-      ? canonicalMeta.explicitFrontmatter
-      : parsedFrontmatter !== null
-  }
-}
-
-function toYamlLine(key: string, value: string): string {
-  const yamlKey = toYamlKey(key)
-  if (value.includes('\n')) {
-    const indented = value.split('\n').map((line) => `  ${line}`).join('\n')
-    return `${yamlKey}: |\n${indented}`
-  }
-  if (key === 'name' && /^[a-z0-9][a-z0-9._-]*$/i.test(value)) return `${yamlKey}: ${value}`
-  if (key === 'description') return `${yamlKey}: "${escapeYamlDoubleQuoted(value)}"`
-  if (/^[a-z0-9][a-z0-9._-]*$/i.test(value)) return `${yamlKey}: ${value}`
-  return `${yamlKey}: "${escapeYamlDoubleQuoted(value)}"`
-}
-
-function renderFrontmatter(frontmatter: Record<string, string>): string {
-  const lines: string[] = ['---']
-  if (frontmatter.name) lines.push(toYamlLine('name', frontmatter.name))
-  if (frontmatter.description) lines.push(toYamlLine('description', frontmatter.description))
-
-  for (const key of Object.keys(frontmatter).sort()) {
-    if (key === 'name' || key === 'description') continue
-    lines.push(toYamlLine(key, frontmatter[key] ?? ''))
-  }
-  lines.push('---', '')
-  return lines.join('\n')
 }
 
 function getSyncedItemContent(
   provider: CliProvider,
   itemType: string,
-  itemSlug: string,
+  _itemSlug: string,
   targetPath: string,
   itemContent: string,
-  itemMetadataJson = '{}'
+  _itemMetadataJson = '{}'
 ): string {
   if (itemType !== 'skill') return itemContent.replace(/\r\n/g, '\n')
 
-  const canonical = getCanonicalSkillDocument(itemSlug, itemContent, itemMetadataJson)
-  if (provider !== 'claude' || !targetPath.endsWith('/SKILL.md')) return canonical.body
+  const normalizedContent = itemContent.replace(/\r\n/g, '\n')
+  const parsedFrontmatter = parseSkillFrontmatter(normalizedContent)
+  const body = (parsedFrontmatter?.body ?? normalizedContent).replace(/^\n+/, '')
 
-  const frontmatter: Record<string, string> = canonical.explicitFrontmatter
-    ? { ...canonical.frontmatter, name: itemSlug }
-    : {
-        name: itemSlug,
-        description: canonical.frontmatter.description ?? deriveSkillDescription(itemSlug, canonical.body)
-      }
-  const renderedFrontmatter = renderFrontmatter(frontmatter)
-  const body = canonical.body
+  if (provider !== 'claude' || !targetPath.endsWith('/SKILL.md')) return body
+  return normalizedContent
+}
 
-  return body ? `${renderedFrontmatter}\n${body}` : `${renderedFrontmatter}\n`
+function withDerivedSkillValidation(item: AiConfigItem): AiConfigItem {
+  if (item.type !== 'skill') return item
+  const metadataWithoutCanonical = stripCanonicalSkillMetadata(item.metadata_json)
+  const nextMetadataJson = writeSkillValidationMetadata(
+    metadataWithoutCanonical,
+    deriveSkillValidation(item.slug, item.content)
+  )
+  if (nextMetadataJson === item.metadata_json) return item
+  return {
+    ...item,
+    metadata_json: nextMetadataJson
+  }
 }
 
 function isPathAllowed(filePath: string, projectPath: string | null): boolean {
@@ -595,21 +306,6 @@ function toProjectRelativePath(projectRoot: string, filePath: string): string {
 }
 
 export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
-  function repairSkillItemValidation(item: AiConfigItem): AiConfigItem {
-    if (item.type !== 'skill') return item
-    const normalized = normalizeCanonicalSkillForPersistence(item.slug, item.content, item.metadata_json, item.slug)
-    if (normalized.body === item.content && normalized.metadataJson === item.metadata_json) {
-      return item
-    }
-    db.prepare('UPDATE ai_config_items SET content = ?, metadata_json = ? WHERE id = ?')
-      .run(normalized.body, normalized.metadataJson, item.id)
-    return {
-      ...item,
-      content: normalized.body,
-      metadata_json: normalized.metadataJson
-    }
-  }
-
   ipcMain.handle('ai-config:list-items', (_event, input: ListAiConfigItemsInput) => {
     const where: string[] = ['scope = ?']
     const values: unknown[] = [input.scope]
@@ -630,12 +326,12 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       ORDER BY updated_at DESC, created_at DESC
     `).all(...values) as AiConfigItem[]
 
-    return rows.map(repairSkillItemValidation)
+    return rows.map(withDerivedSkillValidation)
   })
 
   ipcMain.handle('ai-config:get-item', (_event, id: string) => {
     const row = db.prepare('SELECT * FROM ai_config_items WHERE id = ?').get(id) as AiConfigItem | undefined
-    return row ? repairSkillItemValidation(row) : null
+    return row ? withDerivedSkillValidation(row) : null
   })
 
   ipcMain.handle('ai-config:create-item', (_event, input: CreateAiConfigItemInput) => {
@@ -647,9 +343,9 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     const slug = normalizeSlug(input.slug)
     const rawContent = input.content ?? ''
     const normalizedSkill = input.type === 'skill'
-      ? normalizeCanonicalSkillForPersistence(slug, rawContent, '{}')
+      ? normalizeSkillForPersistence(slug, rawContent, '{}')
       : null
-    const persistedContent = normalizedSkill ? normalizedSkill.body : rawContent
+    const persistedContent = normalizedSkill ? normalizedSkill.content : rawContent
     const persistedMetadataJson = normalizedSkill ? normalizedSkill.metadataJson : '{}'
     try {
       db.prepare(`
@@ -721,17 +417,17 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
       values.push(nextSlug)
     }
 
-    let normalizedSkill: { body: string; metadataJson: string } | null = null
+    let normalizedSkill: { content: string; metadataJson: string } | null = null
     if (nextType === 'skill' && (input.content !== undefined || input.slug !== undefined || input.type !== undefined)) {
       const rawContent = input.content !== undefined
         ? input.content
         : existing.content
-      normalizedSkill = normalizeCanonicalSkillForPersistence(nextSlug, rawContent, existing.metadata_json, existing.slug)
+      normalizedSkill = normalizeSkillForPersistence(nextSlug, rawContent, existing.metadata_json, existing.slug)
     }
 
     if (normalizedSkill) {
       fields.push('content = ?')
-      values.push(normalizedSkill.body)
+      values.push(normalizedSkill.content)
       fields.push('metadata_json = ?')
       values.push(normalizedSkill.metadataJson)
     } else if (input.content !== undefined) {
@@ -1528,7 +1224,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     const results: ProjectSkillStatus[] = []
     for (const [, sels] of byItem) {
       const first = sels[0]
-      const item = repairSkillItemValidation({
+      const item = withDerivedSkillValidation({
         id: first.item_id,
         type: first.item_type as AiConfigItem['type'],
         scope: first.item_scope as AiConfigItem['scope'],
@@ -1583,7 +1279,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     const resolvedProject = path.resolve(projectPath)
 
     const rawItem = db.prepare('SELECT * FROM ai_config_items WHERE id = ?').get(itemId) as AiConfigItem | undefined
-    const item = rawItem ? repairSkillItemValidation(rawItem) : undefined
+    const item = rawItem ? withDerivedSkillValidation(rawItem) : undefined
     if (!item) throw new Error('Item not found')
 
     const selections = (db.prepare(`
@@ -1659,7 +1355,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     if (!fs.existsSync(filePath)) throw new Error('Skill file does not exist')
 
     const diskContent = fs.readFileSync(filePath, 'utf-8')
-    const normalized = normalizeCanonicalSkillForPersistence(
+    const normalized = normalizeSkillForPersistence(
       item.slug,
       diskContent,
       item.metadata_json,
@@ -1667,7 +1363,7 @@ export function registerAiConfigHandlers(ipcMain: IpcMain, db: Database): void {
     )
 
     db.prepare("UPDATE ai_config_items SET content = ?, metadata_json = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(normalized.body, normalized.metadataJson, itemId)
+      .run(normalized.content, normalized.metadataJson, itemId)
 
     // Update baseline only for the pulled provider.
     // Other providers keep their baseline hashes so a subsequent sync-all can overwrite them

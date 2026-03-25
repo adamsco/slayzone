@@ -22,8 +22,8 @@ export function SettingsLayout({
   className
 }: SettingsLayoutProps): React.JSX.Element {
   return (
-    <div className={cn('grid h-[calc(88vh-76px)] grid-cols-[280px_minmax(0,1fr)]', className)}>
-      <aside className="overflow-y-auto border-r p-5">
+    <div className={cn('grid h-[calc(88vh-76px)] min-h-0 grid-cols-[280px_minmax(0,1fr)]', className)}>
+      <aside className="min-h-0 overflow-y-auto border-r p-5">
         <div className="space-y-1.5 rounded-xl p-2.5">
           {items.map((item) => {
             const isParentActive = activeKey === item.key || (item.children && activeKey.startsWith(item.key + '/'))
@@ -68,7 +68,9 @@ export function SettingsLayout({
         </div>
       </aside>
 
-      <main className="overflow-y-auto px-8 py-6">{children}</main>
+      <main className="min-h-0 overflow-hidden">
+        <div className="h-full min-h-0 overflow-y-auto px-8 py-6">{children}</div>
+      </main>
     </div>
   )
 }

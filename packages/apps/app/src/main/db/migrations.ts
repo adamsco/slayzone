@@ -1,8 +1,57 @@
 import Database from 'better-sqlite3'
+import { parseSkillFrontmatter, renderSkillFrontmatter, validateSkillFrontmatter } from '@slayzone/ai-config/shared'
 
 interface Migration {
   version: number
   up: (db: Database.Database) => void
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // ignore malformed JSON
+  }
+  return {}
+}
+
+function toTitleCaseFromSlug(slug: string): string {
+  const words = slug.replace(/[-_]+/g, ' ').trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return 'Skill'
+  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+}
+
+function deriveSkillDescription(slug: string, body: string): string {
+  const firstContentLine = body.split('\n').find((line) => line.trim().length > 0)
+  const headingText = firstContentLine?.replace(/^#+\s*/, '').trim() ?? ''
+  return headingText || toTitleCaseFromSlug(slug)
+}
+
+function readCanonicalSkillMetadata(metadataJson: string): {
+  frontmatter: Record<string, string>
+  explicitFrontmatter: boolean
+} | null {
+  const parsed = parseJsonObject(metadataJson)
+  const rawCanonical = parsed.skillCanonical
+  if (!rawCanonical || typeof rawCanonical !== 'object' || Array.isArray(rawCanonical)) return null
+
+  const canonical = rawCanonical as Record<string, unknown>
+  const rawFrontmatter = canonical.frontmatter
+  const frontmatter: Record<string, string> = {}
+  if (rawFrontmatter && typeof rawFrontmatter === 'object' && !Array.isArray(rawFrontmatter)) {
+    for (const [key, value] of Object.entries(rawFrontmatter as Record<string, unknown>)) {
+      if (typeof value === 'string') frontmatter[key] = value
+      else if (value !== undefined && value !== null) frontmatter[key] = String(value)
+    }
+  }
+
+  return {
+    frontmatter,
+    explicitFrontmatter: canonical.explicitFrontmatter === true
+  }
 }
 
 const migrations: Migration[] = [
@@ -1354,6 +1403,56 @@ const migrations: Migration[] = [
         ALTER TABLE projects ADD COLUMN selected_repo TEXT;
         ALTER TABLE tasks ADD COLUMN repo_name TEXT;
       `)
+    }
+  },
+  {
+    version: 78,
+    up: (db) => {
+      const rows = db.prepare(`
+        SELECT id, slug, content, metadata_json
+        FROM ai_config_items
+        WHERE type = 'skill'
+      `).all() as Array<{
+        id: string
+        slug: string
+        content: string
+        metadata_json: string
+      }>
+
+      const update = db.prepare(`
+        UPDATE ai_config_items
+        SET content = ?, metadata_json = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `)
+
+      for (const row of rows) {
+        const normalizedContent = row.content.replace(/\r\n/g, '\n')
+        const parsed = parseSkillFrontmatter(normalizedContent)
+        const canonical = readCanonicalSkillMetadata(row.metadata_json)
+
+        let nextContent = normalizedContent
+        if (!parsed && canonical?.explicitFrontmatter) {
+          const body = normalizedContent.replace(/^\n+/, '')
+          const frontmatter = {
+            ...canonical.frontmatter,
+            name: canonical.frontmatter.name?.trim().length ? canonical.frontmatter.name : row.slug,
+            description: canonical.frontmatter.description?.trim().length
+              ? canonical.frontmatter.description
+              : deriveSkillDescription(row.slug, body)
+          }
+          const renderedFrontmatter = renderSkillFrontmatter(frontmatter)
+          nextContent = body ? `${renderedFrontmatter}\n${body}` : `${renderedFrontmatter}\n`
+        }
+
+        const nextMetadata = parseJsonObject(row.metadata_json)
+        delete nextMetadata.skillCanonical
+        nextMetadata.skillValidation = validateSkillFrontmatter(row.slug, parseSkillFrontmatter(nextContent))
+        const nextMetadataJson = JSON.stringify(nextMetadata)
+
+        if (nextContent !== row.content || nextMetadataJson !== row.metadata_json) {
+          update.run(nextContent, nextMetadataJson, row.id)
+        }
+      }
     }
   }
 ]

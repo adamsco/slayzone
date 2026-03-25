@@ -28,6 +28,17 @@ function skillDoc(slug: string, body: string): string {
   return `---\nname: ${slug}\ndescription: ${slug}\n---\n${normalizedBody}`
 }
 
+function readSkillMetadata(itemId: string): {
+  skillValidation?: { status?: string; issues?: Array<{ code?: string }> }
+} {
+  const row = h.db.prepare('SELECT metadata_json FROM ai_config_items WHERE id = ?').get(itemId) as {
+    metadata_json: string
+  }
+  return JSON.parse(row.metadata_json) as {
+    skillValidation?: { status?: string; issues?: Array<{ code?: string }> }
+  }
+}
+
 // Ensure claude is enabled
 h.db.prepare("UPDATE ai_config_sources SET enabled = 1 WHERE kind = 'claude'")?.run()
 
@@ -128,6 +139,44 @@ describe('ai-config:create-global-file', () => {
 })
 
 describe('ai-config:list-items', () => {
+  test('returns derived validation without mutating stored metadata on read', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'read-does-not-repair-db',
+      content: '# body'
+    }) as { id: string; metadata_json: string }
+
+    const staleMeta = JSON.parse(item.metadata_json) as Record<string, unknown>
+    staleMeta.skillValidation = {
+      status: 'invalid',
+      issues: [{ code: 'frontmatter_invalid_line', severity: 'error', message: 'stale issue', line: 4 }]
+    }
+    const staleMetadataJson = JSON.stringify(staleMeta)
+    h.db.prepare('UPDATE ai_config_items SET content = ?, metadata_json = ? WHERE id = ?')
+      .run(
+        '---\nname: read-does-not-repair-db\ndescription: "fixed"\n---\n# body\n',
+        staleMetadataJson,
+        item.id
+      )
+
+    const listed = h.invoke('ai-config:list-items', {
+      scope: 'global',
+      type: 'skill'
+    }) as Array<{ id: string; metadata_json: string }>
+    const derived = listed.find((row) => row.id === item.id)
+    expect(derived).toBeTruthy()
+    const returnedMetadata = JSON.parse(derived!.metadata_json) as {
+      skillValidation?: { status?: string }
+    }
+    expect(returnedMetadata.skillValidation?.status).toBe('valid')
+
+    const stored = h.db.prepare('SELECT metadata_json FROM ai_config_items WHERE id = ?').get(item.id) as {
+      metadata_json: string
+    }
+    expect(stored.metadata_json).toBe(staleMetadataJson)
+  })
+
   test('recomputes stale invalid metadata to valid from current content', () => {
     const item = h.invoke('ai-config:create-item', {
       type: 'skill',
@@ -158,12 +207,11 @@ describe('ai-config:list-items', () => {
     }) as Array<{ id: string; content: string; metadata_json: string }>
     const repaired = listed.find((row) => row.id === item.id)
     expect(repaired).toBeTruthy()
-    expect(repaired!.content).toBe('# body')
+    expect(repaired!.content.includes('---\nname: stale-invalid-repair')).toBe(true)
+    expect(repaired!.content.includes('# body')).toBe(true)
     const metadata = JSON.parse(repaired!.metadata_json) as {
-      skillCanonical?: { explicitFrontmatter?: boolean }
       skillValidation?: { status?: string }
     }
-    expect(metadata.skillCanonical?.explicitFrontmatter).toBe(true)
     expect(metadata.skillValidation?.status).toBe('valid')
   })
 
@@ -195,12 +243,138 @@ describe('ai-config:list-items', () => {
     const repaired = listed.find((row) => row.id === item.id)
     expect(repaired).toBeTruthy()
     const metadata = JSON.parse(repaired!.metadata_json) as {
-      skillCanonical?: { explicitFrontmatter?: boolean }
       skillValidation?: { status?: string; issues?: Array<{ code?: string }> }
     }
-    expect(metadata.skillCanonical?.explicitFrontmatter).toBe(false)
     expect(metadata.skillValidation?.status).toBe('invalid')
     expect(metadata.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_invalid_line')).toBe(true)
+  })
+
+  test('drops legacy canonical metadata and marks body-only legacy content invalid at runtime', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'stale-missing-frontmatter',
+      content: skillDoc('stale-missing-frontmatter', '# body')
+    }) as { id: string; metadata_json: string }
+
+    const staleMeta = JSON.parse(item.metadata_json) as Record<string, unknown>
+    staleMeta.skillCanonical = {
+      frontmatter: { name: 'stale-missing-frontmatter', description: 'stale' },
+      explicitFrontmatter: true
+    }
+    staleMeta.skillValidation = { status: 'valid', issues: [] }
+    h.db.prepare('UPDATE ai_config_items SET content = ?, metadata_json = ? WHERE id = ?')
+      .run(
+        'Create a new release for SlayZone.\nThe version argument is: patch\n',
+        JSON.stringify(staleMeta),
+        item.id
+      )
+
+    const listed = h.invoke('ai-config:list-items', {
+      scope: 'global',
+      type: 'skill'
+    }) as Array<{ id: string; content: string; metadata_json: string }>
+    const repaired = listed.find((row) => row.id === item.id)
+    expect(repaired).toBeTruthy()
+    expect(repaired!.content).toBe('Create a new release for SlayZone.\nThe version argument is: patch\n')
+
+    const metadata = JSON.parse(repaired!.metadata_json) as {
+      skillValidation?: { status?: string; issues?: Array<{ code?: string }> }
+    }
+    expect(metadata.skillValidation?.status).toBe('invalid')
+    expect(metadata.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_missing')).toBe(true)
+  })
+
+  test('marks new body-only skills invalid when no canonical frontmatter exists', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'new-missing-frontmatter',
+      content: 'Create a new release for SlayZone.\nThe version argument is: patch\n'
+    }) as { metadata_json: string }
+
+    const metadata = JSON.parse(item.metadata_json) as {
+      skillValidation?: { status?: string; issues?: Array<{ code?: string }> }
+    }
+    expect(metadata.skillValidation?.status).toBe('invalid')
+    expect(metadata.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_missing')).toBe(true)
+  })
+})
+
+describe('ai-config:get-item', () => {
+  test('returns raw skill documents from storage', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'get-item-managed-frontmatter',
+      content: skillDoc('get-item-managed-frontmatter', '# managed')
+    }) as { id: string }
+
+    const stored = h.db.prepare('SELECT content, metadata_json FROM ai_config_items WHERE id = ?').get(item.id) as {
+      content: string
+      metadata_json: string
+    }
+    expect(stored.content.includes('---\nname: get-item-managed-frontmatter')).toBe(true)
+    expect(stored.content.includes('# managed\n')).toBe(true)
+
+    const loaded = h.invoke('ai-config:get-item', item.id) as { content: string; metadata_json: string }
+    expect(loaded.content.includes('---\nname: get-item-managed-frontmatter')).toBe(true)
+    expect(loaded.content.includes('# managed\n')).toBe(true)
+
+    const metadata = JSON.parse(loaded.metadata_json) as {
+      skillValidation?: { status?: string }
+    }
+    expect(metadata.skillValidation?.status).toBe('valid')
+  })
+})
+
+describe('ai-config:update-item', () => {
+  test('marks managed skills invalid when they are updated without frontmatter', () => {
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'update-missing-frontmatter',
+      content: skillDoc('update-missing-frontmatter', '# initial')
+    }) as { id: string; content: string; metadata_json: string }
+
+    const updated = h.invoke('ai-config:update-item', {
+      id: item.id,
+      content: 'You are evaluating a competitor for the SlayZone comparison table.\n'
+    }) as { content: string; metadata_json: string }
+
+    expect(updated.content).toBe('You are evaluating a competitor for the SlayZone comparison table.\n')
+    const metadata = JSON.parse(updated.metadata_json) as {
+      skillValidation?: { status?: string; issues?: Array<{ code?: string }> }
+    }
+    expect(metadata.skillValidation?.status).toBe('invalid')
+    expect(metadata.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_missing')).toBe(true)
+  })
+
+  test('treats new and previously explicit body-only content the same', () => {
+    const created = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'update-state-parity-created',
+      content: 'Create a new release for SlayZone.\n'
+    }) as { id: string }
+
+    const previouslyExplicit = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'update-state-parity-updated',
+      content: skillDoc('update-state-parity-updated', '# valid first')
+    }) as { id: string }
+    h.invoke('ai-config:update-item', {
+      id: previouslyExplicit.id,
+      content: 'Create a new release for SlayZone.\n'
+    })
+
+    const createdMeta = readSkillMetadata(created.id)
+    const updatedMeta = readSkillMetadata(previouslyExplicit.id)
+    expect(createdMeta.skillValidation?.status).toBe('invalid')
+    expect(updatedMeta.skillValidation?.status).toBe('invalid')
+    expect(createdMeta.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_missing')).toBe(true)
+    expect(updatedMeta.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_missing')).toBe(true)
   })
 })
 
@@ -305,10 +479,8 @@ describe('ai-config:load-global-item', () => {
     }) as { id: string; metadata_json: string }
 
     const metadata = JSON.parse(item.metadata_json) as {
-      skillCanonical?: { explicitFrontmatter?: boolean }
       skillValidation?: { status?: string }
     }
-    expect(metadata.skillCanonical?.explicitFrontmatter).toBe(true)
     expect(metadata.skillValidation?.status).toBe('valid')
 
     const result = h.invoke('ai-config:load-global-item', {
@@ -342,7 +514,7 @@ describe('ai-config:load-global-item', () => {
     })).toThrow()
   })
 
-  test('treats persisted invalid status as authoritative even with empty issues', () => {
+  test('recomputes stale persisted invalid status from current valid content', () => {
     const item = h.invoke('ai-config:create-item', {
       type: 'skill',
       scope: 'global',
@@ -355,12 +527,13 @@ describe('ai-config:load-global-item', () => {
     h.db.prepare("UPDATE ai_config_items SET metadata_json = ? WHERE id = ?")
       .run(JSON.stringify(metadata), item.id)
 
-    expect(() => h.invoke('ai-config:load-global-item', {
+    const result = h.invoke('ai-config:load-global-item', {
       projectId,
       projectPath: root,
       itemId: item.id,
       providers: ['claude']
-    })).toThrow()
+    }) as { syncHealth: string }
+    expect(result.syncHealth).toBe('synced')
   })
 
   test('treats persisted valid status as authoritative when stale issues are present', () => {
@@ -394,7 +567,7 @@ describe('ai-config:load-global-item', () => {
     expect(result.syncHealth).toBe('synced')
   })
 
-  test('rejects loading when explicit frontmatter is missing even if status is forced to valid', () => {
+  test('rejects loading when explicit frontmatter is missing even if status was tampered to valid', () => {
     const item = h.invoke('ai-config:create-item', {
       type: 'skill',
       scope: 'global',
@@ -431,13 +604,13 @@ describe('ai-config:sync-linked-file', () => {
     // Modify file externally
     fs.writeFileSync(path.join(root, '.claude/skills/manual/sync-test.md'), 'modified')
     // Update item content in DB
-    h.invoke('ai-config:update-item', { id: item.id, content: 'updated content' })
+    h.invoke('ai-config:update-item', { id: item.id, content: skillDoc('sync-test', 'updated content') })
 
     const result = h.invoke('ai-config:sync-linked-file', projectId, root, item.id) as {
       syncHealth: string
     }
     expect(result.syncHealth).toBe('synced')
-    expect(fs.readFileSync(path.join(root, '.claude/skills/manual/sync-test.md'), 'utf-8')).toBe('updated content')
+    expect(fs.readFileSync(path.join(root, '.claude/skills/manual/sync-test.md'), 'utf-8')).toBe('updated content\n')
   })
 
   test('syncs all provider links for an item', () => {
@@ -461,13 +634,13 @@ describe('ai-config:sync-linked-file', () => {
     const codexPath = path.join(fixture.projectPath, '.agents/skills/sync-all-providers/SKILL.md')
     fs.writeFileSync(claudePath, '# changed')
     fs.writeFileSync(codexPath, '# changed')
-    h.invoke('ai-config:update-item', { id: item.id, content: '# v2' })
+    h.invoke('ai-config:update-item', { id: item.id, content: skillDoc('sync-all-providers', '# v2') })
 
     h.invoke('ai-config:sync-linked-file', fixture.projectId, fixture.projectPath, item.id)
 
     expect(fs.readFileSync(claudePath, 'utf-8').includes('name: sync-all-providers')).toBe(true)
     expect(fs.readFileSync(claudePath, 'utf-8').includes('# v2')).toBe(true)
-    expect(fs.readFileSync(codexPath, 'utf-8')).toBe('# v2')
+    expect(fs.readFileSync(codexPath, 'utf-8')).toBe('# v2\n')
   })
 
   test('syncs project-local items without provider selections', () => {
@@ -533,6 +706,31 @@ describe('ai-config:sync-linked-file', () => {
       slug: 'invalid-local-skill',
       content: '---\nname invalid\n---\n# still invalid'
     }) as { id: string }
+
+    expect(() => h.invoke('ai-config:sync-linked-file', fixture.projectId, fixture.projectPath, item.id)).toThrow()
+  })
+
+  test('rejects syncing a previously valid skill after its body is updated without frontmatter', () => {
+    const fixture = createProjectFixture('sync-missing-frontmatter-after-valid')
+    h.invoke('ai-config:set-project-providers', fixture.projectId, ['claude'])
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'missing-frontmatter-after-valid',
+      content: skillDoc('missing-frontmatter-after-valid', '# initial')
+    }) as { id: string }
+
+    h.invoke('ai-config:load-global-item', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      itemId: item.id,
+      providers: ['claude']
+    })
+
+    h.invoke('ai-config:update-item', {
+      id: item.id,
+      content: 'Create a new release for SlayZone.\n'
+    })
 
     expect(() => h.invoke('ai-config:sync-linked-file', fixture.projectId, fixture.projectPath, item.id)).toThrow()
   })
@@ -876,6 +1074,43 @@ describe('ai-config:get-project-skills-status', () => {
     expect(found!.providers.claude.syncHealth).toBe('stale')
     expect(found!.providers.codex.syncHealth).toBe('synced')
   })
+
+  test('marks historically valid skills invalid when current edited content drops frontmatter', () => {
+    const fixture = createProjectFixture('skills-status-missing-frontmatter-after-valid')
+    h.invoke('ai-config:set-project-providers', fixture.projectId, ['claude', 'codex'])
+
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'status-missing-frontmatter-after-valid',
+      content: skillDoc('status-missing-frontmatter-after-valid', '# baseline')
+    }) as { id: string }
+
+    h.invoke('ai-config:load-global-item', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      itemId: item.id,
+      providers: ['claude', 'codex']
+    })
+
+    h.invoke('ai-config:update-item', {
+      id: item.id,
+      content: 'Create a new release for SlayZone.\n'
+    })
+
+    const metadata = readSkillMetadata(item.id)
+    expect(metadata.skillValidation?.status).toBe('invalid')
+    expect(metadata.skillValidation?.issues?.some((issue) => issue.code === 'frontmatter_missing')).toBe(true)
+
+    const results = h.invoke('ai-config:get-project-skills-status', fixture.projectId, fixture.projectPath) as Array<{
+      item: { id: string }
+      providers: Record<string, { syncHealth: string }>
+    }>
+    const found = results.find((entry) => entry.item.id === item.id)
+    expect(found).toBeTruthy()
+    expect(found!.providers.claude.syncHealth).toBe('stale')
+    expect(found!.providers.codex.syncHealth).toBe('stale')
+  })
 })
 
 // --- Sync all ---
@@ -899,6 +1134,35 @@ describe('ai-config:sync-all', () => {
       projectId: fixture.projectId,
       slug: 'broken-frontmatter-sync-all',
       content: '---\nname broken\n---\n# still invalid'
+    })
+
+    expect(() => h.invoke('ai-config:sync-all', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath
+    })).toThrow()
+  })
+
+  test('rejects sync-all when a previously valid linked skill is updated with body-only content', () => {
+    const fixture = createProjectFixture('sync-all-missing-frontmatter-after-valid')
+    h.invoke('ai-config:set-project-providers', fixture.projectId, ['claude', 'codex'])
+
+    const item = h.invoke('ai-config:create-item', {
+      type: 'skill',
+      scope: 'global',
+      slug: 'sync-all-missing-frontmatter-after-valid',
+      content: skillDoc('sync-all-missing-frontmatter-after-valid', '# initial')
+    }) as { id: string }
+
+    h.invoke('ai-config:load-global-item', {
+      projectId: fixture.projectId,
+      projectPath: fixture.projectPath,
+      itemId: item.id,
+      providers: ['claude', 'codex']
+    })
+
+    h.invoke('ai-config:update-item', {
+      id: item.id,
+      content: 'Create a new release for SlayZone.\n'
     })
 
     expect(() => h.invoke('ai-config:sync-all', {
@@ -960,7 +1224,7 @@ describe('ai-config:sync-all', () => {
     })
 
     h.invoke('ai-config:remove-project-selection', fixture.projectId, item.id, 'codex')
-    h.invoke('ai-config:update-item', { id: item.id, content: '# updated' })
+    h.invoke('ai-config:update-item', { id: item.id, content: skillDoc('sync-all-provider-unlink', '# updated') })
 
     const codexPath = path.join(fixture.projectPath, '.agents/skills/sync-all-provider-unlink/SKILL.md')
     const codexBefore = fs.readFileSync(codexPath, 'utf-8')

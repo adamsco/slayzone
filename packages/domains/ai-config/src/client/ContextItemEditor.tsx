@@ -1,7 +1,9 @@
 import { useEffect, useState, type ChangeEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import { Button, Input, Label, Textarea } from '@slayzone/ui'
+import { repairSkillFrontmatter } from '../shared'
 import type { AiConfigItem, SkillValidationState, UpdateAiConfigItemInput } from '../shared'
+import { getSkillFrontmatterActionLabel, getSkillValidation } from './skill-validation'
 
 interface ContextItemEditorProps {
   item: AiConfigItem
@@ -16,6 +18,11 @@ export function ContextItemEditor({ item, validationState, onUpdate, onDelete, o
   const [content, setContent] = useState(item.content)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const effectiveValidation = validationState ?? getSkillValidation({
+    type: item.type,
+    slug: item.slug,
+    content
+  })
 
   useEffect(() => {
     setSlug(item.slug)
@@ -32,6 +39,14 @@ export function ContextItemEditor({ item, validationState, onUpdate, onDelete, o
     } finally {
       setSaving(false)
     }
+  }
+
+  const fixFrontmatterLabel = getSkillFrontmatterActionLabel(effectiveValidation)
+
+  const handleFixFrontmatter = async () => {
+    const nextContent = repairSkillFrontmatter(item.slug, content)
+    setContent(nextContent)
+    await save({ content: nextContent })
   }
 
   return (
@@ -76,13 +91,26 @@ export function ContextItemEditor({ item, validationState, onUpdate, onDelete, o
         <p className="text-xs text-destructive">{error}</p>
       )}
 
-      {validationState && validationState.status !== 'valid' && (
+      {effectiveValidation && effectiveValidation.status !== 'valid' && (
         <div className="rounded border border-destructive/20 bg-destructive/5 px-2.5 py-2">
-          <p className="text-xs font-medium text-destructive">
-            {validationState.status === 'invalid' ? 'Frontmatter is invalid' : 'Frontmatter warning'}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-xs font-medium text-destructive">
+              {effectiveValidation.status === 'invalid' ? 'Frontmatter is invalid' : 'Frontmatter warning'}
+            </p>
+            {fixFrontmatterLabel && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 px-2 text-[11px]"
+                data-testid="context-item-editor-fix-frontmatter"
+                onClick={() => void handleFixFrontmatter()}
+              >
+                {fixFrontmatterLabel}
+              </Button>
+            )}
+          </div>
           <div className="mt-1 space-y-0.5">
-            {validationState.issues.map((issue, index) => (
+            {effectiveValidation.issues.map((issue, index) => (
               <p key={`${issue.code}-${index}`} className="text-[11px] text-destructive/90">
                 {issue.line ? `Line ${issue.line}: ` : ''}
                 {issue.message}

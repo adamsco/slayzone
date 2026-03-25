@@ -17,8 +17,8 @@ export function AiConfigTab({ project, onOpenGlobalAiConfig }: AiConfigTabProps)
   const [contextManagerTab, setContextManagerTab] = useState<ProjectContextManagerTab>('config')
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-6">
+      <div className="flex flex-wrap items-start justify-between gap-3 shrink-0">
         <div className="min-w-0 flex-1">
           <SettingsTabIntro
             title="Context Manager"
@@ -36,14 +36,16 @@ export function AiConfigTab({ project, onOpenGlobalAiConfig }: AiConfigTabProps)
           </TabsList>
         </Tabs>
       </div>
-      <ContextManagerSettings
-        scope="project"
-        projectId={project.id}
-        projectPath={project.path}
-        projectName={project.name}
-        projectTab={contextManagerTab}
-        onOpenGlobalAiConfig={onOpenGlobalAiConfig}
-      />
+      <div className="min-h-0 flex-1">
+        <ContextManagerSettings
+          scope="project"
+          projectId={project.id}
+          projectPath={project.path}
+          projectName={project.name}
+          projectTab={contextManagerTab}
+          onOpenGlobalAiConfig={onOpenGlobalAiConfig}
+        />
+      </div>
     </div>
   )
 }

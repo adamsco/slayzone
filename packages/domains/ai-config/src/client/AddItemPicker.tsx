@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import { Plus, Search } from 'lucide-react'
 import { Button, Dialog, DialogContent, DialogHeader, DialogTitle, Input, cn } from '@slayzone/ui'
+import { buildDefaultSkillContent } from '../shared'
 import type { AiConfigItem, AiConfigItemType, CliProvider } from '../shared'
 import { PROVIDER_PATHS } from '../shared/provider-registry'
 
@@ -82,13 +83,12 @@ export function AddItemPicker({
       })
       const existingSlugs = new Set(existingItems.map((item) => item.slug))
       const slug = nextAvailableSlug('new-skill', existingSlugs)
-      const defaultContent = '---\ndescription: \ntrigger: auto\n---\n\n'
       await window.api.aiConfig.createItem({
         type,
         scope: 'project',
         projectId,
         slug,
-        content: defaultContent
+        content: buildDefaultSkillContent(slug)
       })
       onAdded()
       onOpenChange(false)

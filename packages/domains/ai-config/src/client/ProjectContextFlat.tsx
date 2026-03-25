@@ -421,7 +421,7 @@ export function ProjectContextFlat({ projectId, projectPath, onOpenGlobalAiConfi
   })()
 
   return (
-    <div className="flex min-h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {section !== null && (
         <div className="flex items-center justify-between gap-3 pb-4">
           <button
@@ -481,7 +481,7 @@ export function ProjectContextFlat({ projectId, projectPath, onOpenGlobalAiConfi
         </div>
       )}
 
-      <div className="flex-1">
+      <div className="min-h-0 flex-1">
         {content}
       </div>
     </div>

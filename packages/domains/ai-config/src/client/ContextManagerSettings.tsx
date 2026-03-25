@@ -5,6 +5,7 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { Button, cn, Switch } from '@slayzone/ui'
+import { buildDefaultSkillContent } from '../shared'
 import type {
   AiConfigItem, AiConfigScope, CliProvider,
   CliProviderInfo, UpdateAiConfigItemInput
@@ -16,6 +17,7 @@ import { McpServersPanel } from './McpServersPanel'
 import { ProjectContextFlat } from './ProjectContextFlat'
 import { ProjectContextFilesView } from './ProjectContextFilesView'
 import { ProjectInstructions } from './ProjectInstructions'
+import { SkillHelpCard } from './SkillHelpCard'
 import { getSkillValidation } from './skill-validation'
 
 export type GlobalContextManagerSection = 'providers' | 'instructions' | 'skill' | 'mcp' | 'files'
@@ -302,7 +304,7 @@ function GlobalContextManager({ initialSection }: { initialSection: GlobalContex
       type: 'skill',
       scope: 'global',
       slug,
-      content: '---\ndescription: \ntrigger: auto\n---\n\n'
+      content: buildDefaultSkillContent(slug)
     })
     setItems((prev) => [created, ...prev])
     setEditingId(created.id)
@@ -320,8 +322,67 @@ function GlobalContextManager({ initialSection }: { initialSection: GlobalContex
     setEditingId(null)
   }
 
+  const globalSkillContent = (() => {
+    if (loading) {
+      return <p className="text-sm text-muted-foreground">Loading...</p>
+    }
+
+    if (items.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-16 text-center">
+          <Sparkles className="size-8 text-muted-foreground/40" />
+          <p className="mt-3 text-sm font-medium text-foreground">No skills yet</p>
+          <p className="mt-1 max-w-xs text-xs text-muted-foreground">
+            Skills give AI assistants reusable capabilities. Create one to get started.
+          </p>
+          <Button size="sm" className="mt-4" onClick={handleCreate}>
+            <Plus className="mr-1 size-3.5" />
+            Create skill
+          </Button>
+        </div>
+      )
+    }
+
+    return items.map((item) => {
+      const validation = getSkillValidation(item)
+      const validationStatus = validation?.status === 'invalid' || validation?.status === 'warning'
+        ? validation.status
+        : null
+
+      return (
+        <div key={item.id}>
+          {editingId === item.id ? (
+            <ContextItemEditor
+              item={item}
+              validationState={validation}
+              onUpdate={(patch) => handleUpdate(item.id, patch)}
+              onDelete={() => handleDelete(item.id)}
+              onClose={() => setEditingId(null)}
+            />
+          ) : (
+            <button
+              onClick={() => setEditingId(item.id)}
+              data-testid={`context-global-item-${item.slug}`}
+              className="flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
+            >
+              <div className="min-w-0">
+                <p className="truncate font-mono text-sm">{item.slug}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {validationStatus && <SkillValidationBadge status={validationStatus} />}
+                <span className="text-[11px] text-muted-foreground">
+                  {formatTimestamp(item.updated_at)}
+                </span>
+              </div>
+            </button>
+          )}
+        </div>
+      )
+    })
+  })()
+
   return (
-    <div className="flex min-h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* Header: back button + description + actions when drilled in */}
       {section !== null && (
         <div className="flex items-center justify-between gap-3 pb-4">
@@ -357,7 +418,7 @@ function GlobalContextManager({ initialSection }: { initialSection: GlobalContex
       )}
 
       {/* Content area */}
-      <div className="flex-1">
+      <div className="min-h-0 flex-1">
         {section === null ? (
           <OverviewPanel
             onNavigate={setSection}
@@ -372,62 +433,12 @@ function GlobalContextManager({ initialSection }: { initialSection: GlobalContex
         ) : section === 'files' ? (
           <GlobalContextFiles />
         ) : isItemSection ? (
-          <>
-            {loading ? (
-              <p className="text-sm text-muted-foreground">Loading...</p>
-            ) : items.length === 0 ? (
-              <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-16 text-center">
-                <Sparkles className="size-8 text-muted-foreground/40" />
-                <p className="mt-3 text-sm font-medium text-foreground">No skills yet</p>
-                <p className="mt-1 max-w-xs text-xs text-muted-foreground">
-                  Skills give AI assistants reusable capabilities. Create one to get started.
-                </p>
-                <Button size="sm" className="mt-4" onClick={handleCreate}>
-                  <Plus className="mr-1 size-3.5" />
-                  Create skill
-                </Button>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {items.map((item) => {
-                  const validation = getSkillValidation(item)
-                  const validationStatus = validation?.status === 'invalid' || validation?.status === 'warning'
-                    ? validation.status
-                    : null
-
-                  return (
-                    <div key={item.id}>
-                      {editingId === item.id ? (
-                        <ContextItemEditor
-                          item={item}
-                          validationState={validation}
-                          onUpdate={(patch) => handleUpdate(item.id, patch)}
-                          onDelete={() => handleDelete(item.id)}
-                          onClose={() => setEditingId(null)}
-                        />
-                      ) : (
-                        <button
-                          onClick={() => setEditingId(item.id)}
-                          data-testid={`context-global-item-${item.slug}`}
-                          className="flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2.5 text-left transition-colors hover:bg-muted/50"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate font-mono text-sm">{item.slug}</p>
-                          </div>
-                          <div className="flex shrink-0 items-center gap-2">
-                            {validationStatus && <SkillValidationBadge status={validationStatus} />}
-                            <span className="text-[11px] text-muted-foreground">
-                              {formatTimestamp(item.updated_at)}
-                            </span>
-                          </div>
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </>
+          <div className="flex h-full min-h-0 flex-col">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
+              {globalSkillContent}
+            </div>
+            <SkillHelpCard testId="global-skill-help-card" className="mt-3 shrink-0" />
+          </div>
         ) : null}
       </div>
     </div>
